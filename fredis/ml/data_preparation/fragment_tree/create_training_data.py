@@ -14,6 +14,7 @@ from fredis.ml.input.structure_builder import ReactionStructureBuilder
 from fredis.ml.input.source_reaction_structure import save_fragment_tree_structure,make_structure_file_stem,UnresolvedPrecursorError
 from .manifest_summary import structure_manifest_fields
 from .context import create_preparation_context, validate_limits
+from fredis.cli.base import output_directory
 from fredis.cli.chemistry_options import configure_chemistry_options, resolve_chemistry_options
 from .datasets import load_spectrum_dataset, split_by_smiles, dedupe_validation
 from .record_validation import inspect_records
@@ -342,7 +343,7 @@ def create_reaction_training_data(*, dataset: MSDataset, chemistry_config: dict,
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--input',required=True);parser.add_argument('--output-dir',required=True)
+    parser.add_argument('--input',required=True);parser.add_argument('--output-dir',required=True,type=output_directory)
     configure_chemistry_options(parser)
     for name,default in (('smiles','SMILES'),('adduct-type','AdductType'),('collision-energy','CollisionEnergy'),('precursor-mz','PrecursorMZ')):
         parser.add_argument('--'+name+'-column',default=default,help='Dataset metadata column.')

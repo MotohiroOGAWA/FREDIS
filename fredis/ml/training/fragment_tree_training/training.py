@@ -13,6 +13,7 @@ from fredis.ml.input.source_reaction_structure import SourceReactionStructure
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from fredis.ml.specgen.components.reaction.reaction_instance_encoder import NEIGHBORHOOD_MODES
 from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
+from fredis.cli.base import output_directory
 from .model import ReactionFragmentTreeTrainingModel
 from .mol_encoder_options import MOL_ENCODER_OPTIONS as SHARED_MOL_ENCODER_OPTIONS, add_mol_encoder_arguments
 
@@ -603,7 +604,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         parser.add_argument('--'+flag, type=kind, default=default)
     for flag, (default, text) in SPECTRUM_LOSS_OPTIONS.items():
         parser.add_argument('--'+flag, type=float, default=default, help=text)
-    for name in ('train-dir','val-dir','output-dir'):parser.add_argument('--'+name,required=True)
+    for name in ('train-dir','val-dir'):parser.add_argument('--'+name,required=True)
+    parser.add_argument('--output-dir',required=True,type=output_directory)
     parser.add_argument('--epochs',type=int,default=1);parser.add_argument('--batch-size',type=int,default=4)
     parser.add_argument('--device',default='cuda');parser.add_argument('--lr',type=float,default=1e-4);parser.add_argument('--resume')
     parser.add_argument('--initialize-from',help='Initialize compatible joint-model weights with a fresh optimizer.')

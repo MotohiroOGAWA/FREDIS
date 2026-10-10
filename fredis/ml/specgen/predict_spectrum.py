@@ -22,6 +22,7 @@ from fredis.libs.msentity.msentity.similarity import calculate_similarity
 from fredis.domain.mass.parse_ce import parse_ce_to_ev
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from fredis.ml.specgen.generation import GenerationSettings
+from fredis.cli.base import output_directory
 from fredis.ml.specgen.source_anchored_spectrum_predictor import SourceAnchoredFragmentSpectrumGenerator
 
 
@@ -35,7 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", help="Input MSDataset path.")
     parser.add_argument(
         "--output-dir",
-        default="prediction-output",
+        required=True,
+        type=output_directory,
         help="Directory receiving predicted.msds, predicted.mssim and run information.",
     )
     parser.add_argument(

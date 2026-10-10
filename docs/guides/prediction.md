@@ -6,7 +6,7 @@ Batch prediction is available through the CLI:
 
 ```bash
 python -m fredis.ml.specgen.predict_spectrum \
-  --input source.msds --output predicted.msds \
+  --input source.msds --output-dir prediction-output \
   --model models/my-model/last.pt --device cpu
 ```
 
