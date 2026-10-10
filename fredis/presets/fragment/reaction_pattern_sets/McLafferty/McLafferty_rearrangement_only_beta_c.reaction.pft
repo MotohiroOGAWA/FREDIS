@@ -1,0 +1,14 @@
+{
+  "name": "McLafferty rearrangement only beta c",
+  "reactant_smarts": "[#6&!#1:1](-&!@[#6&!#1:2]-&!@[#6&!#1:3]-[#6&!#1;H1,H2,H3,H4:4])=[#8&!#1:5]",
+  "products": [
+    {
+      "name": "enol_side",
+      "smarts": "[*:1](=[*:2])-[*:5]"
+    },
+    {
+      "name": "alkene_side",
+      "smarts": "[*:3]=[*:4]"
+    }
+  ]
+}

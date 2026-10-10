@@ -1,0 +1,65 @@
+{
+  "fragment_ion_tree_builder": {
+    "max_reaction_count": 3,
+    "reaction_pattern_set": {
+      "name": "single_bond_cleavage_pattern_set",
+      "patterns": [
+        {
+          "name": "single_bond_cleavage",
+          "reactant_smarts": "[!#1:1]-[!#1:2]",
+          "products": [
+            {
+              "name": "single_bond_cleavage",
+              "smarts": "[!#1:1]"
+            }
+          ]
+        }
+      ]
+    },
+    "fragment_ion_adduct_rule_set": {
+      "name": "",
+      "hydrogen_shift_min": -5,
+      "hydrogen_shift_max": 0,
+      "adduct_rules": [
+        {
+          "name": "pos_H",
+          "adduct_type": "[M+H]+",
+          "fragment_ion_adducts": [
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_Na",
+          "adduct_type": "[M+Na]+",
+          "fragment_ion_adducts": [
+            "[M+Na]+",
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_NH4",
+          "adduct_type": "[M+H4N]+",
+          "fragment_ion_adducts": [
+            "[M+H4N]+",
+            "[M+H]+",
+            "[M-H]+"
+          ]
+        },
+        {
+          "name": "pos_2M_H_to_M",
+          "adduct_type": "[2M+H]+",
+          "fragment_ion_adducts": [
+            "[2M+H]+",
+            "[2M-H]+",
+            "[M+H]+",
+            "[M-H]+"
+          ]
+        }
+      ]
+    }
+  },
+  "precursor_candidate_max_reaction_count": 1,
+  "mass_tolerance": "0.01Da,10ppm"
+}

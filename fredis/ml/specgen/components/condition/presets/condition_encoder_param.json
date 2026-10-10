@@ -1,0 +1,7 @@
+{
+  "adduct_embedding_dim": 16,
+  "ce_feature_dim": 16,
+  "ce_fc_dims": [32],
+  "feature_dim": 64,
+  "fc_dims": [128, 64]
+}

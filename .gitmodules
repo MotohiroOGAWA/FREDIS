@@ -1,0 +1,6 @@
+[submodule "fredis/libs/msentity"]
+	path = fredis/libs/msentity
+	url = https://github.com/MotohiroOGAWA/msentity.git
+[submodule "fredis/libs/mmkit"]
+	path = fredis/libs/mmkit
+	url = https://github.com/MotohiroOGAWA/mmkit.git

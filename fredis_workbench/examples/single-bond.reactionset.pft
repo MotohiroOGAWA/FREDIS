@@ -1,0 +1,17 @@
+{
+  "reaction_pattern_set": {
+    "name": "single_bond_cleavage_pattern_set",
+    "patterns": [
+      {
+        "name": "single_bond_cleavage",
+        "reactant_smarts": "[!#1:1]-[!#1:2]",
+        "products": [
+          {
+            "name": "single_bond_cleavage",
+            "smarts": "[!#1:1]"
+          }
+        ]
+      }
+    ]
+  }
+}

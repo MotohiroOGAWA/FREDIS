@@ -1,0 +1,87 @@
+{
+  "reaction_pattern_set": {
+    "name": "nonring_single_bond",
+    "patterns": [
+      {
+        "name": "nonring_o_n_single_bond",
+        "reactant_smarts": "[#8&!#1&!#1:1]-&!@[#7&!#1:2]",
+        "products": [
+          {
+            "name": "o_side",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "n_side",
+            "smarts": "[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "nonring_o_single_bond",
+        "reactant_smarts": "[#8&!#1&!#1:1]-&!@[!#7&!#1:2]",
+        "products": [
+          {
+            "name": "o_side",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "other_side",
+            "smarts": "[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "nonring_n_single_bond",
+        "reactant_smarts": "[#7&!#1&!#1:1]-&!@[!#8&!#1:2]",
+        "products": [
+          {
+            "name": "n_side",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "other_side",
+            "smarts": "[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "nonring_c_single_bond",
+        "reactant_smarts": "[#6&!#1&!#1:1]-&!@[!#8&!#7&!#1:2]",
+        "products": [
+          {
+            "name": "c_side",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "other_side",
+            "smarts": "[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "nonring_halogen_single_bond",
+        "reactant_smarts": "[#9,#17,#35,#53;!#1:1]-&!@[!#1:2]",
+        "products": [
+          {
+            "name": "halogen_side",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "other_side",
+            "smarts": "[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "nonring_other_single_bond",
+        "reactant_smarts": "[!#6&!#7&!#8&!#9&!#17&!#35&!#53&!#1:1]-&!@[!#6&!#7&!#8&!#9&!#35&!#17&!#53&!#1:2]",
+        "products": [
+          {
+            "name": "fragment_1",
+            "smarts": "[*:1]"
+          }
+        ]
+      }
+    ]
+  }
+}

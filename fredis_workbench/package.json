@@ -1,0 +1,307 @@
+{
+  "name": "fredis-workbench",
+  "displayName": "FREDIS Workbench",
+  "description": "FREDIS: Fragmentation with Reactions that are Externally Definable for In Silico Spectra.",
+  "version": "0.5.3",
+  "publisher": "fredis",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MotohiroOGAWA/FREDIS.git",
+    "directory": "fredis_workbench"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onCommand:fredis.openWorkbench",
+    "onCommand:fredis.editReactionPatterns",
+    "onCommand:fredis.editAdductRules",
+    "onCommand:fredis.openResult",
+    "onCommand:fredis.openEvaluation",
+    "onCustomEditor:fredis.resultViewer",
+    "onCustomEditor:fredis.reactionPatternAnalysisConfigEditor",
+    "onCustomEditor:fredis.reactionPatternAnalysisResultEditor",
+    "onCustomEditor:fredis.evaluationConfigEditor",
+    "onCustomEditor:fredis.reactionPatternSetEditor",
+    "onCustomEditor:fredis.reactionPatternEditor",
+    "onCustomEditor:fredis.adductRuleEditor",
+    "onCustomEditor:fredis.adductRuleSetEditor",
+    "onCustomEditor:fredis.fragmenterEditor"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "fredis.editReactionPatterns",
+        "title": "FREDIS: Edit Reaction Patterns"
+      },
+      {
+        "command": "fredis.editAdductRules",
+        "title": "FREDIS: Edit Fragment Ion Adduct Rules"
+      },
+      {
+        "command": "fredis.openWorkbench",
+        "title": "FREDIS: Open Workbench"
+      },
+      {
+        "command": "fredis.openResult",
+        "title": "FREDIS: Open Result"
+      },
+      {
+        "command": "fredis.openEvaluation",
+        "title": "FREDIS: Open Evaluation"
+      },
+      {
+        "command": "fredis.importDataset",
+        "title": "FREDIS: Import Dataset"
+      },
+      {
+        "command": "fredis.prepareTrainingData",
+        "title": "FREDIS: Prepare Training Data"
+      },
+      {
+        "command": "fredis.startTraining",
+        "title": "FREDIS: Start Training"
+      },
+      {
+        "command": "fredis.predictSpectrum",
+        "title": "FREDIS: Predict Spectrum"
+      },
+      {
+        "command": "fredis.batchPrediction",
+        "title": "FREDIS: Batch Prediction"
+      },
+      {
+        "command": "fredis.openSpectrumViewer",
+        "title": "FREDIS: Open Spectrum Viewer"
+      },
+      {
+        "command": "fredis.openFragmentTree",
+        "title": "FREDIS: Open Fragment Tree"
+      },
+      {
+        "command": "fredis.checkEnvironment",
+        "title": "FREDIS: Check Environment"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "fredis.reactionPatternAnalysisConfigEditor",
+        "displayName": "FREDIS Reaction Pattern Analysis",
+        "selector": [
+          {
+            "filenamePattern": "*.reaction-pattern-analysis.pft"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.reactionPatternAnalysisResultEditor",
+        "displayName": "FREDIS Reaction Pattern Analysis Result",
+        "selector": [
+          {
+            "filenamePattern": "*.reactionpatternanalysis.pft"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.resultViewer",
+        "displayName": "FREDIS Result",
+        "selector": [
+          {
+            "filenamePattern": "*.pft"
+          },
+          {
+            "filenamePattern": "*.fredis-result"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.evaluationConfigEditor",
+        "displayName": "FREDIS Evaluation",
+        "selector": [
+          { "filenamePattern": "*.evalcol.pft" },
+          { "filenamePattern": "*.evalgroup.pft" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.reactionPatternEditor",
+        "displayName": "FREDIS Reaction Pattern",
+        "selector": [
+          { "filenamePattern": "*.reaction.pft" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.reactionPatternSetEditor",
+        "displayName": "FREDIS Reaction Pattern Set",
+        "selector": [
+          { "filenamePattern": "*.reactionset.pft" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.adductRuleEditor",
+        "displayName": "FREDIS Fragment Ion Adduct Rule",
+        "selector": [
+          { "filenamePattern": "*.adduct.pft" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.adductRuleSetEditor",
+        "displayName": "FREDIS Fragment Ion Adduct Rule Set",
+        "selector": [
+          { "filenamePattern": "*.adductset.pft" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.fragmenterEditor",
+        "displayName": "FREDIS Fragmenter Config",
+        "selector": [
+          { "filenamePattern": "*.fragmenter.pft" }
+        ],
+        "priority": "default"
+      }
+    ],
+    "configuration": {
+      "title": "FREDIS",
+      "properties": {
+        "fredis.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python executable used for FREDIS CLI commands."
+        },
+        "fredis.applicationRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Workspace-relative FREDIS Python project directory. Empty enables automatic parent and mnt/app discovery."
+        },
+        "fredis.workbench.defaultOutputDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Default output root for preparation, training and prediction. Empty leaves output directories blank. Each new Workbench uses a named timestamp subdirectory. Relative paths are resolved against the FREDIS project."
+        },
+        "fredis.workbench.dataDefaults": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": true,
+          "markdownDescription": "Default values for new Data Preparation forms. Edit this object in settings.json. Nested parameter objects are merged with built-in presets. Output directories are generated from Default Output Directory."
+        },
+        "fredis.workbench.trainingDefaults": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": true,
+          "markdownDescription": "Default values for new Training forms. Edit this object in settings.json. Nested parameter objects are merged with built-in presets. Output directories are generated from Default Output Directory."
+        },
+        "fredis.workbench.predictionDefaults": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": true,
+          "markdownDescription": "Default values for new Prediction forms. Edit this object in settings.json. Nested parameter objects are merged with built-in presets. Output directories are generated from Default Output Directory."
+        },
+        "fredis.workbench.spectrumViewerPageSize": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Number of spectrum dataset rows shown per page in the Workbench Spectrum Viewer."
+        },
+        "fredis.workbench.reactionPatternAnalysisPageSize": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Number of compounds shown per page in Reaction Pattern Analysis."
+        },
+        "fredis.workbench.reactionPatternAnalysisPeakPageSize": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 2000,
+          "description": "Number of peak rows shown per page in the Reaction Pattern Analysis Compound / Peak View."
+        },
+        "fredis.workbench.reactionPatternAnalysisSmilesColumnWidth": {
+          "type": "integer",
+          "default": 240,
+          "minimum": 80,
+          "maximum": 1200,
+          "description": "Maximum width in pixels of the SMILES column in Reaction Pattern Analysis. Full SMILES remain available from the Copy button."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "fredis-workbench-file",
+        "aliases": ["FREDIS Workbench File"],
+        "extensions": [
+          ".pft",
+        ".fredis-result",
+        ".reaction-pattern-analysis.pft",
+        ".reactionpatternanalysis.pft",
+          ".evalcol.pft",
+          ".evalgroup.pft",
+          ".reaction.pft",
+          ".reactionset.pft",
+          ".adduct.pft",
+          ".adductset.pft",
+          ".fragmenter.pft"
+        ],
+        "icon": {
+          "light": "./media/icons/fredis-file.svg",
+          "dark": "./media/icons/fredis-file.svg"
+        }
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "fredis",
+          "title": "FREDIS",
+          "icon": "media/fredis.svg"
+        }
+      ]
+    },
+    "views": {
+      "fredis": [
+        {
+          "id": "fredis.navigation",
+          "name": "FREDIS Workbench"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build:spectrum-viewer": "node scripts/build-spectrum-viewer.js",
+    "vscode:prepublish": "npm run build:spectrum-viewer",
+    "dev": "code --extensionDevelopmentPath=. --new-window .",
+    "check": "node --check src/extension.js && node --check src/configuration.js && node --check src/webview-path-drop.js && node --check src/features/evaluation/editor.js && node --check src/features/evaluation/grouped-boxplot.js && node --check src/features/smarts-search/editor.js && node --check src/features/reaction-pattern-set/editor.js && node --check src/features/reaction-pattern-set/visual-editor.js && node --check src/features/reaction-pattern-set/reaction-preview.js && node --check src/features/reaction-pattern-set/reaction-service.js && node --check src/features/reaction-pattern-set/host.js && node --check src/features/adduct-rule-set/editor.js && node --check src/features/adduct-rule-set/ui.js && node --check src/features/spectrum-viewer/host.js && node --check src/features/spectrum-viewer/extension.js && node --check src/features/spectrum-viewer/workbench.js && node --check src/features/spectrum-viewer/upstream.js && node scripts/check-reaction-service.js && node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js && node scripts/check-adduct-rule-ui.js && node --check src/features/spectrum-prediction/editor.js && python scripts/check-reaction-pattern-visual-products.py && node scripts/check-fragmenter-editor.js && node scripts/check-evaluation.js && node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js && node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js && node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py && node scripts/check-result-webview.js && node scripts/check-smarts-compound-view.js && node scripts/check-step-validation.js && node scripts/check-training-metrics.js && node scripts/check-training-report.js && node scripts/check-language-icon.js && node scripts/check-fragmenter-file-editor.js && node scripts/check-fragment-tree-visualization.js",
+    "package": "mkdir -p artifacts && npx @vscode/vsce package --allow-missing-repository --out artifacts/fredis_workbench-${npm_package_version}.vsix",
+    "check:path-drop": "node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js",
+    "check:training-sources": "python scripts/check-training-sources.py",
+    "check:prediction-ui": "node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js",
+    "check:spectrum-viewer": "node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py",
+    "check:training-ui": "node scripts/check-training-ui.js",
+    "check:reaction-pattern-ui": "node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js",
+    "check:reaction-preview": "node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-service.js",
+    "check:reaction-pattern-analysis": "node --check src/features/reaction-pattern-analysis/editor.js && node --check src/features/reaction-pattern-analysis/results-view.js && node scripts/check-reaction-pattern-analysis.js",
+    "check:projects": "node scripts/check-projects.js",
+    "check:workbench": "node scripts/check-projects.js && node scripts/check-workbench.js && node scripts/check-workbench-jobs.js && node scripts/check-parameter-editor.js && node scripts/check-defaults.js"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "2.15.0",
+    "jsdom": "22.1.0"
+  },
+  "overrides": {
+    "cheerio": "1.0.0-rc.12"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "nonring_other_single_bond",
+  "reactant_smarts": "[!#6&!#7&!#8&!#9&!#17&!#35&!#53&!#1:1]-&!@[!#6&!#7&!#8&!#9&!#35&!#17&!#53&!#1:2]",
+  "products": [
+    {
+      "name": "fragment_1",
+      "smarts": "[*:1]"
+    }
+  ]
+}

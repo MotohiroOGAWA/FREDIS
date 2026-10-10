@@ -1,0 +1,122 @@
+{
+  "architecture": "fragment-tree-physical-ion",
+  "fragmenter_params": {
+    "fragment_ion_tree_builder": {
+      "max_reaction_count": 3,
+      "reaction_pattern_set": {
+        "name": "single_bond_cleavage_pattern_set",
+        "patterns": [
+          {
+            "name": "single_bond_cleavage",
+            "reactant_smarts": "[!#1:1]-[!#1:2]",
+            "products": [
+              {
+                "name": "single_bond_cleavage",
+                "smarts": "[!#1:1]"
+              }
+            ]
+          }
+        ]
+      },
+      "fragment_ion_adduct_rule_set": {
+        "name": "",
+        "adduct_rules": [
+          {
+            "name": "pos_H",
+            "adduct_type": "[M+H]+",
+            "fragment_ion_adducts": [
+              "[M-H]+",
+              "[M+H]+"
+            ]
+          },
+          {
+            "name": "pos_Na",
+            "adduct_type": "[M+Na]+",
+            "fragment_ion_adducts": [
+              "[M+Na]+",
+              "[M-H]+",
+              "[M+H]+"
+            ]
+          },
+          {
+            "name": "pos_NH4",
+            "adduct_type": "[M+H4N]+",
+            "fragment_ion_adducts": [
+              "[M+H4N]+",
+              "[M+H]+",
+              "[M-H]+"
+            ]
+          },
+          {
+            "name": "pos_2M_H_to_M",
+            "adduct_type": "[2M+H]+",
+            "fragment_ion_adducts": [
+              "[2M+H]+",
+              "[2M-H]+",
+              "[M+H]+",
+              "[M-H]+"
+            ]
+          }
+        ],
+        "hydrogen_shift_min": -5,
+        "hydrogen_shift_max": 0
+      }
+    },
+    "precursor_candidate_max_reaction_count": 1,
+    "mass_tolerance": "0.01Da,10ppm"
+  },
+  "mol_encoder_params": {
+    "symbols": [
+      "C",
+      "N",
+      "O",
+      "P",
+      "S",
+      "F",
+      "Cl",
+      "Br",
+      "I"
+    ],
+    "node_dim": 32,
+    "graph_dim": 128,
+    "num_layers": 4,
+    "num_heads": 8,
+    "max_degree": 4,
+    "max_spatial_dist": 3,
+    "max_edge_dist": 3,
+    "descriptors": [
+      "FormalCharge"
+    ]
+  },
+  "reaction_model_params": {
+    "hidden_dim": 128,
+    "branch_main_adduct_dim": 128,
+    "num_heads": 4,
+    "state_num_layers": 2
+  },
+  "spectrum_model_params": {
+    "hidden_dim": 128,
+    "num_layers": 2,
+    "num_heads": 4,
+    "ion_embedding_dim": 32,
+    "hydrogen_shift_embedding_dim": 16,
+    "state_hidden_dim": 128,
+    "main_adduct_dim": 128,
+    "collision_energy_dim": 16
+  },
+  "generation_params": {
+    "branch_path_threshold": 0,
+    "max_fragment_nodes": 100,
+    "ion_prediction_threshold": 0.5,
+    "peak_intensity_threshold": 0
+  },
+  "adduct_type_strs": [
+    "[M+H]+",
+    "[M+Na]+",
+    "[M+H4N]+",
+    "[2M+H]+",
+    "[M+H-H2O]+",
+    "[M+H-2H2O]+",
+    "[M+H-C6H6]+"
+  ]
+}

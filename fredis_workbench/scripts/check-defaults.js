@@ -1,0 +1,12 @@
+const assert=require('assert/strict'),Module=require('module'),path=require('path');
+const load=Module._load,updates=[],configuration={get:(key,fallback)=>Object.hasOwn(values,key)?values[key]:fallback,update:async(...args)=>updates.push(args)};
+let values={};
+Module._load=function(name,parent,main){if(name==='vscode')return {workspace:{workspaceFolders:[{}],getConfiguration:()=>configuration},ConfigurationTarget:{Workspace:2,Global:1}};return load.call(this,name,parent,main);};
+const prefs=require('../src/workbench/defaults');
+const root='/tmp/fredis-preferences',base={outputDir:'old',modelConfig:{fragmenter_params:{mass_tolerance:'0.01Da'},mol_encoder_params:{symbols:['C','O']}}};
+assert.equal(prefs.workflowDefaults('data',base,root).outputDir,'');
+values={defaultOutputDirectory:'outputs',dataDefaults:{numWorkers:4,fragmenterParams:{mass_tolerance:'0.02Da'},symbols:['C','N']},trainingDefaults:{epochs:10,modelConfig:{reaction_model_params:{hidden_dim:64}}}};
+const data=prefs.workflowDefaults('data',base,root);assert(data.outputDir.startsWith(path.join(root,'outputs','preparation-')));assert.equal(data.numWorkers,4);assert.equal(data.modelConfig.fragmenter_params.mass_tolerance,'0.02Da');assert.deepEqual(data.symbols,['C','N']);
+const training=prefs.workflowDefaults('training',{epochs:1,modelConfig:{reaction_model_params:{hidden_dim:128,branch_main_adduct_dim:128}}},root);assert.equal(training.epochs,10);assert.equal(training.modelConfig.reaction_model_params.hidden_dim,64);assert.equal(training.modelConfig.reaction_model_params.branch_main_adduct_dim,128);
+assert(prefs.workflowDefaults('prediction',{},root).batchOutputDir.startsWith(path.join(root,'outputs','prediction-')));
+(async()=>{let receive;const messages=[];prefs.attach({webview:{onDidReceiveMessage:fn=>receive=fn,postMessage:m=>messages.push(m)}});await receive({type:'defaults/save',workflow:'data',config:{numWorkers:3,outputDir:'temporary-output',symbols:['C','N']}});assert.equal(updates[0][0],'dataDefaults');assert.equal(updates[0][2],2);assert(!('outputDir'in updates[0][1]));assert.equal(updates[0][1].numWorkers,3);assert.equal(messages.at(-1).type,'defaults/saved');console.log('Workbench defaults merging, blank / generated output paths and settings persistence checks passed.');})().catch(error=>{console.error(error);process.exitCode=1;});

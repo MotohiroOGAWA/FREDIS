@@ -1,0 +1,14 @@
+{
+  "name": "nonring_c_single_bond",
+  "reactant_smarts": "[#6&!#1&!#1:1]-&!@[!#8&!#7&!#1:2]",
+  "products": [
+    {
+      "name": "c_side",
+      "smarts": "[*:1]"
+    },
+    {
+      "name": "other_side",
+      "smarts": "[*:2]"
+    }
+  ]
+}

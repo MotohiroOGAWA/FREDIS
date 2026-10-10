@@ -1,0 +1,16 @@
+[
+  {"name":"ExactMolWt","description":"Exact molecular weight"},
+  {"name":"HeavyAtomCount","description":"Number of non-hydrogen atoms"},
+  {"name":"TPSA","description":"Topological polar surface area"},
+  {"name":"MolLogP","description":"Estimated octanol/water partition coefficient"},
+  {"name":"NumHAcceptors","description":"Number of hydrogen-bond acceptors"},
+  {"name":"NumHDonors","description":"Number of hydrogen-bond donors"},
+  {"name":"NumRotatableBonds","description":"Number of rotatable bonds"},
+  {"name":"RingCount","description":"Number of rings"},
+  {"name":"NumAromaticRings","description":"Number of aromatic rings"},
+  {"name":"NumAliphaticRings","description":"Number of aliphatic rings"},
+  {"name":"FractionCSP3","description":"Fraction of carbon atoms with sp3 hybridization"},
+  {"name":"NumHeteroatoms","description":"Number of heteroatoms"},
+  {"name":"FormalCharge","description":"Total formal charge"},
+  {"name":"BertzCT","description":"Bertz molecular complexity"}
+]
