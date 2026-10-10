@@ -324,7 +324,7 @@ Training supports AdamW weight decay, gradient clipping, normalized branch MIL,
 depth-diverse weak negatives, and physical-ion intensity loss.
 
 Data Preparation and Training expose individual parameter fields. Import Parameters
-accepts model or fragmenter JSON through Browse or drag-and-drop and expands it into
+accepts a Fragmenter JSON through Browse or drag-and-drop and expands it into
 the form. The file is optional; execution uses a snapshot of the edited fields.
 Advanced buttons reveal less frequently changed settings. Hover over a parameter
 label for 500ms to see its description.

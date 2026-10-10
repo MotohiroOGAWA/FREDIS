@@ -16,7 +16,7 @@ assert.deepEqual(args.slice(0,4),['-m','fredis.cli','train','fragment-tree']);as
 assert(!args.includes('--overwrite'));
 assert(extension.buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',overwrite:true}).includes('--overwrite'));
 assert(html.indexOf('<strong>Prepare Data</strong>') < html.indexOf('<strong>Train a Model</strong>'));
-const dataArgs=extension.buildArgs({input:'x.msds',outputDir:'out',params:'unused.json',modelConfig:{fragmenter_params:{mass_tolerance:'0.02Da'}}});assert(!dataArgs.includes('--params'));assert.deepEqual(JSON.parse(dataArgs[dataArgs.indexOf('--params-json')+1]),{fragmenter_params:{mass_tolerance:'0.02Da'}});
+const dataArgs=extension.buildArgs({input:'x.msds',outputDir:'out',fragmenterParams:{mass_tolerance:'0.02Da'},symbols:['C']});assert(!dataArgs.includes('--params'));assert.deepEqual(JSON.parse(dataArgs[dataArgs.indexOf('--params-json')+1]),{mass_tolerance:'0.02Da'});assert.deepEqual(JSON.parse(dataArgs[dataArgs.indexOf('--symbols-json')+1]),['C']);
 console.log('Workbench HTML, script, CSP and CLI parameter checks passed.');
 
 assert(!html.includes('Initialize weights'));

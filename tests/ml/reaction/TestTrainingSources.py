@@ -10,9 +10,9 @@ from fredis.libs.mmkit.mmkit import Adduct, Compound, Formula
 from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
 from fredis.ml.input.reaction_batching import select_samples
 from fredis.ml.input.structure_builder import ReactionStructureBuilder
-from fredis.ml.training.fragment_tree_training.sources import dataset_model_config, dataset_sources, inherit_model_config
+from fredis.ml.training.fragment_tree_training.sources import dataset_chemistry_config, dataset_sources, inherit_model_config
 from fredis.ml.training.fragment_tree_training import training
-from .TestReactionPipeline import config
+from .TestReactionPipeline import chemistry
 
 
 class TestTrainingSources(unittest.TestCase):
@@ -89,10 +89,10 @@ class TestTrainingSources(unittest.TestCase):
         directory = root / name
         directory.mkdir()
         (directory / 'reaction_statistics.json').write_text(json.dumps({
-            'model_config': {
+            'chemistry_config': {
                 'fragmenter_params': {'test': True},
                 'adduct_type_strs': ['[M+H]+'],
-                'mol_encoder_params': {'symbols': symbols},
+                'symbols': symbols,
             }
         }))
         return directory
@@ -152,22 +152,16 @@ class TestTrainingSources(unittest.TestCase):
             directory = root / 'train'
             directory.mkdir()
             fragmenter = {'mass_tolerance': '0.01Da'}
-            model = {'fragmenter_params': fragmenter, 'symbols': ['C', 'O'],
-                     'adduct_type_strs': ['[M+H]+'], 'metadata_source': 'preparation'}
-            (directory / 'preparation_config.json').write_text(json.dumps({'model_config': model}))
+            chemistry = {'fragmenter_params': fragmenter, 'symbols': ['C', 'O'], 'adduct_type_strs': ['[M+H]+']}
+            (directory / 'preparation_config.json').write_text(json.dumps({'chemistry_config': chemistry}))
             (directory / 'fragment-tree.pft').write_text(json.dumps({
                 'fragmenterParams': fragmenter, 'symbols': ['O', 'C']}))
-            (directory / 'reaction_statistics.json').write_text(json.dumps({'model_config': {
-                'fragmenter_params': fragmenter, 'mol_encoder_params': {'symbols': ['C', 'O']},
-                'adduct_type_strs': ['[M+H]+']}}))
-            loaded = dataset_model_config(directory)
-            self.assertEqual(loaded['metadata_source'], 'preparation')
-            self.assertEqual(loaded['adduct_type_strs'], ['[M+H]+'])
-            stale = {'fragmenter_params': {'mass_tolerance': '0.5Da'},
-                     'mol_encoder_params': {'symbols': ['C', 'N']}, 'adduct_type_strs': ['[M+Na]+']}
-            (directory / 'reaction_statistics.json').write_text(json.dumps({'model_config': stale}))
+            (directory / 'reaction_statistics.json').write_text(json.dumps({'chemistry_config': chemistry}))
+            self.assertEqual(dataset_chemistry_config(directory), chemistry)
+            stale = {'fragmenter_params': {'mass_tolerance': '0.5Da'}, 'symbols': ['C', 'N'], 'adduct_type_strs': ['[M+Na]+']}
+            (directory / 'reaction_statistics.json').write_text(json.dumps({'chemistry_config': stale}))
             with self.assertRaisesRegex(ValueError, 'Regenerate this dataset'):
-                dataset_model_config(directory)
+                dataset_chemistry_config(directory)
 
     def test_molecular_encoder_symbols_must_match_prepared_data(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -190,7 +184,7 @@ class TestTrainingSources(unittest.TestCase):
     def test_assignment_score_filter_drops_low_scoring_samples_via_select_samples(self):
         # Data preparation always keeps every sample; training-time loading is
         # where a below-threshold sample now gets dropped, via select_samples.
-        model = config(); model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'] = 1
+        model = chemistry(); model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'] = 1
         builder = ReactionStructureBuilder(create_preparation_context(model))
         source = Compound.from_smiles('CCO'); adduct = Adduct.parse('[M+H]+')
         precursor_mz = Formula.parse('C2H7O+').exact_mass
@@ -217,7 +211,7 @@ class TestTrainingSources(unittest.TestCase):
         # select_samples call (e.g. chunking by max_samples after assignment
         # score filtering) with "tensors used as indices must be long, int,
         # byte or bool tensors".
-        model = config(); model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'] = 1
+        model = chemistry(); model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'] = 1
         builder = ReactionStructureBuilder(create_preparation_context(model))
         source = Compound.from_smiles('CCO'); adduct = Adduct.parse('[M+H]+')
         precursor_mz = Formula.parse('C2H7O+').exact_mass

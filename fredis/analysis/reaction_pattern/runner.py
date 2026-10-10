@@ -22,7 +22,7 @@ from . import applicability, chemistry, executor, parquet_storage, summary
 from .comparison import ConditionOutcome, compare_compound, empty_outcome
 from .compounds import CompoundGroup, group_compounds, mark_precursor_peaks
 from .constants import (
-    COMPLETED, COMPOUND_DIR, DEFAULT_COLUMNS, FAILED, MODEL_CONFIG_NAME, RESULT_NAME, RUN_CONFIG_NAME, SKIP_ERROR,
+    COMPLETED, COMPOUND_DIR, DEFAULT_COLUMNS, FAILED, CHEMISTRY_CONFIG_NAME, RESULT_NAME, RUN_CONFIG_NAME, SKIP_ERROR,
     SKIP_PARENT_UNAVAILABLE, SKIPPED, TREE_CONFIG_NAME,
 )
 from .hdf5_storage import ResultWriter
@@ -43,34 +43,34 @@ def _note(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def run_configuration(output: Path, source_rows: Iterable[dict], tree: TreeConfiguration, model_config: dict, *,
+def run_configuration(output: Path, source_rows: Iterable[dict], tree: TreeConfiguration, chemistry_config: dict, *,
                       max_unique_fragment_smiles: int, max_reaction_combinations: int,
                       minimum_relative_intensity: float, num_workers: int,
                       chunk_size: int, overwrite: bool = False, extend: bool = False) -> dict:
     """The Workbench Input / Run form values that reproduce this run."""
-    builder = model_config["fragmenter_params"]["fragment_ion_tree_builder"]
+    builder = chemistry_config["fragmenter_params"]["fragment_ion_tree_builder"]
     return {
         "sources": [{key: value for key, value in row.items() if key != "inspected"} for row in source_rows],
-        "params": str(output / MODEL_CONFIG_NAME), "outputDir": str(output), "tree": tree.to_dict(),
+        "params": str(output / CHEMISTRY_CONFIG_NAME), "outputDir": str(output), "tree": tree.to_dict(),
         "maxReactionCount": builder.get("max_reaction_count", 2),
-        "massTolerance": model_config["fragmenter_params"].get("mass_tolerance", "20 ppm"),
+        "massTolerance": chemistry_config["fragmenter_params"].get("mass_tolerance", "20 ppm"),
         "maxUniqueFragmentSmiles": max_unique_fragment_smiles, "maxReactionCombinations": max_reaction_combinations,
         "minimumRelativeIntensity": minimum_relative_intensity,
         "numWorkers": num_workers, "chunkSize": chunk_size, "overwrite": overwrite, "extend": extend,
     }
 
 
-def _write_run_configuration(output: Path, model_config: dict, run: dict) -> None:
-    (output / MODEL_CONFIG_NAME).write_text(json.dumps(model_config, ensure_ascii=False, indent=2) + "\n")
+def _write_run_configuration(output: Path, chemistry_config: dict, run: dict) -> None:
+    (output / CHEMISTRY_CONFIG_NAME).write_text(json.dumps(chemistry_config, ensure_ascii=False, indent=2) + "\n")
     (output / TREE_CONFIG_NAME).write_text(json.dumps(run["tree"], ensure_ascii=False, indent=2) + "\n")
     (output / RUN_CONFIG_NAME).write_text(json.dumps({
         "schema": "fredis.workbench.configuration", "schemaVersion": 1, "kind": "reaction-pattern-analysis", "config": run,
     }, ensure_ascii=False, indent=2) + "\n")
 
 
-def _library_config(model_config: dict, registry: PatternRegistry) -> dict:
-    """The model configuration whose pattern set is the analysis-wide library (stable ids)."""
-    config = copy.deepcopy(model_config)
+def _library_config(chemistry_config: dict, registry: PatternRegistry) -> dict:
+    """The chemistry configuration whose pattern set is the analysis-wide library (stable ids)."""
+    config = copy.deepcopy(chemistry_config)
     builder = config["fragmenter_params"]["fragment_ion_tree_builder"]
     builder["reaction_pattern_set"] = {"name": "reaction_pattern_analysis_library", "patterns": registry.pattern_documents()}
     return config
@@ -192,7 +192,7 @@ def _alias_outcome(target: ConditionOutcome, target_id: int) -> ConditionOutcome
 
 
 def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_dir: str | Path,
-                               model_config: dict | None = None, tree: TreeConfiguration | dict | None = None, smiles_column: str = "SMILES",
+                               chemistry_config: dict | None = None, tree: TreeConfiguration | dict | None = None, smiles_column: str = "SMILES",
                                adduct_type_column: str = "AdductType", collision_energy_column: str = "CollisionEnergy",
                                precursor_mz_column: str = "PrecursorMZ", minimum_relative_intensity: float = 0.0,
                                max_unique_fragment_smiles: int = -1,
@@ -202,7 +202,7 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
 
     With ``extend`` the result already in ``output_dir`` is kept: conditions
     it calculated are reused and only new ones are calculated.  Sources,
-    model configuration and tree default to the existing result's.
+    chemistry configuration and tree default to the existing result's.
     """
     started = time.monotonic()
     columns = {"smiles": smiles_column, "adduct": adduct_type_column,
@@ -221,10 +221,10 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
         # Checked before the output directory is created or cleared.
         raise ValueError("No input spectra: add at least one --source <dataset|prepared|result> "
                          "(repeatable) or --source-spec.")
-    if model_config is None:
+    if chemistry_config is None:
         if previous is None:
-            raise ValueError("A model or Fragmenter configuration is required.")
-        model_config = previous.model_config
+            raise ValueError("A Fragmenter configuration is required.")
+        chemistry_config = previous.chemistry_config
     if tree is None:
         if previous is None:
             raise ValueError("A Tree Configuration with at least one node is required.")
@@ -241,8 +241,8 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
         signature = {"maxUniqueFragmentSmiles": max_unique_fragment_smiles,
                      "maxReactionCombinations": max_reaction_combinations,
                      "minimumRelativeIntensity": minimum_relative_intensity}
-        differences = compare_signatures(chemistry_signature(previous.model_config, previous.run),
-                                         chemistry_signature(model_config, signature))
+        differences = compare_signatures(chemistry_signature(previous.chemistry_config, previous.run),
+                                         chemistry_signature(chemistry_config, signature))
         if differences:
             raise ValueError("Nodes can only be added with the settings of the existing result; these differ: "
                              + ", ".join(differences) + ". Run without extending to recalculate everything.")
@@ -256,9 +256,9 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
     resolved = resolve_tree(tree, registry)
     _section(2, "Tree, pattern ids and conditions",
              f"{len(resolved.nodes)} node(s), {len(resolved.conditions)} condition(s)")
-    library_config = _library_config(model_config, registry)
-    run = run_configuration(output, source_rows, tree, model_config, overwrite=overwrite, extend=extend, **settings)
-    _write_run_configuration(output, model_config, run)
+    library_config = _library_config(chemistry_config, registry)
+    run = run_configuration(output, source_rows, tree, chemistry_config, overwrite=overwrite, extend=extend, **settings)
+    _write_run_configuration(output, chemistry_config, run)
     for node in resolved.nodes:
         _note(f"  {'  ' * node.depth}{node.pattern_set_name}  [{node.node_id}] → {node.condition_label}")
 
@@ -266,7 +266,7 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
     _section(3, "Spectra and unique compounds")
     from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
     fragmenter = create_preparation_context(library_config).fragmenter
-    symbols = library_config["mol_encoder_params"]["symbols"]
+    symbols = library_config["symbols"]
     samples, dataset_rows = [], []
     for dataset in expand_dataset_inputs(source_rows):
         loaded, row = load_samples(dataset, fragmenter=fragmenter, symbols=symbols,
@@ -316,7 +316,7 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
             for condition_id, prior in plan.reused.items()}
         tasks.append(chemistry.ChemistryTask(_compound_input(group), plan.steps, resolved_conditions))
     options = chemistry.ChemistryOptions(
-        model_config=library_config,
+        chemistry_config=library_config,
         max_unique_fragment_smiles=max_unique_fragment_smiles, max_reaction_combinations=max_reaction_combinations)
     computed: dict[str, dict[int, dict]] = {}
 
@@ -383,7 +383,7 @@ def generate_reaction_pattern_analysis(*, sources: Iterable[dict] = (), output_d
         else:
             parquet_storage.write_peaks(comparison, output)
     configuration = {
-        "run": run, "tree": tree.to_dict(), "modelConfig": library_config, "columns": {**DEFAULT_COLUMNS, **columns},
+        "run": run, "tree": tree.to_dict(), "chemistryConfig": library_config, "columns": {**DEFAULT_COLUMNS, **columns},
         "sources": run["sources"], "maxReactionCount": run["maxReactionCount"], "massTolerance": run["massTolerance"],
         "maxUniqueFragmentSmiles": max_unique_fragment_smiles, "maxReactionCombinations": max_reaction_combinations,
         "minimumRelativeIntensity": minimum_relative_intensity,

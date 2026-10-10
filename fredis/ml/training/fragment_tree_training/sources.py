@@ -11,21 +11,15 @@ def canonical_symbols(symbols):
 
 def _metadata_config(saved):
     """Extract normalized model inputs from any supported preparation file."""
-    containers = [saved.get('model_config'), saved.get('modelConfig')]
-    workbench = saved.get('workbench_config')
-    if isinstance(workbench, dict):
-        containers.extend((workbench.get('modelConfig'), workbench))
-    containers.append(saved)
-    for config in containers:
+    # preparation_config.json / reaction_statistics.json carry chemistry_config;
+    # Workbench project files (fragment-tree.pft) carry the same values camelCased.
+    for config in (saved.get('chemistry_config'), saved.get('workbench_config'), saved):
         if not isinstance(config, dict):
             continue
-        config = config.get('params', config)
         fragmenter = config.get('fragmenter_params') or config.get('fragmenterParams')
         if not fragmenter:
             continue
-        result = deepcopy(config)
-        result['fragmenter_params'] = deepcopy(fragmenter)
-        result['symbols'] = deepcopy(config.get('symbols') or config.get('mol_encoder_params', {}).get('symbols'))
+        result = {'fragmenter_params': deepcopy(fragmenter), 'symbols': deepcopy(config.get('symbols'))}
         if config.get('adduct_type_strs') is not None:
             result['adduct_type_strs'] = list(config['adduct_type_strs'])
         return result
@@ -40,7 +34,7 @@ def _metadata_equal(key, left, right):
     return left == right
 
 
-def dataset_model_config(directory):
+def dataset_chemistry_config(directory):
     directory = Path(directory)
     if directory.name == 'data':
         directory = directory.parent
@@ -79,8 +73,8 @@ def dataset_model_config(directory):
 
 
 def dataset_sources(train_dir, val_dir):
-    train = dataset_model_config(train_dir)
-    validation = dataset_model_config(val_dir)
+    train = dataset_chemistry_config(train_dir)
+    validation = dataset_chemistry_config(val_dir)
     if train['fragmenter_params'] != validation['fragmenter_params']:
         raise ValueError('Training Fragmenter does not match Validation Fragmenter. Regenerate or reselect compatible datasets.')
     if train.get('adduct_type_strs') != validation.get('adduct_type_strs'):

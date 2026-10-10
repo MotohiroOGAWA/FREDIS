@@ -4,7 +4,7 @@ const Module=require('module'),load=Module._load;Module._load=function(name,pare
 const {JSDOM,VirtualConsole}=require('jsdom');
 const editor=require('../src/features/adduct-rule-set/editor');
 const extension=require('../src/extension');
-const preset=require('../../fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json');
+const preset=require('./fixtures').model;
 const manifest=JSON.parse(fs.readFileSync(require.resolve('../package.json')));
 const rule={name:'protonated',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+','[M]+']};
 const set={fragment_ion_adduct_rule_set:{name:'positive_rules',hydrogen_shift_min:-5,hydrogen_shift_max:0,adduct_rules:[rule,{...rule,name:'sodiated'}]}};
@@ -14,7 +14,7 @@ for(const [viewType,suffix]of[[editor.VIEW_TYPE,'*.adductset.pft'],[editor.RULE_
 assert(manifest.activationEvents.includes('onCommand:fredis.editAdductRules'));
 assert(editor.editorHtml().includes('Add Adduct Rule'));assert(editor.editorHtml().includes('Clear All Rules'));assert(editor.editorHtml(true).includes('Fragment Ion Adduct Rule'));
 const messages=[],errors=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.detail?.stack||error.message));
-const dom=new JSDOM(extension.workbenchHtml({modelConfig:preset},{modelConfig:preset}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(window){window.acquireVsCodeApi=()=>({postMessage:value=>messages.push(value),getState:()=>({}),setState(){}});window.HTMLElement.prototype.scrollIntoView=function(){};window.ResizeObserver=class{observe(){}disconnect(){}};window.matchMedia=()=>({matches:false,addEventListener(){}});window.CSS={escape:value=>value};}});
+const dom=new JSDOM(extension.workbenchHtml(require('./fixtures').dataConfig,{modelConfig:preset}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(window){window.acquireVsCodeApi=()=>({postMessage:value=>messages.push(value),getState:()=>({}),setState(){}});window.HTMLElement.prototype.scrollIntoView=function(){};window.ResizeObserver=class{observe(){}disconnect(){}};window.matchMedia=()=>({matches:false,addEventListener(){}});window.CSS={escape:value=>value};}});
 const {window}=dom,{document}=window;
 document.querySelector('#navigationRail [data-page=adduct]').click();assert(!document.getElementById('adductApp').hidden);assert(document.getElementById('reactionPatternApp').hidden);
 window.dispatchEvent(new window.MessageEvent('message',{data:{type:'adductRuleSet',value:JSON.parse(JSON.stringify(set)),path:'/tmp/positive_rules.adductset.pft'}}));

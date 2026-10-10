@@ -65,8 +65,7 @@ assert serialized["nodes"][1]["annotations"][0]["ionFormula"] == "CH5O+"
 from fredis.domain.fragment.fragmenter import Fragmenter
 from fredis.libs.mmkit.mmkit import Compound
 
-preset = json.loads((APP_ROOT / "fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json").read_text())
-fragmenter = Fragmenter.from_dict(preset["fragmenter_params"])
+fragmenter = Fragmenter.from_dict(json.loads((APP_ROOT / "fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft").read_text()))
 source = Compound.from_smiles("CCOC(=O)C")
 real_reactions = tuple(fragmenter.fragment_ion_tree_builder.create_reaction_instances(source))
 registry = backend._reaction_registry(SimpleNamespace(fragmenter=fragmenter), real_reactions)

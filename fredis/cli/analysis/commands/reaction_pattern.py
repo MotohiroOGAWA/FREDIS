@@ -8,7 +8,7 @@ from ...base import CLICommand
 from fredis.analysis.reaction_pattern import generate_reaction_pattern_analysis
 from fredis.analysis.reaction_pattern.constants import RESULT_NAME
 from fredis.analysis.reaction_pattern.tree import NodeSpec, TreeConfiguration, load_pattern_set_file, load_tree_configuration
-from fredis.ml.specgen.config_options import configure_model_options, resolve_model_options
+from fredis.cli.chemistry_options import configure_chemistry_options, has_chemistry_options, resolve_chemistry_options
 
 
 def parse_source_specs(values: list[str]) -> list[dict]:
@@ -58,15 +58,6 @@ def build_tree(base: TreeConfiguration | None, pattern_sets: list, nodes: list[N
     return tree
 
 
-def _explicit_model_options(args: argparse.Namespace) -> bool:
-    from fredis.ml.specgen.config_options import OPTIONS
-
-    return bool(args.params or args.params_json or args.parameter_overrides
-                or any(getattr(args, group + "_params_json", None) for group in ("fragmenter", "mol_encoder",
-                                                                                   "reaction_model", "spectrum_model"))
-                or any(getattr(args, key, None) is not None for key in OPTIONS))
-
-
 RUN_DEFAULTS = {"minimum_relative_intensity": ("minimumRelativeIntensity", 0.0),
                 "max_unique_fragment_smiles": ("maxUniqueFragmentSmiles", -1),
                 "max_reaction_combinations": ("maxReactionCombinations", -1),
@@ -96,7 +87,7 @@ class ReactionPatternAnalysisCommand(CLICommand):
         parser.add_argument("--source", action="append", default=[], help="Dataset, prepared mapping, or Reaction Pattern Analysis result; auto-detected and repeatable.")
         parser.add_argument("--source-spec", action="append", default=[], help="Per-source JSON (or @JSON-file) with path, kind and columns; repeatable.")
         parser.add_argument("--output-dir", required=True)
-        configure_model_options(parser)
+        configure_chemistry_options(parser)
         parser.add_argument("--tree-config", help="Tree Configuration JSON file (patternSets + nodes), or a run configuration containing one.")
         parser.add_argument("--tree-config-json", help="Inline Tree Configuration JSON; same content as --tree-config without a file.")
         parser.add_argument("--pattern-set", action="append", default=[], metavar="[ID=]FILE",
@@ -120,19 +111,17 @@ class ReactionPatternAnalysisCommand(CLICommand):
 
     def run(self, args: argparse.Namespace) -> None:
         extend = bool(args.extend)
+        if args.tree_config and args.tree_config_json:
+            raise ValueError("Use either --tree-config or --tree-config-json, not both.")
         previous = None
         if extend:
             from fredis.analysis.reaction_pattern.previous import PreviousResult
 
             previous = PreviousResult(Path(args.output_dir) / RESULT_NAME)
-        if extend and not _explicit_model_options(args):
+        if extend and not has_chemistry_options(args):
             config = None
         else:
-            if extend and not args.params and not args.params_json:
-                args.params_json = json.dumps(previous.model_config)
-            config = resolve_model_options(args)
-        if args.tree_config and args.tree_config_json:
-            raise ValueError("Use either --tree-config or --tree-config-json, not both.")
+            config = resolve_chemistry_options(args, previous.chemistry_config if extend else None)
         if args.tree_config_json:
             base = TreeConfiguration.from_dict(json.loads(args.tree_config_json))
         elif args.tree_config:
@@ -146,7 +135,7 @@ class ReactionPatternAnalysisCommand(CLICommand):
         sources = [{"path": value, "kind": "auto"} for value in args.source]
         sources.extend(parse_source_specs(args.source_spec))
         result = generate_reaction_pattern_analysis(
-            sources=sources, output_dir=args.output_dir, model_config=config, tree=tree,
+            sources=sources, output_dir=args.output_dir, chemistry_config=config, tree=tree,
             smiles_column=args.smiles_column, adduct_type_column=args.adduct_type_column,
             collision_energy_column=args.collision_energy_column, precursor_mz_column=args.precursor_mz_column,
             overwrite=bool(args.overwrite), extend=extend, **run_settings(args, previous.run if previous else None),

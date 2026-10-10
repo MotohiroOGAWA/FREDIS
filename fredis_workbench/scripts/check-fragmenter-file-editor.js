@@ -36,7 +36,7 @@ assert.equal(ensureFileSuffix('/tmp/a',feature.FILE_SUFFIX),'/tmp/a.fragmenter.p
 assert.equal(ensureFileSuffix('/tmp/a.json',feature.FILE_SUFFIX),'/tmp/a.fragmenter.pft');
 
 // Content: the file stores fragmenter_params itself; model configs are rejected.
-const preset=JSON.parse(fs.readFileSync(path.join(project,'fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json'),'utf8')).fragmenter_params;
+const preset=require('./fixtures').model.fragmenter_params;
 assert.deepEqual(feature.normalizeDocument({fragmenter_params:preset}),preset);
 assert.throws(()=>feature.normalizeDocument({params:{fragmenter_params:preset}}),/not a model config/);
 

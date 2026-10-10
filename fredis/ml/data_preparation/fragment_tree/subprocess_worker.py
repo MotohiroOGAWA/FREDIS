@@ -17,7 +17,7 @@ def main():
     torch.set_num_threads(1)
     with Path(args.task).open('rb') as stream:
         payload=pickle.load(stream)
-    generator=create_preparation_context(payload['model_config'])
+    generator=create_preparation_context(payload['chemistry_config'])
     options=payload['options']
     builder=ReactionStructureBuilder(generator,max_unique_fragment_smiles=options['max_unique_fragment_smiles'],
         max_reaction_combinations=options['max_reaction_combinations'])

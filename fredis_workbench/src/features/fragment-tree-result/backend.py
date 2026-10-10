@@ -62,8 +62,7 @@ def _node_view(structure, samples, source_smiles, file_path):
         config=parent/'preparation_config.json'
         if config.exists():
             params=json.loads(config.read_text());break
-    model=params.get('model_config',{})
-    fragmenter_params=model.get('fragmenter_params',params.get('fragmenterParams'))
+    fragmenter_params=params.get('chemistry_config',{}).get('fragmenter_params')
     if fragmenter_params:
         from fredis.domain.fragment.fragmenter import Fragmenter
         fragmenter=Fragmenter.from_dict(fragmenter_params)
@@ -184,8 +183,8 @@ def inspect_structure(file_path: Path) -> dict:
                 for parent in file_path.parents:
                     config=parent/'preparation_config.json'
                     if not config.exists():continue
-                    model=json.loads(config.read_text()).get('model_config',{})
-                    types=model.get('adduct_type_strs',[str(adduct) for adduct in fragmenter.adduct_types])
+                    chemistry=json.loads(config.read_text()).get('chemistry_config',{})
+                    types=chemistry.get('adduct_type_strs',[str(adduct) for adduct in fragmenter.adduct_types])
                     index=int(sample['adductIndex'])
                     if 0<=index<len(types):
                         sample['adduct']=types[index]

@@ -12,7 +12,7 @@ Module._load=originalLoad;
 
 (async()=>{
   const root=path.resolve(__dirname,'../..');
-  const preset=JSON.parse(fs.readFileSync(path.join(root,'fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json'),'utf8'));
+  const preset=require('./fixtures').model;
   const file=path.join(root,'data/minidata/MSMS-Pos-NIST23_cf_mini.msds');
   const progress=[];
   const result=await services.backend({extensionPath:path.resolve(__dirname,'..')},root,'preview',{

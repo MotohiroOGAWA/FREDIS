@@ -16,7 +16,7 @@ function client(){
  const configDrop=el('load');installFileDropZone(configDrop,{kind:'file',upload:false,onDrop:paths=>send({type:'loadConfigFile',path:paths[0]}),onFiles:async files=>{const file=files[0];if(file.size>2000000)throw new Error('Configuration exceeds 2 MB. Use Browse.');send({type:'loadConfigJSON',json:await file.text(),name:file.name});},onError:message=>{el('preparationRunReasons').textContent=message;}});
  function inspect(target,checkValues=false){checked[target]=false;checking[target]=checkValues;if(checkValues)checkProgress[target]={current:0,total:0};const name=target==='train'?'input':'validationInput',file=form.elements[name].value.trim();versions[target]++;if(!checkValues)datasets[target]=null;errors[target]='';loading[target]=false;if(!file){checking[target]=false;validate();render();return;}loading[target]=true;
   const requestId=target+'-'+versions[target],targetMapping=mappingFor(target);
-  if(checkValues){send({type:'data/check',target,requestId,path:file,mapping:targetMapping,fragmenterParams:getConfig().fragmenterParams});}
+  if(checkValues){send({type:'data/check',target,requestId,path:file,mapping:targetMapping,fragmenterParams:getConfig().fragmenterParams,symbols:getConfig().symbols});}
   else{
     // Column Mapping validity only needs the dataset load + column names, so it
     // resolves well before the fuller summary/preview finishes on a large dataset;

@@ -502,7 +502,7 @@ class ReactionPatternAnalysisResult:
 
     # -- C --------------------------------------------------------------------------
     def _fragmenter_params(self) -> dict | None:
-        return (self.configuration().get("modelConfig") or {}).get("fragmenter_params")
+        return (self.configuration().get("chemistryConfig") or {}).get("fragmenter_params")
 
     def _path_files(self, compound_id: str, node_row: int) -> list[tuple[dict, Path]]:
         """Own tree files of the conditions on a node's path, root first."""

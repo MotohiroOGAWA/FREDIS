@@ -8,8 +8,16 @@ Choose experimental spectra with SMILES, precursor adduct, collision energy, pre
 python -m fredis.cli train create-fragment-tree-data \
   --input train.msds --validation-input validation.msds \
   --output-dir data/prepared \
-  --params model.json
+  --params single_bond_cleavage_pos.fragmenter.pft
 ```
+
+Data preparation needs only chemistry: the Fragmenter (`--params` / `--params-json`)
+and the element symbols of the atom features (`--symbols-json`, default
+`C,N,O,P,S,F,Cl,Br,I`). The Fragmenter is required; there is no model preset.
+Model architecture (dimensions, layers, heads) is chosen later, when training,
+so one prepared dataset can train models of any size.
+`fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft` is an example
+Fragmenter and the Workbench's initial Fragmentation settings.
 
 With an explicit validation dataset, outputs are written to `train_structures` and `validation_structures`. To create a held-out split by unique SMILES, replace `--validation-input` with `--validation-ratio 0.1 --validation-seed 0`. Molecules are kept within a single split. At least two distinct SMILES are needed for automatic splitting.
 
@@ -38,12 +46,12 @@ Use `--num-workers 4 --chunk-size 1` to prepare independent SMILES groups in sub
 
 ## Configuration precedence
 
-Preset defaults are followed by `--params` file values, inline `--params-json`, section JSON options, named options and repeated `--set PATH=JSON` overrides, in that order.
+`--params` file values are followed by inline `--params-json`, named options and repeated `--set PATH=JSON` overrides, in that order. `--set` paths are relative to the Fragmenter, e.g. `--set fragment_ion_tree_builder.max_reaction_count=2`. `--params` accepts a Fragmenter file or a chemistry configuration (`fragmenter_params` plus `symbols`).
 
 ```bash
 python -m fredis.cli train create-fragment-tree-data \
   --input train.msds --output-dir data/prepared \
-  --params model.json --max-reaction-count 2 \
+  --params single_bond_cleavage_pos.fragmenter.pft --max-reaction-count 2 \
   --mass-tolerance 0.02Da \
   --max-unique-fragment-smiles 1000 --max-reaction-combinations 50000
 ```
@@ -62,7 +70,7 @@ A source that exceeds `max_unique_fragment_smiles` or `max_reaction_combinations
 
 The parent process displays a `tqdm` progress bar on stderr, including prepared/skipped source counts, and also emits JSON Lines for Workbench. Progress advances for each attempted source, including skipped sources.
 
-Resolved preparation settings are saved as `preparation_config.json` directly in Output Directory before computation in both single-dataset and train/validation modes. Preparation configuration files are not written inside `train_structures` or `validation_structures`. Workbench additionally saves `fragment-tree.pft` in the output root before starting the CLI; use **Load Configuration** to restore the preparation form from this file.
+Resolved preparation settings are saved as `preparation_config.json` directly in Output Directory; its `chemistry_config` (`fragmenter_params`, `symbols`, `adduct_type_strs`) is what training inherits before computation in both single-dataset and train/validation modes. Preparation configuration files are not written inside `train_structures` or `validation_structures`. Workbench additionally saves `fragment-tree.pft` in the output root before starting the CLI; use **Load Configuration** to restore the preparation form from this file.
 
 When `H` is absent from **Symbols**, explicit hydrogen atoms are omitted from encoder graphs; attached explicit hydrogen neighbors are included in the heavy atom's hydrogen-count feature. The original chemical molecule, formula and valence are preserved. This also permits hydrogen-only materialized fragments to have an empty encoder graph. Selecting `H` keeps hydrogen nodes in the graph. Source reaction indexes are remapped to the represented graph atoms.
 

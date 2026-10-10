@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from ...base import CLICommand
+from ...base import CLICommand, namespace_argv
 from fredis.ml.training.fragment_tree_training.training import (
     build_arg_parser as build_training_arg_parser,
     main as run_training,
@@ -29,5 +29,4 @@ class FragmentTreeTrainCommand(CLICommand):
             parser._add_action(action)
 
     def run(self, args: argparse.Namespace) -> None:
-        from fredis.ml.specgen.config_options import namespace_argv
         run_training(namespace_argv(build_training_arg_parser(), args))

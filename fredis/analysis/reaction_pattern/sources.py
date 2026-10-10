@@ -72,7 +72,7 @@ def inspect_analysis_source(path: str | Path, kind: str = "auto") -> dict:
         raise ValueError(f"Unknown source kind: {detected}")
     files = _prepared_files(source, document)
     config = _prepared_config(source, document)
-    patterns = (config.get("model_config", {}).get("fragmenter_params", {})
+    patterns = (config.get("chemistry_config", {}).get("fragmenter_params", {})
                 .get("fragment_ion_tree_builder", {}).get("reaction_pattern_set", {}).get("patterns", []))
     manifest = next(iter((source if source.is_dir() else source.parent).glob("manifest.tsv")), None)
     records = None
@@ -98,8 +98,8 @@ def _read_json(path: Path) -> dict:
 def _prepared_config(source: Path, document: dict | None = None) -> dict:
     """Preparation settings of a prepared source: its Workbench project file or ``preparation_config.json``."""
     if document and document.get("application") == "fragment-tree-data-preparation":
-        return {"input": document.get("input"), "model_config": {
-            "fragmenter_params": document.get("fragmenterParams")},
+        return {"input": document.get("input"), "chemistry_config": {
+            "fragmenter_params": document.get("fragmenterParams"), "symbols": document.get("symbols")},
             "columns": {"smiles": document.get("smilesColumn", "SMILES"),
                         "adduct": document.get("adductTypeColumn", "AdductType"),
                         "collision_energy": document.get("collisionEnergyColumn", "CollisionEnergy"),

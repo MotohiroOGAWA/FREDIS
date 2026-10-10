@@ -3,7 +3,7 @@ const {JSDOM,VirtualConsole}=require('jsdom'),load=Module._load;
 Module._load=function(name,...args){return name==='vscode'?{}:load.call(this,name,...args);};
 const extension=require('../src/extension'),project=path.resolve(__dirname,'../..'),messages=[],errors=[],consoleSink=new VirtualConsole();
 consoleSink.on('jsdomError',error=>errors.push(error.message));
-const preset=JSON.parse(fs.readFileSync(path.join(project,'fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json'),'utf8'));
+const preset=require('./fixtures').model;
 const dom=new JSDOM(extension.workbenchHtml({fragmenterParams:preset.fragmenter_params},{}),{runScripts:'dangerously',virtualConsole:consoleSink,beforeParse(window){window.structuredClone=value=>JSON.parse(JSON.stringify(value));window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message),getState:()=>({}),setState(){}});window.HTMLElement.prototype.scrollIntoView=function(){};}});
 (async()=>{const window=dom.window,document=window.document,el=id=>document.getElementById(id);try{
   const calls=[],payloads=[],builder=preset.fragmenter_params.fragment_ion_tree_builder;

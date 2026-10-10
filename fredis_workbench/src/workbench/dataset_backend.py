@@ -45,9 +45,8 @@ def preview(payload: dict) -> dict:
     fragmenter=None
     if check_values:
         from fredis.domain.fragment.fragmenter import Fragmenter
-        from fredis.ml.specgen.config_options import PRESET
-        params=payload.get('fragmenterParams') or payload.get('modelConfig',{}).get('fragmenter_params') or json.loads(PRESET.read_text())['fragmenter_params']
-        fragmenter=Fragmenter.from_dict(params)
+        if not payload.get('fragmenterParams'): raise ValueError('Fragmenter parameters are required to check values.')
+        fragmenter=Fragmenter.from_dict(payload['fragmenterParams'])
     inspection={}
     if check_values and not errors:
         from fredis.ml.data_preparation.fragment_tree.record_validation import inspect_records
@@ -57,7 +56,7 @@ def preview(payload: dict) -> dict:
         # bounded so a very dirty dataset cannot overflow the webview response.
         inspection=inspect_records(dataset,fragmenter,mapping,
             progress=report_progress if payload.get('reportProgress') else None,invalid_detail_limit=5000,
-            symbols=payload.get('symbols') or payload.get('modelConfig',{}).get('mol_encoder_params',{}).get('symbols'))
+            symbols=payload.get('symbols'))
         validation=inspection['validation']
         if not inspection['eligibleRecords']: errors.append('The dataset contains no valid records to prepare.')
     import numpy as np
@@ -104,7 +103,7 @@ def preview(payload: dict) -> dict:
 
 def validate(payload: dict, *, check_datasets: bool = True) -> dict:
     from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context,validate_limits
-    config=payload.get('modelConfig') or {'fragmenter_params':payload['fragmenterParams'],'symbols':payload.get('symbols')}
+    config={'fragmenter_params':payload['fragmenterParams'],'symbols':payload.get('symbols')}
     generator=create_preparation_context(config)
     validate_limits(payload.get('maxUniqueFragmentSmiles',-1),payload.get('maxReactionCombinations',-1))
     for key in ('numWorkers','chunkSize'):

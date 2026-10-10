@@ -5,9 +5,9 @@ const project=path.resolve(__dirname,'../..');let selected;
 const mock={workspace:{workspaceFolders:[{uri:{fsPath:project}}],getConfiguration:()=>({get:(key,fallback)=>fallback})},window:{showOpenDialog:async()=>selected}};
 const load=Module._load;Module._load=function(name,parent,main){return name==='vscode'?mock:load.call(this,name,parent,main);};
 const periodicRows=require('../src/features/reaction-pattern-set/periodic-table').rows;assert(periodicRows.every(row=>row.length===18));assert.equal(periodicRows[1][12],'B');assert.equal(periodicRows[1][17],'Ne');assert.equal(periodicRows[2][12],'Al');assert.equal(periodicRows[2][17],'Ar');
-const extension=require('../src/extension'),preset=require('../../fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json');
+const extension=require('../src/extension'),preset=require('./fixtures').model;
 const messages=[],errors=[],console=new VirtualConsole();console.on('jsdomError',error=>errors.push(error.detail?.stack||error.message));
-const dom=new JSDOM(extension.workbenchHtml({modelConfig:preset},{modelConfig:preset}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:console,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m),getState:()=>({}),setState(){}});w.HTMLElement.prototype.scrollIntoView=function(){w.lastScrollTarget=this;};w.ResizeObserver=class{observe(){}disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:s=>s};}});
+const dom=new JSDOM(extension.workbenchHtml(require('./fixtures').dataConfig,{modelConfig:preset}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:console,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m),getState:()=>({}),setState(){}});w.HTMLElement.prototype.scrollIntoView=function(){w.lastScrollTarget=this;};w.ResizeObserver=class{observe(){}disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:s=>s};}});
 (async()=>{
  const w=dom.window,d=w.document,post=data=>w.dispatchEvent(new w.MessageEvent('message',{data}));
  try{

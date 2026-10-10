@@ -10,7 +10,7 @@ RDKit.
 ```bash
 python -m fredis.cli train create-fragment-tree-data \
   --input train.msds --validation-input validation.msds \
-  --output-dir prepared --params model_config.json \
+  --output-dir prepared --params single_bond_cleavage_pos.fragmenter.pft \
   --num-workers 4 --chunk-size 4 \
   --max-unique-fragment-smiles 1000 --max-reaction-combinations 50000 \
   --overwrite 1
@@ -315,9 +315,7 @@ Run once with unlimited values, or generous ones, and read the maxima in
 `manifest.tsv`. For example, `max_raw_combinations` and
 `max_raw_combinations_smiles` show the most expensive prepared molecule.
 
-Values in a parameter file (`max_unique_fragment_smiles`,
-`max_reaction_combinations` at the top level of `--params` /
-`--params-json`) are used unless the CLI flag is given.
+Both limits are CLI options only; a `--params` file holds chemistry, not limits.
 
 ## Skip conditions
 
@@ -379,7 +377,7 @@ Otherwise:
 
 ```text
 <output-dir>/
-  preparation_config.json      resolved CLI/model configuration and Workbench form state
+  preparation_config.json      resolved CLI settings, chemistry_config and Workbench form state
   invalid_records.json         excluded records per input: {"train": [...], "validation": [...]}
   train_structures/
     fragment-tree.pft          Workbench configuration of this split (status: running → completed)
@@ -493,7 +491,7 @@ Split-level summary:
   - `num_sources`, `num_samples`, `num_metadata_valid_records`,
     `num_skipped_sources`, `num_skipped_records`, `num_rejected_records`,
     `num_excluded_records`
-  - `num_workers`, `chunk_size`, `model_config`,
+  - `num_workers`, `chunk_size`, `chemistry_config`,
     `minimum_relative_intensity`
 
 ## Statistics reference

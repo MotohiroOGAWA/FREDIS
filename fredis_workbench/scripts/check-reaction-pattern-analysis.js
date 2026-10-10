@@ -93,19 +93,19 @@ assert.equal(el('rpaCalculationProgress').hidden,false);assert.equal(el('rpaProg
 
 // Opening a result restores Input / Run (tree included, nodes marked as calculated) and Results from A only.
 const resultRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-hdf5-result-')),resultFile=path.join(resultRoot,'result.reactionpatternanalysis.pft');
-fs.writeFileSync(path.join(resultRoot,'reaction-pattern-analysis-model-config.json'),'{}');
+fs.writeFileSync(path.join(resultRoot,'reaction-pattern-analysis-chemistry-config.json'),'{}');
 const tree={patternSets:[{id:'A',name:'A',patterns:[{name:'a',reactant_smarts:'C'}]},{id:'B',name:'B',patterns:[{name:'b',reactant_smarts:'C=O'}]}],nodes:[{id:'r',patternSet:'A',parent:null},{id:'e',patternSet:'B',parent:'r'}]};
 const nodeSummary=[{node_row:0,node_id:'r',parent_node_row:-1,parent_node_id:'',pattern_set_id:'A',pattern_set_name:'A',depth:0,is_root:true,condition_id:0,parent_condition_id:-1,path_label:'A',condition_label:'A',parent_condition_label:'',added_patterns:['a'],applicable_compound_count:2,calculated_compound_count:2,overall_peak_coverage:0.25,overall_intensity_coverage:0.5,weighted_peak_coverage:0.25,mean_peak_coverage:0.2},
  {node_row:1,node_id:'e',parent_node_row:0,parent_node_id:'r',pattern_set_id:'B',pattern_set_name:'B',depth:1,is_root:false,condition_id:1,parent_condition_id:0,path_label:'A → B',condition_label:'A + B',parent_condition_label:'A',added_patterns:['b'],applicable_compound_count:1,calculated_compound_count:1,improved_compound_count:1,improved_sample_count:3,weighted_peak_coverage:0.45,parent_weighted_peak_coverage:0.25,weighted_delta_peak_coverage:0.2,weighted_delta_intensity_coverage:0.1,mean_delta_peak_coverage:0.2,mean_delta_intensity_coverage:0.05,newly_assigned_peak_count:7,overall_peak_coverage:0.3}];
 const info={format:'hdf5',metadata:{analysis_status:'completed',created_at:'now'},counts:{compounds:2,sample_summary:5},
-  configuration:{run:{sources:[{path:'/data/a.msds',kind:'dataset',columns:{smiles:'SMILES',adduct:'AdductType',collision_energy:'CE',precursor_mz:'PrecursorMZ'}}],params:'/moved/model.json',outputDir:'/elsewhere',tree,maxReactionCount:3,numWorkers:4,chunkSize:2,massTolerance:'10 ppm'},tree},
+  configuration:{run:{sources:[{path:'/data/a.msds',kind:'dataset',columns:{smiles:'SMILES',adduct:'AdductType',collision_energy:'CE',precursor_mz:'PrecursorMZ'}}],params:'/moved/chemistry.json',outputDir:'/elsewhere',tree,maxReactionCount:3,numWorkers:4,chunkSize:2,massTolerance:'10 ppm'},tree},
   datasets:[{dataset_id:1,label:'a.msds',source_path:'/data/a.msds',valid_record_count:5}],
   tree:{patternSets:[{pattern_set_id:'A',name:'A',patterns:[{id:0,name:'a',reactant_smarts:'C'}]},{pattern_set_id:'B',name:'B',patterns:[{id:1,name:'b',reactant_smarts:'C=O'}]}]},
   overall:{datasets:1,compounds:2,samples:5,peaks:40,totalIntensity:12,patternSets:2,roots:1,edges:1,conditions:2,compoundsWithImprovement:1,samplesWithImprovement:3,newlyAssignedPeaks:7,newlyAssignedIntensity:1.5,calculatedConditionTrees:3},nodeSummary};
 const restoredResult=editor.resultConfiguration(resultFile,info);
 assert.deepEqual(restoredResult.config.tree,tree);assert.deepEqual(restoredResult.computedNodes,['r','e']);assert.equal(restoredResult.config.extend,true);
 assert.equal(restoredResult.config.outputDir,resultRoot);
-assert.equal(restoredResult.config.params,path.join(resultRoot,'reaction-pattern-analysis-model-config.json'));assert.equal(restoredResult.sources[0].records,5);
+assert.equal(restoredResult.config.params,path.join(resultRoot,'reaction-pattern-analysis-chemistry-config.json'));assert.equal(restoredResult.sources[0].records,5);
 messages.length=0;
 el('rpaResultPath').value='';
 post({type:'reactionPatternAnalysis/configLoaded',path:resultFile,...restoredResult});

@@ -8,7 +8,7 @@ const mock={workspace:{workspaceFolders:[{uri:{fsPath:path.resolve(__dirname,'..
 const original=Module._load;
 Module._load=function(name,parent,main){if(name==='vscode')return mock;if(name==='child_process')return {spawn:()=>{const child=new EventEmitter();child.pid=12345;child.unref=()=>{};child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();child.stdin.end=()=>{};children.push(child);return child;}};return original.call(this,name,parent,main);};
 const projects=require('../src/workbench/project'),store=projects.store,jobs=require('../src/workbench/panel');
-const extension=require('../src/extension'),preset=require('../../fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json');
+const extension=require('../src/extension'),preset=require('./fixtures').model;
 function makePanel(){const listeners=[],disposers=[],posted=[];return {posted,webview:{postMessage:value=>posted.push(JSON.parse(JSON.stringify(value))),onDidReceiveMessage:fn=>listeners.push(fn)},onDidDispose:fn=>disposers.push(fn),send:async value=>{for(const fn of listeners)await fn(value);},dispose:()=>disposers.forEach(fn=>fn())};}
 (async()=>{
  let dom;
@@ -62,10 +62,10 @@ function makePanel(){const listeners=[],disposers=[],posted=[];return {posted,we
   fs.writeFileSync(path.join(b,'.fredis/project.json'),'{"schema":"future","version":99}');
   assert.throws(()=>store.open(b),/Unsupported/);assert.equal(JSON.parse(fs.readFileSync(path.join(b,'.fredis/project.json'))).version,99);
   const messages=[],errors=[],virtualConsole=new VirtualConsole();virtualConsole.on('jsdomError',error=>errors.push(error.detail?.stack||error.message));
-  dom=new JSDOM(extension.workbenchHtml({modelConfig:preset},{modelConfig:preset}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:value=>messages.push(JSON.parse(JSON.stringify(value))),getState:()=>({}),setState(){}});w.HTMLElement.prototype.scrollIntoView=function(){};w.ResizeObserver=class{observe(){}disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:value=>value};}});
+  dom=new JSDOM(extension.workbenchHtml(require('./fixtures').dataConfig,{modelConfig:preset}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:value=>messages.push(JSON.parse(JSON.stringify(value))),getState:()=>({}),setState(){}});w.HTMLElement.prototype.scrollIntoView=function(){};w.ResizeObserver=class{observe(){}disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:value=>value};}});
   const w=dom.window,d=w.document,post=value=>w.dispatchEvent(new w.MessageEvent('message',{data:JSON.parse(JSON.stringify(value))}));
   assert.deepEqual(errors,[]);assert(messages.some(item=>item.type==='project/ready'));
-  const values={data:{input:'/dataset.msds',outputDir:'/previous',modelConfig:preset},training:{modelConfig:preset,experimentName:'saved experiment',epochs:9},prediction:{modelPath:'/model.pt',batchInput:'/batch.msds',batchOutputDir:'/batch-out',smiles:'CCO',ce:35,adductType:'[M+H]+'},reactionPatterns:{value:{reaction_pattern_set:{name:'Saved patterns',patterns:[]}},path:''}};
+  const values={data:{input:'/dataset.msds',outputDir:'/previous',...require('./fixtures').dataConfig},training:{modelConfig:preset,experimentName:'saved experiment',epochs:9},prediction:{modelPath:'/model.pt',batchInput:'/batch.msds',batchOutputDir:'/batch-out',smiles:'CCO',ce:35,adductType:'[M+H]+'},reactionPatterns:{value:{reaction_pattern_set:{name:'Saved patterns',patterns:[]}},path:''}};
   const descriptor=store.describe(a);descriptor.name='<img src=x onerror=alert(1)>';
   post({type:'project/state',project:descriptor,recent:[{name:'Study B',path:b}],restore:true,drafts:values,outputs:{data:'/runs/data',training:'/runs/train',prediction:'/runs/predict'}});
   assert.equal(d.querySelector('#projectTitle img'),null);assert.equal(d.getElementById('projectTitle').textContent,descriptor.name);

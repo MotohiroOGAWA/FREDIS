@@ -1,6 +1,8 @@
 {
   "fragment_ion_adduct_rule_set": {
     "name": "adduct_rule_pos_H_Na_NH4_2M",
+    "hydrogen_shift_min": -5,
+    "hydrogen_shift_max": 0,
     "adduct_rules": [
       {
         "name": "pos_H_r1_u2",
@@ -38,8 +40,6 @@
           "[M-H]+"
         ]
       }
-    ],
-    "hydrogen_shift_min": -5,
-    "hydrogen_shift_max": 0
+    ]
   }
 }

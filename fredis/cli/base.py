@@ -104,3 +104,22 @@ class CLIGroup(ABC):
         )
 
         return parser
+
+
+def namespace_argv(parser: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
+    """Re-serialize parsed arguments so a command can forward them to a module main()."""
+    argv=[]
+    for action in parser._actions:
+        if isinstance(action,argparse._HelpAction) or not action.option_strings: continue
+        value=getattr(args,action.dest,None)
+        if value is None: continue
+        if isinstance(action,argparse._StoreTrueAction):
+            if value:argv.append(action.option_strings[0])
+        elif isinstance(action,argparse._StoreFalseAction):
+            if not value:argv.append(action.option_strings[0])
+        elif isinstance(action,argparse._AppendAction):
+            for item in value: argv.extend([action.option_strings[0],str(item)])
+        elif action.nargs in ('*','+'):
+            argv.extend([action.option_strings[0],*(str(item) for item in value)])
+        else: argv.extend([action.option_strings[0],str(value)])
+    return argv

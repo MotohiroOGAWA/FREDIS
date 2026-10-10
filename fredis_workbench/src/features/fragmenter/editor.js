@@ -21,7 +21,7 @@ const VIEW_TYPE='fredis.fragmenterEditor',FILE_SUFFIX='.fragmenter.pft';
 function normalizeDocument(value){return parameterService.unpackFragmenter(JSON.parse(JSON.stringify(value)));}
 // Fill fields missing from an older or hand-written file from the project preset,
 // so every option is editable, as when a config is loaded in the Workbench.
-function withDefaults(context,value){try{return parameterService.merge(parameterService.defaults(host.projectRoot(context)).fragmenter_params,value);}catch{return value;}}
+function withDefaults(context,value){try{return parameterService.merge(parameterService.chemistryDefaults(host.projectRoot(context)).fragmenter_params,value);}catch{return value;}}
 function savePath(previousPath){const name=previousPath?path.basename(previousPath).replace(/\.fragmenter\.(pft|json)$/i,'').replace(/\.(pft|json)$/i,'')+'_copy':'fragmenter';return host.reactionPatternSetSavePath(name,previousPath,FILE_SUFFIX);}
 async function saveAs(value,previousPath){const params=normalizeDocument(value),selected=await vscode.window.showSaveDialog({filters:{'FREDIS Fragmenter Config':['pft']},defaultUri:vscode.Uri.file(savePath(previousPath))});if(!selected)return undefined;const target=host.ensureFileSuffix(selected.fsPath,FILE_SUFFIX);await fs.promises.writeFile(target,JSON.stringify(params,null,2)+'\n');vscode.window.showInformationMessage(`Saved ${path.basename(target)}`);return target;}
 // Messages of the embedded Reaction Pattern Set / Adduct Rule Set editors,

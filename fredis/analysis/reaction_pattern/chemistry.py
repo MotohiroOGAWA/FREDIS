@@ -66,7 +66,7 @@ class ChemistryTask:
 
 @dataclass
 class ChemistryOptions:
-    model_config: dict
+    chemistry_config: dict
     max_unique_fragment_smiles: int = -1
     max_reaction_combinations: int = -1
 
@@ -80,11 +80,11 @@ def initialize(options: ChemistryOptions) -> None:
     from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
     from fredis.ml.input.structure_builder import ReactionStructureBuilder
 
-    generator = create_preparation_context(options.model_config)
+    generator = create_preparation_context(options.chemistry_config)
     _STATE.clear()
     _STATE["builder"] = ReactionStructureBuilder(generator, max_unique_fragment_smiles=options.max_unique_fragment_smiles,
                                                max_reaction_combinations=options.max_reaction_combinations)
-    _STATE["max_reaction_count"] = int(options.model_config["fragmenter_params"]["fragment_ion_tree_builder"]
+    _STATE["max_reaction_count"] = int(options.chemistry_config["fragmenter_params"]["fragment_ion_tree_builder"]
                                      .get("max_reaction_count", 2))
     _STATE["seeds"] = OrderedDict()
 

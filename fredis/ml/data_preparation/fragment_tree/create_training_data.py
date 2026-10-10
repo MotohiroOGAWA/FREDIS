@@ -14,7 +14,7 @@ from fredis.ml.input.structure_builder import ReactionStructureBuilder
 from fredis.ml.input.source_reaction_structure import save_fragment_tree_structure,make_structure_file_stem,UnresolvedPrecursorError
 from .manifest_summary import structure_manifest_fields
 from .context import create_preparation_context, validate_limits
-from fredis.ml.specgen.config_options import configure_model_options, resolve_model_options
+from fredis.cli.chemistry_options import configure_chemistry_options, resolve_chemistry_options
 from .datasets import load_spectrum_dataset, split_by_smiles, dedupe_validation
 from .record_validation import inspect_records
 
@@ -160,7 +160,7 @@ def _search_maxima(completed_search_stats):
     return result
 
 
-def create_reaction_training_data(*, dataset: MSDataset, model_config: dict, output_dir: str | Path,
+def create_reaction_training_data(*, dataset: MSDataset, chemistry_config: dict, output_dir: str | Path,
                                 smiles_column: str = 'SMILES', adduct_type_column: str = 'AdductType',
                                 collision_energy_column: str = 'CollisionEnergy', precursor_mz_column: str = 'PrecursorMZ',
                                 minimum_relative_intensity: float = 0.0,
@@ -176,14 +176,14 @@ def create_reaction_training_data(*, dataset: MSDataset, model_config: dict, out
         raise ValueError('Worker processes and chunk size must be positive integers.')
     if source_record_indexes is not None and len(source_record_indexes)!=len(dataset):
         raise ValueError('source_record_indexes must contain one index per input spectrum.')
-    inspection=inspect_records(dataset,create_preparation_context(model_config).fragmenter,
+    inspection=inspect_records(dataset,create_preparation_context(chemistry_config).fragmenter,
         dict(smilesColumn=smiles_column,adductTypeColumn=adduct_type_column,
-             collisionEnergyColumn=collision_energy_column,precursorMzColumn=precursor_mz_column),symbols=model_config['mol_encoder_params']['symbols'])
+             collisionEnergyColumn=collision_energy_column,precursorMzColumn=precursor_mz_column),symbols=chemistry_config['symbols'])
     original_rows=inspection['validIndexes']
     source_rows=[source_record_indexes[index] for index in original_rows] if source_record_indexes is not None else original_rows
     dataset=dataset[original_rows]
     if not len(dataset): raise ValueError('The dataset contains no valid records to prepare.')
-    generator=create_preparation_context(model_config)
+    generator=create_preparation_context(chemistry_config)
     builder=ReactionStructureBuilder(generator,max_unique_fragment_smiles=max_unique_fragment_smiles,
                                    max_reaction_combinations=max_reaction_combinations)
     grouped={}
@@ -208,7 +208,7 @@ def create_reaction_training_data(*, dataset: MSDataset, model_config: dict, out
     tasks=((tree,smiles,[source_rows[index] for index in rows],dataset[rows],seed_reaction_compounds_by_smiles.get(smiles,()))
            for tree,(smiles,rows) in enumerate(grouped.items()))
     if preparation_config is None:
-        (output/'preparation_config.json').write_text(json.dumps(dict(split=split,model_config=model_config,
+        (output/'preparation_config.json').write_text(json.dumps(dict(split=split,chemistry_config=chemistry_config,
             smiles_column=smiles_column,num_workers=num_workers,chunk_size=chunk_size,overwrite=overwrite,**options),indent=2))
     files=[];skipped=[];prepared_records=0;manifest_rows=[];score_rows=[];completed_search_stats=[]
     def search_fields(stats):
@@ -304,7 +304,7 @@ def create_reaction_training_data(*, dataset: MSDataset, model_config: dict, out
                         task_file=Path(directory)/f'task-{task_id}.pkl';task_id+=1
                         result_file=task_file.with_suffix('.json')
                         with task_file.open('wb') as stream:
-                            pickle.dump(dict(tasks=chunk,model_config=model_config,options=options),stream,pickle.HIGHEST_PROTOCOL)
+                            pickle.dump(dict(tasks=chunk,chemistry_config=chemistry_config,options=options),stream,pickle.HIGHEST_PROTOCOL)
                         commands.append([sys.executable,'-m',worker_module,'--task',str(task_file),'--result',str(result_file)])
                     if not commands: break
                     crashed=[]
@@ -336,21 +336,20 @@ def create_reaction_training_data(*, dataset: MSDataset, model_config: dict, out
         num_sources=len(files),num_samples=prepared_records,num_metadata_valid_records=len(dataset),num_skipped_sources=len(skipped),
         num_skipped_records=sum(len(source['record_indexes']) for source in skipped),
         num_rejected_records=sum(row['rejected_sample_count'] for row in manifest_rows if row['status']=='completed'),
-        num_excluded_records=inspection['excludedRecords'],num_workers=num_workers,chunk_size=chunk_size,model_config=model_config,minimum_relative_intensity=minimum_relative_intensity),indent=2))
+        num_excluded_records=inspection['excludedRecords'],num_workers=num_workers,chunk_size=chunk_size,chemistry_config=chemistry_config,minimum_relative_intensity=minimum_relative_intensity),indent=2))
     return sorted(files)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',required=True);parser.add_argument('--output-dir',required=True)
-    configure_model_options(parser)
+    configure_chemistry_options(parser)
     for name,default in (('smiles','SMILES'),('adduct-type','AdductType'),('collision-energy','CollisionEnergy'),('precursor-mz','PrecursorMZ')):
         parser.add_argument('--'+name+'-column',default=default,help='Dataset metadata column.')
         parser.add_argument('--validation-'+name+'-column',help='Validation dataset column, if it differs from --'+name+'-column.')
-    parser.add_argument('--symbols-json',help='JSON array of selected element symbols; overrides imported symbols.')
-    parser.add_argument('--max-unique-fragment-smiles',type=int,
+    parser.add_argument('--max-unique-fragment-smiles',type=int,default=-1,
         help='Skip a source once its materialized fragments exceed this many distinct canonical SMILES (the source itself is not counted); -1 is unlimited.')
-    parser.add_argument('--max-reaction-combinations',type=int,
+    parser.add_argument('--max-reaction-combinations',type=int,default=-1,
         help='Skip a source once its reaction search examines more than this many raw reaction combinations (all sizes up to max_reaction_count), before RDKit runs them; -1 is unlimited.')
     parser.add_argument('--num-workers',type=int,default=1,help='Parallel worker processes per split; 1 runs serially.')
     parser.add_argument('--chunk-size',type=int,default=1,help='SMILES groups dispatched per worker chunk.')
@@ -367,15 +366,9 @@ def main(argv: list[str] | None = None) -> None:
     # Decide whether an existing destination may be replaced before loading or
     # validating either dataset; those checks can be expensive on large files.
     _confirm_existing_output(args)
-    dataset=load_spectrum_dataset(args.input)
-    config=resolve_model_options(args)
-    imported_max_unique=config.pop('max_unique_fragment_smiles',-1);imported_max_combinations=config.pop('max_reaction_combinations',-1)
-    if args.max_unique_fragment_smiles is None: args.max_unique_fragment_smiles=imported_max_unique
-    if args.max_reaction_combinations is None: args.max_reaction_combinations=imported_max_combinations
+    config=resolve_chemistry_options(args)
     validate_limits(args.max_unique_fragment_smiles,args.max_reaction_combinations)
-    imported_symbols=config.pop('symbols',None)
-    if args.symbols_json: config['mol_encoder_params']['symbols']=json.loads(args.symbols_json)
-    elif imported_symbols is not None: config['mol_encoder_params']['symbols']=imported_symbols
+    dataset=load_spectrum_dataset(args.input)
     # Exclude invalid metadata before collecting adducts or splitting molecules.
     validation_dataset=load_spectrum_dataset(args.validation_input) if args.validation_input else None
     checker=create_preparation_context(config).fragmenter
@@ -391,7 +384,7 @@ def main(argv: list[str] | None = None) -> None:
     reports={}
     for name,data in (('train',dataset),('validation',validation_dataset)):
         if data is None: continue
-        report=inspect_records(data,checker,mapping if name=='train' else validation_mapping,symbols=config['mol_encoder_params']['symbols'])
+        report=inspect_records(data,checker,mapping if name=='train' else validation_mapping,symbols=config['symbols'])
         reports[name]=report['invalidRecords']
         filtered=data[report['validIndexes']]
         if not len(filtered): raise ValueError(name+' dataset contains no valid records to prepare.')
@@ -400,7 +393,7 @@ def main(argv: list[str] | None = None) -> None:
     output=Path(args.output_dir);output.mkdir(parents=True,exist_ok=True)
     print(json.dumps(dict(event='excluded_records',counts={name:len(rows) for name,rows in reports.items()})),flush=True)
     config['adduct_type_strs']=list(create_preparation_context(config).adduct_type_strs)
-    kwargs=dict(model_config=config,smiles_column=args.smiles_column,adduct_type_column=args.adduct_type_column,
+    kwargs=dict(chemistry_config=config,smiles_column=args.smiles_column,adduct_type_column=args.adduct_type_column,
         collision_energy_column=args.collision_energy_column,precursor_mz_column=args.precursor_mz_column,
         minimum_relative_intensity=args.minimum_relative_intensity,
         overwrite=bool(args.overwrite),max_unique_fragment_smiles=args.max_unique_fragment_smiles,max_reaction_combinations=args.max_reaction_combinations,num_workers=args.num_workers,chunk_size=args.chunk_size)
@@ -458,10 +451,10 @@ def main(argv: list[str] | None = None) -> None:
         'num_workers':'numWorkers','chunk_size':'chunkSize'}
     restored={**previous,'application':'fragment-tree-data-preparation'}
     for key,value in preparation_config.items():
-        if key=='model_config': continue
+        if key=='chemistry_config': continue
         if key=='validation_ratio' and value is None: continue
         restored[aliases.get(key,key)]=value
-    restored.update(fragmenterParams=config['fragmenter_params'],symbols=config['mol_encoder_params']['symbols'])
+    restored.update(fragmenterParams=config['fragmenter_params'],symbols=config['symbols'])
     restored.pop('modelConfig',None);restored.pop('params',None)
     preparation_config['workbench_config']=restored
     (output/'preparation_config.json').write_text(json.dumps(preparation_config,indent=2))

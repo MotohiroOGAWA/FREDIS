@@ -96,10 +96,10 @@ function enableDevelopmentReload(context, output) {
 
 function defaultConfig(context) {
   const root = projectRoot(context);
-  const defaultParams = path.join(root, 'fredis', 'presets', 'spectrum_generator_params', 'source_anchored_pos_model_config.json');
+  const chemistry = parameterService.chemistryDefaults(root);
   return workbenchDefaults.workflowDefaults('data',{
-    application: 'fragment-tree-data-preparation', modelConfig: parameterService.defaults(root),
-    input: '', params: defaultParams, smilesColumn:'SMILES', adductTypeColumn:'AdductType', collisionEnergyColumn:'CollisionEnergy', precursorMzColumn:'PrecursorMZ',
+    application: 'fragment-tree-data-preparation', fragmenterParams: chemistry.fragmenter_params, symbols: chemistry.symbols,
+    input: '', smilesColumn:'SMILES', adductTypeColumn:'AdductType', collisionEnergyColumn:'CollisionEnergy', precursorMzColumn:'PrecursorMZ',
     validationSmilesColumn:'', validationAdductTypeColumn:'', validationCollisionEnergyColumn:'', validationPrecursorMzColumn:'',
     validationInput:'', validationRatio:0.1, validationSeed:0, minimumRelativeIntensity:0, overwrite:false, numWorkers:1, chunkSize:1,
     outputDir: ''
@@ -108,11 +108,10 @@ function defaultConfig(context) {
 
 function defaultTrainingConfig(context) {
   const root = projectRoot(context);
-  const defaultParams = path.join(root, 'fredis', 'presets', 'spectrum_generator_params', 'source_anchored_pos_model_config.json');
-  const modelConfig = parameterService.defaults(root);
-  modelConfig.mol_encoder_params = { ...modelConfig.mol_encoder_params, node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 };
+  // Architecture defaults not listed here are filled in by the parameter editor.
+  const modelConfig = { mol_encoder_params: { node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 } };
   return workbenchDefaults.workflowDefaults('training',{
-    application: 'fragment-tree-training', modelConfig, params: defaultParams, trainDir: '', valDir: '',
+    application: 'fragment-tree-training', modelConfig, trainDir: '', valDir: '',
     outputDir: '',
     experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.2, branchMilTemperature:0.1, fragmentLossWeight:0.5, stateLossWeight:0.5, intensityLossWeight:1, cosineLossWeight:0.5, precursorFreeLossWeight:0.5, intensityPower:0.5, gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
     fineTuneCheckpoint: '', adapterWidth: 8
@@ -179,8 +178,6 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         const picked = message.type==='loadConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadConfigJSON'?[{fsPath:message.name||'fragment-tree.pft'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
         if (picked && picked[0]) {
           const config = normalizeConfig(JSON.parse(message.type==='loadConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8')));
-          if (!config.modelConfig && config.params) config.modelConfig = parameterService.merge(parameterService.defaults(projectRoot(context)), parameterService.unpack(JSON.parse(await fs.promises.readFile(path.resolve(path.dirname(picked[0].fsPath), config.params), 'utf8'))));
-          if(!config.modelConfig && config.fragmenterParams && !config.symbols) config.modelConfig=parameterService.merge(parameterService.defaults(projectRoot(context)),{fragmenter_params:config.fragmenterParams});
           panel.webview.postMessage({ type: 'config', path: message.type==='loadConfigJSON'?undefined:picked[0].fsPath, config: normalizeConfig({ ...defaultConfig(context), ...config }) });
         }
       } else if (message.type === 'saveTrainingConfig') {
@@ -194,7 +191,6 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         const picked = message.type==='loadTrainingConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadTrainingConfigJSON'?[{fsPath:message.name||'fragment_tree.pfttrain.json'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
         if (picked && picked[0]) {
           const raw=JSON.parse(message.type==='loadTrainingConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8'));
-          if(!raw.modelConfig&&raw.params){if(message.type==='loadTrainingConfigJSON')throw new Error('Dropped training configurations must contain their model settings.');raw.modelConfig=parameterService.merge(parameterService.defaults(projectRoot(context)),parameterService.unpack(JSON.parse(await fs.promises.readFile(path.resolve(path.dirname(picked[0].fsPath),raw.params),'utf8'))));}
           const config=normalizeTrainingConfig(raw);
           const restored={...defaultTrainingConfig(context),...config};
           restored.modelConfig=parameterService.merge(defaultTrainingConfig(context).modelConfig,config.modelConfig||{});
@@ -349,12 +345,12 @@ function normalizeConfig(config) {
     precursor_mz_column:'precursorMzColumn',validation_smiles_column:'validationSmilesColumn',validation_adduct_type_column:'validationAdductTypeColumn',
     validation_collision_energy_column:'validationCollisionEnergyColumn',validation_precursor_mz_column:'validationPrecursorMzColumn',
     minimum_relative_intensity:'minimumRelativeIntensity',
-    num_workers:'numWorkers',chunk_size:'chunkSize',max_unique_fragment_smiles:'maxUniqueFragmentSmiles',max_reaction_combinations:'maxReactionCombinations',model_config:'modelConfig'};
+    num_workers:'numWorkers',chunk_size:'chunkSize',max_unique_fragment_smiles:'maxUniqueFragmentSmiles',max_reaction_combinations:'maxReactionCombinations'};
   for(const [from,to] of Object.entries(aliases)){if(result[from]!==undefined&&result[to]===undefined)result[to]=result[from];delete result[from];}
-  if(result.modelConfig){const model=result.modelConfig.params||result.modelConfig;result.fragmenterParams??=model.fragmenter_params;result.symbols??=model.symbols||model.mol_encoder_params?.symbols;result.maxUniqueFragmentSmiles??=model.max_unique_fragment_smiles;result.maxReactionCombinations??=model.max_reaction_combinations;if(result.fragmenterParams)delete result.modelConfig;}
+  const chemistry=result.chemistry_config;delete result.chemistry_config;
+  if(chemistry){result.fragmenterParams??=chemistry.fragmenter_params;result.symbols??=chemistry.symbols;}
   if(result.validationRatio==null)delete result.validationRatio;
   if(result.validationInput==null)result.validationInput='';
-  if (result.modelConfig || result.fragmenterParams) delete result.params;
   result.input ||= result.trainInput;
   return result;
 }
@@ -427,8 +423,7 @@ async function runFragmentTree(context, output, config, panel) {
 function buildArgs(c) {
   const args=['-m', 'fredis.cli', 'train', 'create-fragment-tree-data',
     '--input', c.input || c.trainInput, '--output-dir', c.outputDir];
-  if(c.modelConfig || c.fragmenterParams) args.push('--params-json',JSON.stringify(c.modelConfig || c.fragmenterParams));
-  else if(c.params) args.push('--params',c.params);
+  if(c.fragmenterParams) args.push('--params-json',JSON.stringify(c.fragmenterParams));
   if(c.symbols)args.push('--symbols-json',JSON.stringify(c.symbols));
   for(const [key,flag]of Object.entries({maxUniqueFragmentSmiles:'--max-unique-fragment-smiles',maxReactionCombinations:'--max-reaction-combinations'}))if(c[key]!==undefined)args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({smilesColumn:'--smiles-column',adductTypeColumn:'--adduct-type-column',collisionEnergyColumn:'--collision-energy-column',precursorMzColumn:'--precursor-mz-column'}))if(c[key])args.push(flag,c[key]);
@@ -807,7 +802,7 @@ function webviewScript() { return `
     document.getElementById('save').onclick=()=>vscode.postMessage({type:'saveConfig',config:getConfig()}); document.getElementById('load').onclick=()=>vscode.postMessage({type:'loadConfig'}); document.getElementById('openResult').onclick=()=>vscode.postMessage({type:'openResult'}); document.getElementById('openEvaluation').onclick=()=>vscode.postMessage({type:'openEvaluation'});
     ${reactionPatternUi.script()}
     ${adductUi.script()}
-    const initialAdductSet=initial.modelConfig?.fragmenter_params?.fragment_ion_tree_builder?.fragment_ion_adduct_rule_set;if(initialAdductSet)window.dispatchEvent(new MessageEvent('message',{data:{type:'adductRuleSet',value:{fragment_ion_adduct_rule_set:JSON.parse(JSON.stringify(initialAdductSet))},path:''}}));
+    const initialAdductSet=initial.fragmenterParams?.fragment_ion_tree_builder?.fragment_ion_adduct_rule_set;if(initialAdductSet)window.dispatchEvent(new MessageEvent('message',{data:{type:'adductRuleSet',value:{fragment_ion_adduct_rule_set:JSON.parse(JSON.stringify(initialAdductSet))},path:''}}));
     form.onsubmit=e=>{e.preventDefault();vscode.postMessage({type:'run',config:getConfig()});}; document.getElementById('copyCommand').onclick=()=>vscode.postMessage({type:'copyCommand',config:getConfig()}); stop.onclick=()=>vscode.postMessage({type:'stop'});
     trainingForm.onsubmit=e=>{e.preventDefault();vscode.postMessage({type:'runTraining',config:getTrainingConfig()})};document.getElementById('trainingCopyCommand').onclick=()=>vscode.postMessage({type:'copyTrainingCommand',config:getTrainingConfig()});trainingStop.onclick=()=>vscode.postMessage({type:'stop'});document.getElementById('saveTraining').onclick=()=>vscode.postMessage({type:'saveTrainingConfig',config:getTrainingConfig()});document.getElementById('loadTraining').onclick=()=>vscode.postMessage({type:'loadTrainingConfig'});
     let predictSequence=0,predictWaiters=new Map(),predictListSequence=0,predictListWaiters=new Map();

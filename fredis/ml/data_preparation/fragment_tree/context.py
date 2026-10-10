@@ -14,10 +14,10 @@ def validate_limits(max_unique_fragment_smiles=-1, max_reaction_combinations=-1)
     if type(max_reaction_combinations) is not int or not (max_reaction_combinations == -1 or max_reaction_combinations > 0):
         raise ValueError('Max reaction combinations must be -1 or a positive integer.')
 
-def create_preparation_context(config):
-    config=config.get('params',config)
-    fragmenter=Fragmenter.from_dict(config.get('fragmenter_params',config))
-    symbols=config.get('symbols',config.get('mol_encoder_params',{}).get('symbols'))
+def create_preparation_context(chemistry_config):
+    """Chemistry for preparation: ``{'fragmenter_params', 'symbols'}``."""
+    fragmenter=Fragmenter.from_dict(chemistry_config['fragmenter_params'])
+    symbols=chemistry_config.get('symbols')
     if not symbols: raise ValueError('Select at least one element symbol.')
     if not isinstance(symbols,(list,tuple)) or any(not isinstance(value,str) or value not in {Chem.GetPeriodicTable().GetElementSymbol(i) for i in range(1,119)} for value in symbols):
         raise ValueError('Symbols must be a list of valid element symbols.')

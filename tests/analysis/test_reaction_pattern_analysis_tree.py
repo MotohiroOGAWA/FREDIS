@@ -78,15 +78,15 @@ def _spectrum(smiles, adduct, energy, precursor):
     return {"SMILES": smiles, "AdductType": adduct, "CollisionEnergy": energy, "PrecursorMZ": precursor}
 
 
-def _model(max_reaction_count: int = 2) -> dict:
-    from tests.ml.reaction.TestReactionPipeline import config
+def _chemistry(max_reaction_count: int = 2) -> dict:
+    from tests.ml.reaction.TestReactionPipeline import chemistry
 
-    model = config()
-    builder = model["fragmenter_params"]["fragment_ion_tree_builder"]
+    value = chemistry()
+    builder = value["fragmenter_params"]["fragment_ion_tree_builder"]
     builder["max_reaction_count"] = max_reaction_count
-    # Patterns of the model configuration never enter the analysis.
+    # Patterns of the chemistry configuration never enter the analysis.
     builder["reaction_pattern_set"] = {"name": "ignored", "patterns": [_patterns()[NAMES["O"]]]}
-    return model
+    return value
 
 
 @pytest.fixture(scope="module")
@@ -104,7 +104,7 @@ def inputs(tmp_path_factory):
 
 def _run(output: Path, inputs, tree=None, **kwargs) -> Path:
     return generate_reaction_pattern_analysis(sources=[{"path": str(path)} for path in inputs], output_dir=output,
-                                      model_config=_model(), tree=tree or _tree(), overwrite=True, **kwargs)
+                                      chemistry_config=_chemistry(), tree=tree or _tree(), overwrite=True, **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -260,7 +260,7 @@ def test_result_a_is_hdf5_with_tree_tables_and_indexes(analysis):
             assert name in handle["indexes"]
         configuration = json.loads(handle["configuration/json"].asstr()[()])
     assert [node["id"] for node in configuration["tree"]["nodes"]] == ["h", "ho", "hoc", "hn", "c", "co"]
-    assert {row["name"] for row in configuration["modelConfig"]["fragmenter_params"]["fragment_ion_tree_builder"]
+    assert {row["name"] for row in configuration["chemistryConfig"]["fragmenter_params"]["fragment_ion_tree_builder"]
             ["reaction_pattern_set"]["patterns"]} == set(NAMES.values())
     assert not any("baseline" in name for name in configuration["run"])
     assert (analysis["path"].parent / "tree.reaction-pattern-analysis.json").exists()
@@ -411,12 +411,12 @@ def test_cli_builds_the_tree_from_pattern_sets_and_nodes(monkeypatch, capsys, tm
     (tmp_path / "h.pft").write_text(json.dumps(patterns[NAMES["H"]]))
     (tmp_path / "oc.pft").write_text(json.dumps({"reaction_pattern_set": {"name": "OC", "patterns": [
         patterns[NAMES["O"]], patterns[NAMES["C"]]]}}))
-    model = tmp_path / "model.json"
-    model.write_text(json.dumps(_model()))
+    chemistry = tmp_path / "chemistry.json"
+    chemistry.write_text(json.dumps(_chemistry()))
     parser = argparse.ArgumentParser()
     command = ReactionPatternAnalysisCommand()
     command.configure(parser)
-    args = parser.parse_args(["--source", str(inputs[0]), "--output-dir", str(tmp_path / "out"), "--params", str(model),
+    args = parser.parse_args(["--source", str(inputs[0]), "--output-dir", str(tmp_path / "out"), "--params", str(chemistry),
                               "--pattern-set", "H=" + str(tmp_path / "h.pft"), "--pattern-set", str(tmp_path / "oc.pft"),
                               "--node", "r=H", "--node", "x=OC@r", "--overwrite", "1"])
     command.run(args)
@@ -432,7 +432,7 @@ def test_cli_builds_the_tree_from_pattern_sets_and_nodes(monkeypatch, capsys, tm
     # The same tree inline, without any Tree Configuration file.
     tree = {"patternSets": [{"id": "H", "name": "H", "patterns": [patterns[NAMES["H"]]]}],
             "nodes": [{"id": "r", "patternSet": "H", "parent": None}]}
-    args = parser.parse_args(["--source", str(inputs[0]), "--output-dir", str(tmp_path / "inline"), "--params", str(model),
+    args = parser.parse_args(["--source", str(inputs[0]), "--output-dir", str(tmp_path / "inline"), "--params", str(chemistry),
                               "--tree-config-json", json.dumps(tree), "--overwrite", "1"])
     command.run(args)
     with ReactionPatternAnalysisResult(tmp_path / "inline" / "result.reactionpatternanalysis.pft") as reader:

@@ -71,7 +71,7 @@ function attach(panel,context,projectRoot){
  // summary or data/check per-record validation finishes on a large dataset.
  const data=message.type==='data/columns'
    ?await backend(context,root,'columns',{path:message.path,mapping:message.mapping})
-   :await backend(context,root,'preview',{path:message.path,mapping:message.mapping,validateValues:message.type==='data/check',reportProgress:message.type==='data/check',fragmenterParams:message.fragmenterParams},message.type==='data/check'?{timeoutMs:0,onProgress:progress=>{if(latest.get(message.target)===message.requestId)post({type:'data/check-progress',target:message.target,requestId:message.requestId,...progress});}}:{});
+   :await backend(context,root,'preview',{path:message.path,mapping:message.mapping,validateValues:message.type==='data/check',reportProgress:message.type==='data/check',fragmenterParams:message.fragmenterParams,symbols:message.symbols},message.type==='data/check'?{timeoutMs:0,onProgress:progress=>{if(latest.get(message.target)===message.requestId)post({type:'data/check-progress',target:message.target,requestId:message.requestId,...progress});}}:{});
  if(latest.get(message.target)===message.requestId)post({type:message.type,target:message.target,requestId:message.requestId,data});
  }
  if(message.type==='data/preflight')post({type:'data/preflight',requestId:message.requestId,...await backend(context,root,'validate',message.config,{timeoutMs:0})});

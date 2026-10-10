@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
-from fredis.ml.specgen.config_options import configure_model_options, resolve_model_options, namespace_argv
-
+from fredis.cli.base import namespace_argv
+from fredis.cli.chemistry_options import DEFAULT_SYMBOLS, configure_chemistry_options, resolve_chemistry_options
+from .TestReactionPipeline import chemistry
 def preparation_dataset(smiles_column='SMILES'):
     import pandas as pd
     import numpy as np
@@ -19,52 +20,55 @@ def preparation_dataset(smiles_column='SMILES'):
 class TestConfigOptions(unittest.TestCase):
     def parser(self):
         parser=argparse.ArgumentParser()
-        configure_model_options(parser)
+        configure_chemistry_options(parser)
         return parser
 
-    def test_adduct_embedding_order_is_not_a_cli_parameter(self):
-        parser = self.parser()
-        self.assertNotIn('--adduct-types-json', parser._option_string_actions)
-        resolved = resolve_model_options(parser.parse_args([
-            '--params-json', '{"adduct_type_strs":["[M+K]+"]}']))
-        self.assertNotIn('adduct_type_strs', resolved)
+    def test_chemistry_holds_only_fragmenter_and_symbols(self):
+        fragmenter=json.dumps(chemistry()['fragmenter_params'])
+        resolved=resolve_chemistry_options(self.parser().parse_args(['--params-json',fragmenter]))
+        self.assertEqual(set(resolved),{'fragmenter_params','symbols'})
+        self.assertEqual(resolved['symbols'],list(DEFAULT_SYMBOLS))
+        with self.assertRaisesRegex(ValueError,'Specify the Fragmenter'):
+            resolve_chemistry_options(self.parser().parse_args([]))
+        with self.assertRaisesRegex(ValueError,'Fragmenter configuration'):
+            resolve_chemistry_options(self.parser().parse_args(['--params-json','{"mol_encoder_params":{}}']))
 
     def test_file_inline_named_and_individual_precedence(self):
         with tempfile.TemporaryDirectory() as directory:
-            file=Path(directory)/'config.json'
-            file.write_text(json.dumps({'fragmenter_params':{'mass_tolerance':'1Da'},'generation_params':{'max_fragment_nodes':30}}))
-            args=self.parser().parse_args(['--params',str(file),'--params-json','{"generation_params":{"max_fragment_nodes":40}}',
-                '--mass-tolerance','0.02Da','--max-fragment-nodes','50','--set','generation_params.max_fragment_nodes=60',
-                '--set','fragmenter_params.fragment_ion_tree_builder.reaction_pattern_set.patterns.0.name="custom"'])
-            config=resolve_model_options(args)
-            self.assertEqual(config['generation_params']['max_fragment_nodes'],60)
+            file=Path(directory)/'chemistry.json'
+            value=chemistry();value['fragmenter_params']['mass_tolerance']='1Da';value['symbols']=['C','O']
+            file.write_text(json.dumps(value))
+            args=self.parser().parse_args(['--params',str(file),'--params-json','{"fragment_ion_tree_builder":{"max_reaction_count":1}}',
+                '--mass-tolerance','0.02Da','--max-reaction-count','2','--set','fragment_ion_tree_builder.max_reaction_count=3',
+                '--set','fragment_ion_tree_builder.reaction_pattern_set.patterns.0.name="custom"'])
+            config=resolve_chemistry_options(args)
+            self.assertEqual(config['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'],3)
             self.assertEqual(config['fragmenter_params']['mass_tolerance'],'0.02Da')
             self.assertEqual(config['fragmenter_params']['fragment_ion_tree_builder']['reaction_pattern_set']['patterns'][0]['name'],'custom')
-            self.assertEqual(config['generation_params']['branch_path_threshold'],0)
-
-    def test_fragmenter_file_without_model_wrapper(self):
-        parser=self.parser()
-        result=resolve_model_options(parser.parse_args(['--params-json','{"fragment_ion_tree_builder":{"max_reaction_count":2},"mass_tolerance":"0.1Da"}','--max-reaction-count','1']))
-        self.assertEqual(result['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'],1)
-        self.assertIn('mol_encoder_params',result)
+            self.assertEqual(config['symbols'],['C','O'])
+            self.assertEqual(resolve_chemistry_options(self.parser().parse_args(['--params',str(file),'--symbols-json','["N"]']))['symbols'],['N'])
 
     def test_repeat_options_survive_official_cli_forwarding(self):
         parser=self.parser()
-        args=parser.parse_args(['--set','generation_params.max_fragment_nodes=40','--set','generation_params.branch_path_threshold=0.2'])
+        args=parser.parse_args(['--params-json',json.dumps(chemistry()),'--set','mass_tolerance="0.5Da"','--set','fragment_ion_tree_builder.max_reaction_count=1'])
         forwarded=namespace_argv(parser,args)
         self.assertEqual(forwarded.count('--set'),2)
-        self.assertEqual(resolve_model_options(parser.parse_args(forwarded))['generation_params']['branch_path_threshold'],0.2)
+        resolved=resolve_chemistry_options(parser.parse_args(forwarded))
+        self.assertEqual(resolved['fragmenter_params']['mass_tolerance'],'0.5Da')
+        self.assertEqual(resolved['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'],1)
 
     def test_malformed_override_is_rejected(self):
-        with self.assertRaises(ValueError):resolve_model_options(self.parser().parse_args(['--set','beam_size']))
+        with self.assertRaises(ValueError):
+            resolve_chemistry_options(self.parser().parse_args(['--params-json',json.dumps(chemistry()),'--set','beam_size']))
 
     def test_official_preparation_command_forwards_parameters_and_columns(self):
         from fredis.cli.train.commands.create_fragment_tree_data import CreateFragmentTreeDataCommand
         from fredis.ml.data_preparation.fragment_tree import create_training_data as preparation
         parser=preparation.build_arg_parser()
         args=parser.parse_args(['--input','input.msds','--output-dir','out',
+                               '--params-json',json.dumps(chemistry()['fragmenter_params']),
                                '--max-reaction-count','2','--max-unique-fragment-smiles','500','--max-reaction-combinations','1000','--overwrite','1','--num-workers','2','--chunk-size','3','--symbols-json','["C","O"]','--smiles-column','CanonicalSMILES',
-                               '--set','generation_params.max_fragment_nodes=70'])
+                               '--set','precursor_candidate_max_reaction_count=1'])
         import pandas as pd
         with tempfile.TemporaryDirectory() as directory, patch.object(preparation.MSDataset,'load',return_value=preparation_dataset('CanonicalSMILES')), patch.object(preparation,'create_reaction_training_data') as run:
             args.output_dir=directory
@@ -75,9 +79,10 @@ class TestConfigOptions(unittest.TestCase):
         self.assertEqual(kwargs['max_reaction_combinations'],1000)
         self.assertEqual(kwargs['num_workers'],2)
         self.assertEqual(kwargs['chunk_size'],3)
-        self.assertEqual(kwargs['model_config']['mol_encoder_params']['symbols'],['C','O'])
-        self.assertEqual(kwargs['model_config']['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'],2)
-        self.assertEqual(kwargs['model_config']['generation_params']['max_fragment_nodes'],70)
+        self.assertEqual(set(kwargs['chemistry_config']),{'fragmenter_params','symbols','adduct_type_strs'})
+        self.assertEqual(kwargs['chemistry_config']['symbols'],['C','O'])
+        self.assertEqual(kwargs['chemistry_config']['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'],2)
+        self.assertEqual(kwargs['chemistry_config']['fragmenter_params']['precursor_candidate_max_reaction_count'],1)
 
     def test_official_training_command_forwards_explicit_options(self):
         from fredis.cli.train.commands.fragment_tree import FragmentTreeTrainCommand
@@ -112,17 +117,15 @@ class TestConfigOptions(unittest.TestCase):
         self.assertEqual(args.train_log_interval_steps,100)
         self.assertTrue(args.train_mol_encoder)
 
-    def test_preparation_file_limits_and_symbols_are_overridden_only_explicitly(self):
+    def test_preparation_limits_are_options_and_symbols_follow_the_chemistry_file(self):
         from fredis.ml.data_preparation.fragment_tree import create_training_data as preparation
-        import pandas as pd
-        raw={'max_unique_fragment_smiles':20,'max_reaction_combinations':40,'symbols':['C','O']}
+        raw={**chemistry(),'symbols':['C','O']}
         with tempfile.TemporaryDirectory() as directory, patch.object(preparation,'load_spectrum_dataset',return_value=preparation_dataset()), patch.object(preparation,'create_reaction_training_data') as run:
             preparation.main(['--input','test.msds','--output-dir',directory,'--params-json',json.dumps(raw),'--overwrite','1'])
-            self.assertEqual(run.call_args.kwargs['max_unique_fragment_smiles'],20)
-            self.assertEqual(run.call_args.kwargs['max_reaction_combinations'],40)
-            self.assertNotIn('max_unique_fragment_smiles',run.call_args.kwargs['model_config'])
-            self.assertEqual(run.call_args.kwargs['model_config']['mol_encoder_params']['symbols'],['C','O'])
+            self.assertEqual(run.call_args.kwargs['max_unique_fragment_smiles'],-1)
+            self.assertEqual(run.call_args.kwargs['max_reaction_combinations'],-1)
+            self.assertEqual(run.call_args.kwargs['chemistry_config']['symbols'],['C','O'])
             preparation.main(['--input','test.msds','--output-dir',directory,'--params-json',json.dumps(raw),'--max-unique-fragment-smiles','10','--max-reaction-combinations','15','--symbols-json','["C","N","O"]','--overwrite','1'])
             self.assertEqual(run.call_args.kwargs['max_unique_fragment_smiles'],10)
             self.assertEqual(run.call_args.kwargs['max_reaction_combinations'],15)
-            self.assertEqual(run.call_args.kwargs['model_config']['mol_encoder_params']['symbols'],['C','N','O'])
+            self.assertEqual(run.call_args.kwargs['chemistry_config']['symbols'],['C','N','O'])

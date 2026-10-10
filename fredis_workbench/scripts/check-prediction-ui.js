@@ -3,13 +3,13 @@ const {JSDOM,VirtualConsole}=require('jsdom');
 const Module=require('module'),originalLoad=Module._load;
 Module._load=function(name,parent,main){if(name==='vscode')return {};return originalLoad.call(this,name,parent,main);};
 const ext=require('../src/extension');
-const preset=require('../../fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json');
+const preset=require('./fixtures').model;
 Module._load=originalLoad;
 assert(require('fs').readFileSync(require.resolve('../src/workbench/services'),'utf8').includes("['train','validation','home','prediction']"));
 
 const messages=[],errors=[],virtualConsole=new VirtualConsole();
 virtualConsole.on('jsdomError',error=>errors.push(error.detail?.stack||error.message));
-const html=ext.workbenchHtml({modelConfig:preset},{modelConfig:preset},{device:'cpu',batchMaxSamples:128,batchNumWorkers:1,batchChunkSize:1});
+const html=ext.workbenchHtml(require('./fixtures').dataConfig,{modelConfig:preset},{device:'cpu',batchMaxSamples:128,batchNumWorkers:1,batchChunkSize:1});
 const dom=new JSDOM(html,{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole,beforeParse(window){
   window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message),getState:()=>({}),setState:()=>{}});
   window.HTMLElement.prototype.scrollIntoView=function(){};

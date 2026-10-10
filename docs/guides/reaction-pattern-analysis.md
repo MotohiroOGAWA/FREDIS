@@ -148,7 +148,7 @@ is reused, and only new conditions are calculated.
   conditions.
 - Every saved tree keeps the reaction-sequence compounds that seed children, so a
   new child below any calculated node is built incrementally.
-- Sources, model configuration and limits must equal the existing result's
+- Sources, chemistry configuration and limits must equal the existing result's
   (they default to it); otherwise the run stops and explains which settings
   differ.
 - Pattern ids stay stable across runs, because saved reactions contain them.
@@ -166,7 +166,7 @@ output/
 │   └── <compound_id>.preft.pt
 ├── config.reaction-pattern-analysis.pft         run configuration (JSON, includes the tree)
 ├── tree.reaction-pattern-analysis.json          Tree Configuration (usable with --tree-config)
-└── reaction-pattern-analysis-model-config.json  resolved model/Fragmenter configuration
+└── reaction-pattern-analysis-chemistry-config.json  resolved chemistry (Fragmenter and symbols)
 ```
 
 | | File | Format | Role |
@@ -188,7 +188,7 @@ Large tables are chunked and gzip-compressed.
 | Path | One row per | Notes |
 |---|---|---|
 | root attrs, `/metadata` | — | `schema = fredis.reaction-pattern-analysis`, `schema_version = 3`, `result_format = hdf5-tree-v1`, `analysis_status`, `created_at`, `fredis_version`, `git_commit_sha`; `/metadata/overall_summary` (JSON) |
-| `/configuration/json` | — | `run` (the Workbench Input / Run form), `tree` (Tree Configuration), model configuration with the analysis-wide pattern library, columns, limits |
+| `/configuration/json` | — | `run` (the Workbench Input / Run form), `tree` (Tree Configuration), `chemistryConfig` (Fragmenter with the analysis-wide pattern library, and symbols), columns, limits |
 | `/datasets` | dataset | id, label, original path, column mapping, record counts |
 | `/pattern_sets` | used pattern set | id, name, pattern ids, number of nodes using it |
 | `/patterns` | pattern | stable `pattern_id`, name, reactant SMARTS, definition JSON, sets |
@@ -281,7 +281,7 @@ select peak cell  → the C files on the node's path only
 python -m fredis.cli analysis reaction-pattern \
   --source-spec '{"path":"nist-positive.msds","kind":"dataset","columns":{"smiles":"SMILES","adduct":"AdductType","collision_energy":"CollisionEnergy","precursor_mz":"PrecursorMZ"}}' \
   --output-dir results/reaction-pattern-analysis \
-  --params model-config.json \
+  --params single_bond_cleavage_pos.fragmenter.pft \
   --tree-config tree.json \
   --max-reaction-count 3 --mass-tolerance "20 ppm" \
   --num-workers 8 --chunk-size 4

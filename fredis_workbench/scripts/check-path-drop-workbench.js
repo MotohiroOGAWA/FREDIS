@@ -7,7 +7,7 @@ const mock = { workspace: { getConfiguration: () => ({ get: () => 'python' }) },
 const load = Module._load;
 Module._load = function (name, parent, main) { return name === 'vscode' ? mock : load.call(this, name, parent, main); };
 const extension = require('../src/extension');
-const preset = require('../../fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json');
+const preset = require('./fixtures').model;
 
 const plain = value => JSON.parse(JSON.stringify(value));
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
@@ -15,7 +15,7 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
 (async () => {
   const messages = [], errors = [], virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', error => errors.push(error.detail?.stack || error.message));
-  const dom = new JSDOM(extension.workbenchHtml({ modelConfig: preset }, { modelConfig: preset, epochs: 1, batchSize: 4, lr: 0.0001, adapterWidth: 8 }), {
+  const dom = new JSDOM(extension.workbenchHtml(require('./fixtures').dataConfig, { modelConfig: preset, epochs: 1, batchSize: 4, lr: 0.0001, adapterWidth: 8 }), {
     runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole,
     beforeParse(w) {
       w.acquireVsCodeApi = () => ({ postMessage: message => messages.push(message), getState: () => ({}), setState() {} });

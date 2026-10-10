@@ -16,7 +16,7 @@ from fredis.ml.data_preparation.fragment_tree.datasets import load_spectrum_data
 from fredis.ml.data_preparation.fragment_tree.create_training_data import main, _confirm_existing_output
 from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
 from fredis.ml.data_preparation.fragment_tree.record_validation import inspect_records
-from .TestReactionPipeline import config
+from .TestReactionPipeline import chemistry, config
 
 spec=importlib.util.spec_from_file_location('workbench_dataset_backend',Path('fredis_workbench/src/workbench/dataset_backend.py'))
 backend=importlib.util.module_from_spec(spec)
@@ -64,7 +64,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             preview=backend.preview({'path':str(file),'limit':2})
             self.assertFalse(preview['valuesChecked'])
             self.assertEqual(preview['validation']['smilesColumn']['valid'],0)
-            checked=backend.preview({'path':str(file),'validateValues':True})
+            checked=backend.preview({'path':str(file),'validateValues':True,'fragmenterParams':chemistry()['fragmenter_params']})
             self.assertTrue(checked['valuesChecked'])
             self.assertEqual(checked['validation']['smilesColumn']['valid'],5)
             self.assertEqual(preview['records'],5)
@@ -85,7 +85,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);file=root/'invalid.msds'
             MSDataset(metadata,data.peaks).save(str(file))
-            result=backend.preview({'path':str(file),'validateValues':True,'fragmenterParams':config()['fragmenter_params']})
+            result=backend.preview({'path':str(file),'validateValues':True,'fragmenterParams':chemistry()['fragmenter_params']})
             self.assertFalse(result['errors'])
             self.assertEqual(result['eligibleRecords'],1)
             self.assertEqual(result['excludedRecords'],4)
@@ -94,16 +94,16 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(result['invalidRecords'][1]['values']['adductTypeColumn'],'invalid')
             self.assertIn('main adduct',result['invalidRecords'][1]['issues'][0]['reason'])
             progress=[]
-            limited=inspect_records(MSDataset(metadata,data.peaks),create_preparation_context(config()).fragmenter,
+            limited=inspect_records(MSDataset(metadata,data.peaks),create_preparation_context(chemistry()).fragmenter,
                 progress=lambda current,total:progress.append((current,total)),invalid_detail_limit=2)
             self.assertEqual(limited['excludedRecords'],4)
             self.assertEqual(len(limited['invalidRecords']),2)
             self.assertEqual(progress[0],(0,5))
             self.assertEqual(progress[-1],(5,5))
             from fredis.ml.data_preparation.fragment_tree.create_training_data import create_reaction_training_data
-            model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with contextlib.redirect_stdout(io.StringIO()):
-                files=create_reaction_training_data(dataset=MSDataset(metadata,data.peaks),model_config=model,output_dir=root/'direct')
+                files=create_reaction_training_data(dataset=MSDataset(metadata,data.peaks),chemistry_config=model,output_dir=root/'direct')
                 main(['--input',str(file),'--output-dir',str(root/'cli'),'--params-json',json.dumps(model)])
             self.assertEqual(len(files),1)
             self.assertEqual(len(json.loads((root/'direct/invalid_records.json').read_text())),4)
@@ -119,7 +119,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         metadata=pd.DataFrame({'SMILES':['CCO','CCO','C'],'AdductType':['[M+H]+']*3,
                                'CollisionEnergy':[20]*3,'PrecursorMZ':[47,47,17]})
         data=MSDataset(metadata,PeakSeries(np.array([[47.,1.],[47.,1.],[17.,1.]]),np.arange(4,dtype=np.int64)))
-        model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+        model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
         with tempfile.TemporaryDirectory() as directory:
             for workers in (1,2):
                 for limit in ({'max_unique_fragment_smiles':1},{'max_reaction_combinations':1}):
@@ -127,7 +127,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                         output=Path(directory)/f'{workers}-{next(iter(limit))}'
                         stderr=io.StringIO()
                         with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(stderr):
-                            files=create_reaction_training_data(dataset=data,model_config=model,output_dir=output,
+                            files=create_reaction_training_data(dataset=data,chemistry_config=model,output_dir=output,
                                 num_workers=workers,chunk_size=3,**limit)
                         self.assertEqual(len(files),1)
                         skipped=json.loads((output/'skipped_sources.json').read_text())
@@ -207,7 +207,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             (output/'train_structures/stale/old.bin').write_text('stale')
             (output/'orphan.txt').write_text('old')
             (output/'fragment-tree.pft').write_text(json.dumps({'validationRatio':0.25}))
-            model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
                 main(['--input',str(input_file),'--validation-input',str(validation_file),'--output-dir',str(output),
                     '--params-json',json.dumps(model),'--max-unique-fragment-smiles','100','--max-reaction-combinations','200','--overwrite','1',
@@ -231,7 +231,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
         from fredis.ml.input.structure_builder import ReactionStructureBuilder
         from fredis.ml.input.source_reaction_structure import SourceReactionStructure
-        model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+        model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
         builder=ReactionStructureBuilder(create_preparation_context(model))
         source=Compound.from_smiles('CCO');adduct=Adduct.parse('[M+H]+')
         mz=Formula.parse('C2H7O+').exact_mass
@@ -256,9 +256,9 @@ class TestPreparationWorkflow(unittest.TestCase):
         result_backend=importlib.util.module_from_spec(result_spec);result_spec.loader.exec_module(result_backend)
         peaks=np.array([[Formula.parse(value).exact_mass,10. if value=='C2H7O+' else 1.] for value in ['C2H7O+','CH5O+','H3O+','C2H7+']]+[[1000.,2.]])
         data=MSDataset(pd.DataFrame({'SMILES':['CCO'],'AdductType':['[M+H]+'],'CollisionEnergy':[20.25],'PrecursorMZ':[47]}),PeakSeries(peaks,np.array([0,5],dtype=np.int64)))
-        model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+        model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
         with tempfile.TemporaryDirectory() as directory,contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
-            files=create_reaction_training_data(dataset=data,model_config=model,output_dir=directory)
+            files=create_reaction_training_data(dataset=data,chemistry_config=model,output_dir=directory)
             result=result_backend.inspect_structure(files[0])
             scores=pd.read_csv(Path(directory)/'assignment_scores.tsv',sep='\t')
             self.assertEqual(len(scores),1)
@@ -308,7 +308,7 @@ class TestPreparationWorkflow(unittest.TestCase):
     def test_split_cli_creates_both_structure_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);file=root/'dataset.msds';self.dataset().save(str(file))
-            model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with contextlib.redirect_stdout(io.StringIO()) as log:
                 main(['--input',str(file),'--output-dir',str(root/'out'),'--validation-ratio','0.5',
                       '--params-json',json.dumps(model),'--minimum-relative-intensity','0.1','--overwrite','0'])
@@ -343,7 +343,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             file=Path(directory)/'dataset.msds';self.dataset().save(str(file))
             with self.assertRaisesRegex(ValueError,'share SMILES'):
-                backend.validate({'modelConfig':config(),'input':str(file),'validationInput':str(file)})
+                backend.validate({**{'fragmenterParams':chemistry()['fragmenter_params'],'symbols':chemistry()['symbols']},'input':str(file),'validationInput':str(file)})
 
     def test_explicit_validation_uses_main_adduct_and_metadata_parsers(self):
         data=self.dataset()
@@ -355,7 +355,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             'PrecursorMZ':['100.1','200','invalid','300','inf']})
         with tempfile.TemporaryDirectory() as directory:
             file=Path(directory)/'data.msds';MSDataset(metadata,data.peaks).save(str(file))
-            result=backend.preview({'path':str(file),'validateValues':True})
+            result=backend.preview({'path':str(file),'validateValues':True,'fragmenterParams':chemistry()['fragmenter_params']})
             self.assertEqual(result['validation']['smilesColumn']['valid'],4)
             self.assertEqual(result['validation']['adductTypeColumn']['valid'],3)
             self.assertEqual(result['validation']['collisionEnergyColumn']['valid'],3)
@@ -364,19 +364,26 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(len(result['invalidRecords'][1]['issues']),3)
             self.assertFalse(result['errors'])
 
-    def test_preparation_context_ignores_neural_dimensions(self):
+    def test_preparation_context_needs_only_chemistry(self):
         from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
-        model=config();model['reaction_model_params']={'hidden_dim':'unused'}
-        model['mol_encoder_params']['node_dim']='unused'
+        model=chemistry()
         context=create_preparation_context(model)
         self.assertEqual(context.adduct_type_strs,
                          tuple(str(adduct) for adduct in context.fragmenter.adduct_types))
-        self.assertEqual(set(context.mol_encoder.symbols),set(model['mol_encoder_params']['symbols']))
+        self.assertEqual(set(context.mol_encoder.symbols),set(model['symbols']))
         self.assertFalse(hasattr(context,'feature_model'))
 
+    def test_preparation_cli_has_no_model_options(self):
+        from fredis.ml.data_preparation.fragment_tree.create_training_data import build_arg_parser
+        options=build_arg_parser()._option_string_actions
+        for flag in ('--node-dim','--max-fragment-nodes','--mol-encoder-params-json','--reaction-model-params-json'):
+            self.assertNotIn(flag,options)
+        with self.assertRaisesRegex(ValueError,'Specify the Fragmenter'):
+            main(['--input','missing.msds','--output-dir','unused'])
+
     def test_preflight_accepts_fragmenter_and_symbols_without_a_model(self):
-        model=config()
-        result=backend.validate({'fragmenterParams':model['fragmenter_params'],'symbols':model['mol_encoder_params']['symbols'],'maxUniqueFragmentSmiles':20,'maxReactionCombinations':40})
+        model=chemistry()
+        result=backend.validate({'fragmenterParams':model['fragmenter_params'],'symbols':model['symbols'],'maxUniqueFragmentSmiles':20,'maxReactionCombinations':40})
         self.assertTrue(result['valid'])
         with self.assertRaisesRegex(ValueError,'Max unique fragment SMILES'):
             backend.validate({'fragmenterParams':model['fragmenter_params'],'symbols':['C'],'maxUniqueFragmentSmiles':0})
@@ -388,9 +395,9 @@ class TestPreparationWorkflow(unittest.TestCase):
         from fredis.ml.input.source_reaction_structure import SourceReactionStructure
         import torch
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
-            serial=create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=root/'serial')
-            parallel=create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=root/'parallel',num_workers=2,chunk_size=2)
+            root=Path(directory);model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            serial=create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=root/'serial')
+            parallel=create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=root/'parallel',num_workers=2,chunk_size=2)
             self.assertEqual([file.name for file in serial],[file.name for file in parallel])
             for left,right in zip(serial,parallel):
                 first=SourceReactionStructure.load(left);second=SourceReactionStructure.load(right)
@@ -417,9 +424,9 @@ class TestPreparationWorkflow(unittest.TestCase):
             max_seen=max(max_seen,len(commands_list))
             return real_run_parallel_subprocesses(commands_list,*args,**kwargs)
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            root=Path(directory);model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with unittest.mock.patch.object(create_training_data_module,'run_parallel_subprocesses',spy):
-                create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=root/'parallel',num_workers=2,chunk_size=1)
+                create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=root/'parallel',num_workers=2,chunk_size=1)
         self.assertGreater(max_seen,0)
         self.assertLessEqual(max_seen,2)
 
@@ -431,9 +438,9 @@ class TestPreparationWorkflow(unittest.TestCase):
             if task[1]=='CCN': raise ValueError("Unsupported atom symbol: 'As'")
             return real_prepare_group(task,builder,options)
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            root=Path(directory);model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with unittest.mock.patch.object(create_training_data_module,'_prepare_group',failing_prepare_group):
-                files=create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=root/'serial')
+                files=create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=root/'serial')
             skipped=json.loads((root/'serial/skipped_sources.json').read_text())
         self.assertEqual(len(files),3)
         self.assertEqual([source['smiles'] for source in skipped],['CCN'])
@@ -455,9 +462,9 @@ class TestPreparationWorkflow(unittest.TestCase):
             patched=[crash+command[3:] if 'CCN' in sources(command) else command for command in commands_list]
             return real_run_parallel_subprocesses(patched,*args,**kwargs)
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            root=Path(directory);model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with unittest.mock.patch.object(create_training_data_module,'run_parallel_subprocesses',spy),contextlib.redirect_stderr(io.StringIO()):
-                files=create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=root/'parallel',num_workers=2,chunk_size=2)
+                files=create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=root/'parallel',num_workers=2,chunk_size=2)
             skipped=json.loads((root/'parallel/skipped_sources.json').read_text())
             leftovers=[path.name for path in (root/'parallel').glob('fredis-preparation-*/*')]
         self.assertEqual(len(files),3)
@@ -469,7 +476,7 @@ class TestPreparationWorkflow(unittest.TestCase):
     def test_manifest_and_reaction_statistics_record_search_statistics(self):
         from fredis.ml.data_preparation.fragment_tree.create_training_data import create_reaction_training_data,SEARCH_STAT_FIELDS
         from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
-        model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=2
+        model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=2
         fragmenter=create_preparation_context(model).fragmenter
         expected={smiles:fragmenter.build_fragment_ion_tree(Compound.from_smiles(smiles)).search_stats
                   for smiles in ('CCO','CCN','CCC','COC')}
@@ -478,7 +485,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                 with self.subTest(workers=workers):
                     output=Path(directory)/str(workers)
                     with contextlib.redirect_stderr(io.StringIO()):
-                        create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=output,num_workers=workers,chunk_size=1)
+                        create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=output,num_workers=workers,chunk_size=1)
                     manifest=pd.read_csv(output/'manifest.tsv',sep='\t').set_index('smiles')
                     self.assertTrue(set(SEARCH_STAT_FIELDS)<={*manifest.columns})
                     self.assertIn('skip_category',manifest.columns)
@@ -507,11 +514,11 @@ class TestPreparationWorkflow(unittest.TestCase):
                 real_build(builder,Compound.from_smiles('CCN'),*args)
                 raise RuntimeError('after the tree search')
             return real_build(builder,source,*args)
-        model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+        model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
         with tempfile.TemporaryDirectory() as directory,unittest.mock.patch.object(ReactionStructureBuilder,'build',build):
             output=Path(directory)
             with contextlib.redirect_stderr(io.StringIO()):
-                create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=output,max_reaction_combinations=1)
+                create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=output,max_reaction_combinations=1)
             skipped={source['smiles']:source for source in json.loads((output/'skipped_sources.json').read_text())}
             manifest=pd.read_csv(output/'manifest.tsv',sep='\t').set_index('smiles')
             summary=json.loads((output/'reaction_statistics.json').read_text())
@@ -524,7 +531,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory,unittest.mock.patch.object(ReactionStructureBuilder,'build',build):
             output=Path(directory)
             with contextlib.redirect_stderr(io.StringIO()):
-                create_reaction_training_data(dataset=self.dataset(),model_config=model,output_dir=output)
+                create_reaction_training_data(dataset=self.dataset(),chemistry_config=model,output_dir=output)
             skipped={source['smiles']:source for source in json.loads((output/'skipped_sources.json').read_text())}
             manifest=pd.read_csv(output/'manifest.tsv',sep='\t').set_index('smiles')
             summary=json.loads((output/'reaction_statistics.json').read_text())
@@ -547,7 +554,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         if node is None: self.skipTest('node is required to load the Workbench extension module')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);input_file=root/'train.msds';self.dataset().save(str(input_file))
-            model=config();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
+            model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
                 main(['--input',str(input_file),'--output-dir',str(root/'out'),'--params-json',json.dumps(model),
                       '--max-unique-fragment-smiles','30','--max-reaction-combinations','400','--overwrite','1'])

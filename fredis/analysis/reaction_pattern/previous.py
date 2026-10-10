@@ -96,20 +96,20 @@ class PreviousResult:
         return self.configuration.get("run") or {}
 
     @property
-    def model_config(self) -> dict:
-        return self.configuration.get("modelConfig") or {}
+    def chemistry_config(self) -> dict:
+        return self.configuration.get("chemistryConfig") or {}
 
 
-def chemistry_signature(model_config: dict, settings: dict) -> dict:
+def chemistry_signature(chemistry_config: dict, settings: dict) -> dict:
     """Everything except the reaction patterns that changes a calculated tree."""
     import copy
 
-    model = copy.deepcopy(model_config or {})
-    builder = model.get("fragmenter_params", {}).get("fragment_ion_tree_builder", {})
+    chemistry = copy.deepcopy(chemistry_config or {})
+    builder = chemistry.get("fragmenter_params", {}).get("fragment_ion_tree_builder", {})
     builder.pop("reaction_pattern_set", None)
     keys = ("maxUniqueFragmentSmiles", "maxReactionCombinations", "minimumRelativeIntensity")
-    return {"fragmenter_params": model.get("fragmenter_params"),
-            "symbols": (model.get("mol_encoder_params") or {}).get("symbols"),
+    return {"fragmenter_params": chemistry.get("fragmenter_params"),
+            "symbols": chemistry.get("symbols"),
             **{key: settings.get(key) for key in keys}}
 
 

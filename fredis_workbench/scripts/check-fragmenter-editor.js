@@ -10,7 +10,7 @@ class Node {
 }
 global.document = { createElement: tag => new Node(tag) };
 const root = new Node('div');
-const params = JSON.parse(fs.readFileSync(path.join(__dirname, '../../fredis/presets/spectrum_generator_params/source_anchored_pos_model_config.json'))).fragmenter_params;
+const params = require('./fixtures').chemistry.fragmenter_params;
 const editor = createFragmenterEditor(root, { value: params, editReactionPatternSet: (value, apply) => { value.name = 'edited'; apply(value); } });
 function find(node, predicate) {
   if (predicate(node)) return node;
@@ -40,8 +40,7 @@ assert.equal(ensureFileSuffix('pattern.reaction.pft', '.reaction.pft'), 'pattern
 assert.equal(ensureFileSuffix('pattern.REACTION.PFT', '.reaction.pft'), 'pattern.REACTION.PFT');
 assert.equal(ensureFileSuffix('set', '.reactionset.pft'), 'set.reactionset.pft');
 new Function(webviewScript());
-const config = normalizeConfig(JSON.parse(JSON.stringify({ trainInput: 'input file.msds', outputDir: 'out', symbols: ['C'], params: 'obsolete.json', fragmenterParams: saved })));
+const config = normalizeConfig(JSON.parse(JSON.stringify({ trainInput: 'input file.msds', outputDir: 'out', symbols: ['C'], fragmenterParams: saved })));
 const args = buildArgs(config);
 assert.deepStrictEqual(JSON.parse(args[args.indexOf('--params-json') + 1]), saved);
-assert(!('params' in config));
 console.log('Fragmenter editing, pattern callback, config round trip and generated Workbench script passed.');

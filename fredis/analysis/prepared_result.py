@@ -34,8 +34,7 @@ def find_fragmenter_params(file_path: str | Path, metadata: dict | None = None) 
         if not config.exists():
             continue
         value = json.loads(config.read_text())
-        model = value.get("model_config", {})
-        return model.get("fragmenter_params", value.get("fragmenterParams"))
+        return value.get("chemistry_config", {}).get("fragmenter_params")
     return None
 
 

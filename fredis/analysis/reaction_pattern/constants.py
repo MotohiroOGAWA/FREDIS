@@ -8,7 +8,7 @@ RESULT_FORMAT = "hdf5-tree-v1"
 RESULT_NAME = "result.reactionpatternanalysis.pft"
 RESULT_SUFFIX = ".reactionpatternanalysis.pft"
 RUN_CONFIG_NAME = "config.reaction-pattern-analysis.pft"
-MODEL_CONFIG_NAME = "reaction-pattern-analysis-model-config.json"
+CHEMISTRY_CONFIG_NAME = "reaction-pattern-analysis-chemistry-config.json"
 TREE_CONFIG_NAME = "tree.reaction-pattern-analysis.json"
 
 COMPOUND_DIR = "compounds"
