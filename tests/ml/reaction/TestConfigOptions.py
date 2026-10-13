@@ -129,3 +129,22 @@ class TestConfigOptions(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs['max_unique_fragment_smiles'],10)
             self.assertEqual(run.call_args.kwargs['max_reaction_combinations'],15)
             self.assertEqual(run.call_args.kwargs['chemistry_config']['symbols'],['C','N','O'])
+
+
+class TestOutputDirectoryIsRequired(unittest.TestCase):
+    def test_every_command_rejects_a_missing_or_blank_output_directory(self):
+        import contextlib, io, sys
+        from fredis.ml.data_preparation.fragment_tree.create_training_data import build_arg_parser as preparation
+        from fredis.ml.training.fragment_tree_training.training import build_arg_parser as training
+        from fredis.cli.analysis.commands.reaction_pattern import ReactionPatternAnalysisCommand
+        from fredis.ml.specgen import predict_spectrum
+        analysis = argparse.ArgumentParser(); ReactionPatternAnalysisCommand().configure(analysis)
+        cases = [(preparation(), ['--input', 'a.msds']), (training(), ['--train-dir', 'a', '--val-dir', 'b']), (analysis, [])]
+        for parser, argv in cases:
+            for extra in ([], ['--output-dir', ' ']):
+                with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                    parser.parse_args(argv + extra)
+        for extra in ([], ['--output-dir', '']):
+            with patch.object(sys, 'argv', ['predict_spectrum.py', '--model', 'm.pt', '--input', 'a.msds', *extra]), \
+                 self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                predict_spectrum.parse_args()

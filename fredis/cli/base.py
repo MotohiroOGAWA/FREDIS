@@ -123,3 +123,10 @@ def namespace_argv(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             argv.extend([action.option_strings[0],*(str(item) for item in value)])
         else: argv.extend([action.option_strings[0],str(value)])
     return argv
+
+
+def output_directory(value: str) -> str:
+    """argparse type for --output-dir: a blank value would resolve to the working directory."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError('an output directory is required')
+    return value

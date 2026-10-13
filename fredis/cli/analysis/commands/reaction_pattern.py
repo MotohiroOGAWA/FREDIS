@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from ...base import CLICommand
+from ...base import CLICommand, output_directory
 from fredis.analysis.reaction_pattern import generate_reaction_pattern_analysis
 from fredis.analysis.reaction_pattern.constants import RESULT_NAME
 from fredis.analysis.reaction_pattern.tree import NodeSpec, TreeConfiguration, load_pattern_set_file, load_tree_configuration
@@ -86,7 +86,7 @@ class ReactionPatternAnalysisCommand(CLICommand):
     def configure(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--source", action="append", default=[], help="Dataset, prepared mapping, or Reaction Pattern Analysis result; auto-detected and repeatable.")
         parser.add_argument("--source-spec", action="append", default=[], help="Per-source JSON (or @JSON-file) with path, kind and columns; repeatable.")
-        parser.add_argument("--output-dir", required=True)
+        parser.add_argument("--output-dir", required=True, type=output_directory)
         configure_chemistry_options(parser)
         parser.add_argument("--tree-config", help="Tree Configuration JSON file (patternSets + nodes), or a run configuration containing one.")
         parser.add_argument("--tree-config-json", help="Inline Tree Configuration JSON; same content as --tree-config without a file.")
