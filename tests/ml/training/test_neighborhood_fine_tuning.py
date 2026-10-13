@@ -5,9 +5,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from torch.nn.utils import parametrize
 
-from fredis.ml.specgen.fine_tuning import LowRankExpansion
 from fredis.ml.training.fragment_tree_training.fine_tuning import initialize_from_base
 
 
@@ -23,12 +21,6 @@ def _toy_generator():
     return generator
 
 
-def _expand(generator, width=2):
-    for module in generator.modules():
-        if isinstance(module, nn.Linear):
-            parametrize.register_parametrization(module, 'weight', LowRankExpansion(module.weight, width))
-
-
 class TestNeighborhoodFineTuning(unittest.TestCase):
     def _assert_missing_raises(self, missing_key):
         old_state = _toy_generator().state_dict()
@@ -37,9 +29,8 @@ class TestNeighborhoodFineTuning(unittest.TestCase):
             checkpoint_path = Path(directory) / 'base.pt'
             torch.save({'model_state_dict': broken_state}, checkpoint_path)
             new = _toy_generator()
-            _expand(new)
             with self.assertRaisesRegex(ValueError, 'Base checkpoint is missing'):
-                initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'category_mapping': {}}})
+                initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'pattern_mapping': []}})
 
     def test_missing_base_parameter_raises(self):
         self._assert_missing_raises('feature_model.reaction_instance_encoder.atom_projection.bias')
@@ -54,8 +45,7 @@ class TestNeighborhoodFineTuning(unittest.TestCase):
             checkpoint_path = Path(directory) / 'base.pt'
             torch.save({'model_state_dict': old.state_dict()}, checkpoint_path)
             new = _toy_generator()
-            _expand(new)
-            initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'category_mapping': {}}})
+            initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'pattern_mapping': []}})
             self.assertTrue(torch.equal(new.feature_model.reaction_instance_encoder.neighborhood_projections[0].weight,
                                         old.feature_model.reaction_instance_encoder.neighborhood_projections[0].weight))
 

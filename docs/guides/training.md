@@ -30,9 +30,96 @@ After selecting both prepared datasets, Workbench checks that their Fragmenter s
 
 Use `--initialize-from models/base/last.pt` to fine-tune compatible model weights with a fresh optimizer and epoch counter. Configuration and prepared structures must match the checkpoint architecture. Use `--resume` to continue an interrupted training run with its optimizer state instead.
 
-## Expand a frozen base
+## Fine-tune immutable pattern features
 
-Advanced fine-tuning uses `--fine-tune-checkpoint` and `--adapter-width`. Select a complete expanded reaction pattern set and regenerate both prepared splits with its model configuration before training. The expanded Fragmenter is inherited from those datasets. Existing base parameters remain frozen while the newly added parameters are trained.
+Use `--fine-tune-checkpoint models/base/last.pt` with train/validation structures
+prepared using the complete expanded pattern set. The checkpoint can be a fresh,
+already fine-tuned, or integrated model. Architecture settings are inherited
+from it. No adapter layers or low-rank residuals are attached.
+
+| Module | During pattern fine-tuning |
+| --- | --- |
+| Molecular encoder and descriptor fusion | Frozen, evaluation mode |
+| Shared source atom projection, SMARTS roles, status and hop projections | Frozen |
+| Existing pattern Graphormers | Frozen, evaluation mode |
+| Existing pattern rule/product embeddings and final reaction-feature readout | Frozen |
+| New pattern Graphormers and complete feature readouts | Trained |
+| Reaction Sequence/SetTransformer, branch scorer, condition projections | Trained |
+| Fragment/tree processing, ion classification and intensity predictors | Trained |
+
+Thus the **final reaction feature**, not only a Graphormer intermediate, stays
+unchanged for inherited patterns on identical source inputs. Predictions may
+change because downstream predictors are trained and additional patterns are
+available. Each pattern owns its own rule/product embeddings and final readout,
+so growing another pattern's vocabulary does not modify its features.
+`trainable_parameters.json` lists the actual trainable tensors for each run.
+
+```bash
+python -m fredis.cli train fragment-tree \
+  --train-dir data/expanded/train_structures \
+  --val-dir data/expanded/validation_structures \
+  --output-dir models/expanded --device cuda \
+  --fine-tune-checkpoint models/base/last.pt
+```
+
+Repeat with `models/expanded/last.pt` and another superset to add a further stage.
+Use `--resume models/expanded/last.pt` with the same pattern universe to restore
+optimizer/epoch state; this continues the existing stage rather than starting
+another expansion. Old GNN/shared-readout or adapter checkpoints require
+retraining against this architecture.
+
+## Integrate independent branches
+
+```bash
+python -m fredis.cli train integrate-patterns \
+  --checkpoints models/pc/last.pt models/pe/last.pt \
+  --head-checkpoint models/pc/last.pt \
+  --output models/lipids.pt
+```
+
+Integration matches patterns by chemical definition, remaps their numeric IDs,
+and copies their complete feature encoders. It never averages weights. Shared
+feature configurations/weights must match, and duplicate pattern definitions
+must have identical complete encoder weights. Conflicts fail with the offending
+pattern or tensor; independently pretrained molecular encoders cannot be merged
+this way. Branches should descend from the same base.
+
+The downstream predictor is taken from `--head-checkpoint`, which must be an
+input checkpoint. It is an initialization for union-pattern training, not a
+claim that either specialist's accuracy is preserved by integration alone.
+Integration also exports `models/lipids.fragmenter.pft` for preparing union data.
+Both output files must be new paths. The integrated checkpoint is self-contained
+for prediction and does not load its source checkpoints.
+
+Prepare data with that exported configuration, then train the downstream model
+without changing any pattern features:
+
+```bash
+python -m fredis.cli train fragment-tree \
+  --train-dir data/lipids/train_structures \
+  --val-dir data/lipids/validation_structures \
+  --output-dir models/lipids_heads --device cuda \
+  --fine-tune-checkpoint models/lipids.pt --head-only
+```
+
+Workbench **Fine-tune patterns** accepts checkpoints from any stage and includes
+**Train prediction heads only**. **Integrate Pattern Models** accepts one input
+checkpoint path per line, a downstream-predictor checkpoint and a new output
+path, and reports compatibility errors. The adapter-width field is removed.
+
+To reproduce the complete small experimental-data workflow, run:
+
+```bash
+PYTHONPATH=. python tests/workflows/verify_pattern_workflow.py \
+  --output data/workflow_verification_new
+```
+
+It requires CUDA and the local MoNA flavonoid dataset (override `--source` for
+its location), and uses four experimental records. The added carbonyl/ether
+patterns are workflow probes, not validated fragmentation rules. This checks
+preparation, training, parallel specialist branches, sequential expansion,
+resume, integration, downstream-only training, exact feature preservation and
+strict checkpoint-based prediction. It does not measure predictive accuracy.
 
 ## Monitoring
 

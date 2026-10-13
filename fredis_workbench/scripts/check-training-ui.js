@@ -3,7 +3,7 @@ const Module=require('module'),load=Module._load;Module._load=function(name,pare
 const ext=require('../src/extension');
 const preset=require('./fixtures').model;
 const messages=[],errors=[];const vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.detail?.stack||e.message));
-const dom=new JSDOM(ext.workbenchHtml(require('./fixtures').dataConfig,{modelConfig:preset,epochs:1,batchSize:4,lr:0.0001,adapterWidth:8,experimentName:'exp_main'}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m),getState:()=>({}),setState:()=>{}});w.HTMLElement.prototype.scrollIntoView=function(){};w.ResizeObserver=class{observe(){} disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:s=>s};}});
+const dom=new JSDOM(ext.workbenchHtml(require('./fixtures').dataConfig,{modelConfig:preset,epochs:1,batchSize:4,lr:0.0001,headOnly:false,experimentName:'exp_main'}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m),getState:()=>({}),setState:()=>{}});w.HTMLElement.prototype.scrollIntoView=function(){};w.ResizeObserver=class{observe(){} disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:s=>s};}});
 const assert=require('assert/strict');
 const {document:d}=dom.window,w=dom.window,form=d.querySelector('#trainingForm');
 const event=()=>new w.Event('change',{bubbles:true});
@@ -83,8 +83,8 @@ post({type:'picked',form:'training',field:'valDir',value:'/fixtures/validation_s
 assert(!form.elements.fineTunePatternSet);
 function mode(value){const radio=form.querySelector('input[name=trainingMode][value='+value+']');radio.checked=true;radio.dispatchEvent(event());}
 mode('resume');form.elements.resume.value='/model/resume.pt';form.elements.resume.dispatchEvent(event());assert(messages.some(m=>m.type==='training/checkpoint'&&m.path==='/model/resume.pt'));
-const fine={source_checkpoint:'/model/base.pt',pattern_set_path:'/model/patterns.json',width:16};
-post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});assert.equal(form.elements.lr.value,'0.0003');assert(form.elements.lr.disabled);assert(form.elements.adapterWidth.disabled);assert.equal(form.elements.adapterWidth.value,'16');assert.equal(form.elements.fineTuneCheckpoint.value,'/model/base.pt');assert(!d.querySelector('#trainingPatternSettings').hidden);
+const fine={source_checkpoint:'/model/base.pt',pattern_set_path:'/model/patterns.json',version:2,head_only:true};
+post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});assert.equal(form.elements.lr.value,'0.0003');assert(form.elements.lr.disabled);assert(form.elements.headOnly.disabled);assert(form.elements.headOnly.checked);assert(!form.elements.adapterWidth);assert.equal(form.elements.fineTuneCheckpoint.value,'/model/base.pt');assert(!d.querySelector('#trainingPatternSettings').hidden);
 const resumeSourceCount=messages.filter(m=>m.type==='training/sources').length,resumeCheckpointCount=messages.filter(m=>m.type==='training/checkpoint').length;post({type:'picked',form:'training',field:'resume',value:'/model/resume.pt'});assert(!inherited.textContent.includes('Reaction Pattern Set'));assert(d.getElementById('trainingStart').disabled);form.elements.resume.dispatchEvent(event());assert.equal(messages.filter(m=>m.type==='training/sources').length,resumeSourceCount+1);assert.equal(messages.filter(m=>m.type==='training/checkpoint').length,resumeCheckpointCount+1);const refreshedResumeSource=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:refreshedResumeSource.requestId,modelConfig:{fragmenter_params:preset.fragmenter_params,mol_encoder_params:preset.mol_encoder_params,adduct_type_strs:preset.adduct_type_strs}});post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});
 form.querySelector('[data-model-component=reaction_model_params]').click();assert(form.querySelector('[data-parameter-path="reaction_model_params.hidden_dim"]').disabled);assert(form.querySelector('[data-model-block=mol_encoder_params]').hidden);
 mode('patterns');form.elements.fineTuneResume.value='/model/finetune.pt';form.elements.fineTuneResume.dispatchEvent(event());assert(messages.some(m=>m.type==='training/checkpoint'&&m.path==='/model/finetune.pt'));post({type:'training/checkpoint',path:'/model/finetune.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});assert.equal(w.eval('getTrainingConfig()').resume,'/model/finetune.pt');assert.equal(w.eval('getTrainingConfig()').fineTuneCheckpoint,'/model/base.pt');
@@ -96,5 +96,13 @@ assert(d.querySelector('#jobIntermediateValidationChart svg'));
 post({type:'workbench/logs',job:{id:'partial-test',type:'training',name:'Live training test',status:'running',epochs:10},text:'',metrics:{rows:[{event:'train_step',epoch:1,global_step:100,train_loss:0.75}],intermediateRows:[]}});
 assert(d.querySelector('#jobProgress').textContent.includes('Step 100 · Mean train loss 0.750000'));
 assert(d.querySelector('#jobLossChart svg'));
+assert(!form.elements.adapterWidth);
+form.elements.integrationCheckpoints.value='/models/pc/last.pt\n/models/pe/last.pt';
+form.elements.integrationHead.value='/models/pc/last.pt';form.elements.integrationOutput.value='/models/lipids.pt';
+d.getElementById('trainingIntegrate').click();const integration=messages.filter(m=>m.type==='training/integrate').at(-1);
+assert.deepEqual(Array.from(integration.checkpoints),['/models/pc/last.pt','/models/pe/last.pt']);assert.equal(integration.headCheckpoint,'/models/pc/last.pt');
+post({type:'training/integrated',output:'/models/lipids.pt',patterns:[{id:0},{id:1}]});
+assert(d.getElementById('trainingIntegrationStatus').textContent.includes('Integrated 2 patterns'));
+assert(!d.getElementById('trainingIntegrate').disabled);
 assert.deepEqual(errors,[]);console.log('Full webview initialization, model editing, dataset inspection, loss controls, resume and fine-tuning resume checks passed.');setImmediate(()=>dom.window.close());
 })().catch(error=>{console.error(error);process.exit(1);});

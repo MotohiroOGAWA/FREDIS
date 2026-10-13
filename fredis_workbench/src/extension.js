@@ -114,7 +114,7 @@ function defaultTrainingConfig(context) {
     application: 'fragment-tree-training', modelConfig, trainDir: '', valDir: '',
     outputDir: '',
     experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.2, branchMilTemperature:0.1, fragmentLossWeight:0.5, stateLossWeight:0.5, intensityLossWeight:1, cosineLossWeight:0.5, precursorFreeLossWeight:0.5, intensityPower:0.5, gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
-    fineTuneCheckpoint: '', adapterWidth: 8
+    fineTuneCheckpoint: '', headOnly: false
   },root);
 }
 
@@ -222,6 +222,14 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         const command = shellDisplay(python, buildTrainingArgs(normalizeTrainingConfig(message.config)));
         await vscode.env.clipboard.writeText(command);
         panel.webview.postMessage({ type: 'trainingStatus', status: 'idle', text: 'Command copied.', command });
+      } else if (message.type === 'training/pickIntegrationOutput') {
+        const selected=await vscode.window.showSaveDialog({filters:{'FREDIS checkpoint':['pt']}});
+        if(selected)panel.webview.postMessage({type:'training/integrationOutput',path:selected.fsPath});
+      } else if (message.type === 'training/integrate') {
+        try {
+          const result=await require('./workbench/services').backend(context,projectRoot(context),'training-integrate',message,{timeoutMs:0});
+          panel.webview.postMessage({type:'training/integrated',output:message.output,...result});
+        } catch(error) { panel.webview.postMessage({type:'training/integrated',error:error.message}); }
       } else if (message.type === 'runTraining') {
         await runTraining(context, output, normalizeTrainingConfig(message.config), panel);
       } else if (message.type === 'stop') {
@@ -454,7 +462,8 @@ function buildTrainingArgs(c) {
   if(c.overwrite)a.push('--overwrite');
   if (c.initializeFrom) a.push('--initialize-from', c.initializeFrom);
   if (c.resume) a.push('--resume', c.resume);
-  if (c.fineTuneCheckpoint && !c.resume) a.push('--fine-tune-checkpoint', c.fineTuneCheckpoint, '--adapter-width', String(c.adapterWidth || 8));
+  if (c.fineTuneCheckpoint && !c.resume) a.push('--fine-tune-checkpoint', c.fineTuneCheckpoint);
+  if(c.headOnly&&c.fineTuneCheckpoint&&!c.resume)a.push('--head-only');
   return a;
 }
 

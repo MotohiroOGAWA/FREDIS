@@ -203,6 +203,8 @@ def train_reactions(*, model_config: dict, train_dir: str | Path, val_dir: str |
     startup_progress=progress_bar(total=5,
         description='Startup',position=0,leave=True)
     checkpoint=torch.load(resume,map_location='cpu',weights_only=False) if resume else None
+    if checkpoint and 'optimizer_state_dict' not in checkpoint:
+        raise ValueError('This checkpoint has no optimizer state; train it with --fine-tune-checkpoint and --head-only instead of --resume')
     initialize_weights=torch.load(initialize_from,map_location='cpu',weights_only=False) if initialize_from else None
     startup_progress.update(1)
     subset_seed=checkpoint['training_settings']['validation_subset_seed'] if checkpoint else seed
@@ -283,6 +285,8 @@ def train_reactions(*, model_config: dict, train_dir: str | Path, val_dir: str |
     elif params.get('fine_tuning'):
         from .fine_tuning import initialize_from_base
         initialize_from_base(model,params)
+    from .fine_tuning import parameter_report
+    (output/'trainable_parameters.json').write_text(json.dumps(parameter_report(model),indent=2))
     startup_progress.update(1);startup_progress.set_description_str('Ready',refresh=True);startup_progress.close()
     # Chemistry ends here; CPU tensor collation can continue per batch.
     # Forward/backward, validation and compatibility masks use CUDA tensors.
@@ -609,8 +613,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--epochs',type=int,default=1);parser.add_argument('--batch-size',type=int,default=4)
     parser.add_argument('--device',default='cuda');parser.add_argument('--lr',type=float,default=1e-4);parser.add_argument('--resume')
     parser.add_argument('--initialize-from',help='Initialize compatible joint-model weights with a fresh optimizer.')
-    parser.add_argument('--fine-tune-checkpoint',help='Base reaction training model.pt to expand with a new reaction pattern set.')
-    parser.add_argument('--adapter-width',type=int,default=8,help='Extra low-rank nodes per linear/attention projection (default: 8).')
+    parser.add_argument('--head-only',action='store_true',help='Freeze all pattern features and train downstream prediction only; requires --fine-tune-checkpoint.')
+    parser.add_argument('--fine-tune-checkpoint',help='Checkpoint to extend with immutable pattern features; fine-tuned/integrated checkpoints are supported.')
     parser.add_argument('--overwrite',action='store_true',help='Reuse an existing, non-empty output directory without asking for confirmation.')
     for name, default in (("weight-decay",0.01),("gradient-clip",1.0),("branch-weight",1.0),
                           ("negative-weight",0.2),("branch-mil-temperature",0.1),("min-lr",1e-6),
@@ -632,6 +636,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args=build_arg_parser().parse_args(argv)
+    if args.head_only and not args.fine_tune_checkpoint:
+        raise ValueError('--head-only requires --fine-tune-checkpoint')
     output=Path(args.output_dir)
     confirm_output_overwrite(output,overwrite=args.overwrite,resume=args.resume,
         protected_paths=(args.train_dir,args.val_dir,args.fine_tune_checkpoint,args.initialize_from))
@@ -648,8 +654,10 @@ def main(argv: list[str] | None = None) -> None:
         inherited = dataset_sources(args.train_dir, args.val_dir)
         saved_model = {**saved_params, 'fragmenter_params': inherited['fragmenter_params'],
                        'adduct_type_strs': inherited['adduct_type_strs']}
-        model_config = inherit_model_config(model_config, args.train_dir, args.val_dir,
+        model_config = inherit_model_config(saved_model, args.train_dir, args.val_dir,
             saved_model=saved_model, prepared_max_roles=None)
+        model_config.pop('fine_tuning', None)
+        model_config['max_samples'] = args.max_samples
         base_max_roles=saved_params.get('reaction_model_params',{}).get('max_roles')
         if base_max_roles is not None:
             model_config.setdefault('reaction_model_params',{})['max_roles']=base_max_roles
@@ -660,7 +668,7 @@ def main(argv: list[str] | None = None) -> None:
             patterns_path=Path(directory)/'patterns.json'
             patterns_path.write_text(json.dumps(model_config['fragmenter_params']['fragment_ion_tree_builder']['reaction_pattern_set']))
             model_config=prepare_model_config(checkpoint_path=args.fine_tune_checkpoint,
-                pattern_set_path=patterns_path,new_params_path=config_path,width=args.adapter_width)
+                pattern_set_path=patterns_path,new_params_path=config_path,head_only=args.head_only)
             model_config['fine_tuning'].pop('pattern_set_path', None)
     train_reactions(model_config=model_config,train_dir=args.train_dir,val_dir=args.val_dir,
         output_dir=args.output_dir,epochs=args.epochs,batch_size=args.batch_size,lr=args.lr,device=args.device,resume=args.resume,

@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const SCHEMA = 'fredis.workbench.project';
 const workflows = ['data', 'training', 'prediction', 'reactionPatterns'];
-const pathFields = new Set(['input','validationInput','trainInput','params','outputDir','batchInput','batchOutputDir','modelPath','trainDir','valDir','resume','initializeFrom','fineTuneCheckpoint','fineTuneResume','checkpoint_path']);
+const pathFields = new Set(['input','validationInput','trainInput','params','outputDir','batchInput','batchOutputDir','modelPath','trainDir','valDir','resume','initializeFrom','fineTuneCheckpoint','fineTuneResume','integrationHead','integrationOutput','checkpoint_path']);
 function metadata(root) { return path.join(root, '.fredis'); }
 function atomic(file, value) {
   fs.mkdirSync(path.dirname(file), {recursive:true});

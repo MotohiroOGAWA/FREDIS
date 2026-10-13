@@ -34,6 +34,7 @@ class SourceReactionFeatureModel(nn.Module):
                  pattern_smarts: dict[int, str] | None = None,
                  reactant_num_layers: int = 2, reactant_dropout: float = 0.0,
                  reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None,
+                 pattern_category_sizes: dict[int, tuple[int, int]] | None = None,
                  ) -> None:
         super().__init__()
         if not 1 <= reaction_neighborhood_max_hop <= MAX_NEIGHBORHOOD_HOP:
@@ -43,7 +44,7 @@ class SourceReactionFeatureModel(nn.Module):
         self.reaction_instance_encoder = ReactionInstanceEncoder(mol_encoder.node_dim, mol_encoder.graph_dim, hidden_dim, category_sizes, num_heads,
             max_roles, reaction_neighborhood_mode=reaction_neighborhood_mode, reaction_neighborhood_max_hop=reaction_neighborhood_max_hop,
             pattern_smarts=pattern_smarts, reactant_num_layers=reactant_num_layers, reactant_dropout=reactant_dropout,
-            reactant_node_dim=reactant_node_dim, reactant_graph_dim=reactant_graph_dim)
+            reactant_node_dim=reactant_node_dim, reactant_graph_dim=reactant_graph_dim, pattern_category_sizes=pattern_category_sizes)
         if not isinstance(adduct_encoder,AdductEmbeddingLayer):
             raise TypeError("Branching requires an explicit main-adduct encoder")
         if not isinstance(collision_energy_encoder,CollisionEnergyFeatureLayer):

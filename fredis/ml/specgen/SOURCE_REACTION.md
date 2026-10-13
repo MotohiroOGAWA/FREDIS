@@ -94,3 +94,13 @@ context update is shared, but the subsequent FFN and layers still act on each
 node's distinct features. No cross-attention parameters are created when
 context is disabled. Previous context-enabled checkpoints need retraining;
 context-disabled molecular/reactant models keep their parameter layout.
+
+Pattern features are now immutable units for staged fine-tuning. Each pattern
+owns a Graphormer plus its rule/product embeddings, source-context fusion and
+final readout (`pattern_heads`). Shared input features and all inherited pattern
+units are frozen, including their training mode; new pattern units and
+downstream prediction modules are optimized without adapters. Version 2
+fine-tuning checkpoints may be extended repeatedly. Integration copies complete
+pattern units by chemical identity and rejects conflicting shared/duplicate
+features; the selected downstream predictor can then be trained with
+`--head-only`. See `docs/guides/training.md` for CLI and Workbench usage.

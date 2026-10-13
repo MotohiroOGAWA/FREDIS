@@ -67,7 +67,10 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             max_reaction_count=self.fragmenter.tree_max_reaction_count,adduct_encoder=adduct_encoder,
             collision_energy_encoder=collision_energy_encoder,
             intensity_main_adduct_dim=main_adduct_dim,
-            pattern_smarts={pattern.pattern_id: pattern.reactant_smarts for pattern in patterns}, **params)
+            pattern_smarts={pattern.pattern_id: pattern.reactant_smarts for pattern in patterns},
+            pattern_category_sizes={pattern.pattern_id: (
+                max((rule.id for rule in pattern.reaction_rules), default=0) + 1,
+                max((len(rule.prod_temp) for rule in pattern.reaction_rules), default=1)) for pattern in patterns}, **params)
         self.tensorizer=FormulaTensorizer.from_symbols_and_adducts(symbols=self.mol_encoder.symbols,adducts=self.fragmenter.adduct_types)
         spectrum_params.setdefault("hidden_dim",hidden)
         ion_types=tuple(dict.fromkeys(str(value) for rule in self.fragmenter.adduct_rule_set.adduct_rules for value in rule.fragment_ion_adducts))
@@ -79,8 +82,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         self.ion_type_strs=ion_types
         self.set_generation(GenerationSettings.from_dict(generation_params))
         if fine_tuning:
-            from .fine_tuning import install_expansion
-            install_expansion(self, fine_tuning)
+            from .fine_tuning import configure_pattern_training
+            configure_pattern_training(self, fine_tuning)
 
     def set_generation(self, settings: GenerationSettings) -> None:
         """Search and output settings used by every subsequent prediction."""

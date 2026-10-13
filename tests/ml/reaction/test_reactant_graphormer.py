@@ -95,7 +95,7 @@ def test_training_encoder_routes_mixed_patterns_and_restores_reaction_order(node
 
 def test_fine_tuning_remaps_existing_pattern_encoder_and_trains_new_pattern(tmp_path):
     from torch import nn
-    from fredis.ml.specgen.fine_tuning import install_expansion
+    from fredis.ml.specgen.fine_tuning import configure_pattern_training
     from fredis.ml.training.fragment_tree_training.fine_tuning import initialize_from_base
 
     class Feature(nn.Module):
@@ -117,9 +117,9 @@ def test_fine_tuning_remaps_existing_pattern_encoder_and_trains_new_pattern(tmp_
     checkpoint = tmp_path / 'base.pt'
     torch.save({'model_state_dict': old.state_dict()}, checkpoint)
     new = Generator({0: 'CCC', 1: 'CC'})
-    config = {'version': 1, 'width': 2, 'source_checkpoint': str(checkpoint),
-              'category_mapping': {'categories.0': [[0, 1]], 'categories.1': [[0, 0]], 'categories.2': [[0, 0]]}}
-    install_expansion(new, config)
+    config = {'version': 2, 'frozen_pattern_ids': [1], 'pattern_mapping': [[0, 1]], 'source_checkpoint': str(checkpoint),
+              }
+    configure_pattern_training(new, config)
     initialize_from_base(new, {'fine_tuning': config})
     before = old.feature_model.reaction_instance_encoder.reactant_encoders['0']
     inherited = new.feature_model.reaction_instance_encoder.reactant_encoders['1']

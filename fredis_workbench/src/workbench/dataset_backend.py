@@ -160,7 +160,7 @@ def training_checkpoint(payload):
     config = checkpoint.get('model_config')
     if not config:
         raise ValueError('Checkpoint does not contain model configuration.')
-    group = checkpoint['optimizer_state_dict']['param_groups'][0]
+    group = checkpoint.get('optimizer_state_dict',{}).get('param_groups',[{'lr':1e-4,'weight_decay':0.01}])[0]
     fields={'branch_weight':'branchWeight','negative_weight':'negativeWeight','branch_mil_temperature':'branchMilTemperature','validation_interval_steps':'validationIntervalSteps','validation_fraction':'validationFraction','fragment_loss_weight':'fragmentLossWeight','state_loss_weight':'stateLossWeight','intensity_loss_weight':'intensityLossWeight','cosine_loss_weight':'cosineLossWeight','precursor_free_loss_weight':'precursorFreeLossWeight','intensity_power':'intensityPower'}
     restored={field:checkpoint.get('training_settings',{})[key] for key,field in fields.items() if key in checkpoint.get('training_settings',{})}
     return {'modelConfig': config.get('params', config), 'lr': group['lr'], 'weightDecay': group.get('weight_decay', 0), 'trainingSettings':restored}
@@ -176,7 +176,7 @@ def training_sources(payload):
             inherited = dataset_sources(payload['trainDir'], payload['valDir'])
             saved = {**saved.get('params', saved), 'fragmenter_params': inherited['fragmenter_params'],
                      'adduct_type_strs': inherited['adduct_type_strs']}
-    config = inherit_model_config(payload.get('modelConfig') or {}, payload['trainDir'], payload['valDir'],
+    config = inherit_model_config(saved or payload.get('modelConfig') or {}, payload['trainDir'], payload['valDir'],
         saved_model=saved, prepared_max_roles=None)
     return {'modelConfig': config}
 
@@ -199,11 +199,16 @@ def training_assignment_score_counts(payload):
                            filteredSamples=pieces.total_samples)
     return result
 
+def training_integrate(payload):
+    from fredis.ml.training.fragment_tree_training.integration import integrate_checkpoints
+    return integrate_checkpoints(payload['checkpoints'], payload['headCheckpoint'], payload['output'])
+
+
 def main():
     request=json.loads(sys.stdin.read())
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            result={'training-sources':training_sources,'training-checkpoint':training_checkpoint,'training-assignment-score-counts':training_assignment_score_counts,'structure-manifest':structure_manifest,'columns':columns,'preview':preview,'validate':validate,'validate-config':lambda payload:validate(payload,check_datasets=False),'model':model}[request['command']](request['payload'])
+            result={'training-integrate':training_integrate,'training-sources':training_sources,'training-checkpoint':training_checkpoint,'training-assignment-score-counts':training_assignment_score_counts,'structure-manifest':structure_manifest,'columns':columns,'preview':preview,'validate':validate,'validate-config':lambda payload:validate(payload,check_datasets=False),'model':model}[request['command']](request['payload'])
         print(json.dumps({'ok':True,'result':result},allow_nan=False))
     except Exception as error:
         import traceback

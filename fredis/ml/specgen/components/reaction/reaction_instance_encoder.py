@@ -24,6 +24,21 @@ def csr_mean_pool(source_atom_h: Tensor, ptr: Tensor, index: Tensor) -> Tensor:
     return pooled / counts.clamp_min(1).unsqueeze(-1)
 
 
+class PatternReactionReadout(nn.Module):
+    """Pattern-owned category/context fusion and final reaction feature readout."""
+    def __init__(self, graph_dim, mol_dim, hidden_dim, rule_count, product_count):
+        super().__init__()
+        self.rule_embedding = nn.Embedding(rule_count, hidden_dim)
+        self.product_embedding = nn.Embedding(product_count, hidden_dim)
+        self.context = nn.Linear(mol_dim + hidden_dim + 6, hidden_dim)
+        self.output = nn.Sequential(nn.Linear(graph_dim + hidden_dim, hidden_dim), nn.GELU(), nn.LayerNorm(hidden_dim))
+
+    def forward(self, atoms, source, reaction_type, static):
+        category = self.rule_embedding(reaction_type[:, 1]) + self.product_embedding(reaction_type[:, 2])
+        context = self.context(torch.cat((source, category, static), dim=1))
+        return self.output(torch.cat((atoms, context), dim=1))
+
+
 class ReactionInstanceEncoder(nn.Module):
     def __init__(self, atom_dim: int, mol_dim: int, hidden_dim: int,
                  category_sizes: tuple[int, int, int], num_heads: int = 4,
@@ -31,7 +46,8 @@ class ReactionInstanceEncoder(nn.Module):
                  reaction_neighborhood_max_hop: int = 3,
                  pattern_smarts: Mapping[int, str] | None = None,
                  reactant_num_layers: int = 2, reactant_dropout: float = 0.0,
-                 reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None) -> None:
+                 reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None,
+                 pattern_category_sizes: Mapping[int, tuple[int, int]] | None = None) -> None:
         super().__init__()
         if reaction_neighborhood_mode not in NEIGHBORHOOD_MODES:
             raise ValueError(f"Unsupported reaction_neighborhood_mode: {reaction_neighborhood_mode!r}")
@@ -39,7 +55,7 @@ class ReactionInstanceEncoder(nn.Module):
             raise ValueError("reaction_neighborhood_max_hop must be a positive integer")
         self.reaction_neighborhood_mode = reaction_neighborhood_mode
         self.reaction_neighborhood_max_hop = reaction_neighborhood_max_hop
-        self.categories = nn.ModuleList(nn.Embedding(size, hidden_dim) for size in category_sizes)
+        self.output_dim = hidden_dim
         self.atom_projection = nn.Linear(atom_dim, hidden_dim)
         # SMARTS query roles are chemical features, never reaction-list positions.
         self.role_status = nn.Linear(6,hidden_dim,bias=False)
@@ -59,8 +75,17 @@ class ReactionInstanceEncoder(nn.Module):
             smarts, atom_dim=hidden_dim, bond_dim=0, node_dim=reactant_node_dim, graph_dim=self.reactant_graph_dim,
             num_heads=num_heads, num_layers=reactant_num_layers, dropout=reactant_dropout)
             for pid, smarts in pattern_smarts.items()})
-        self.context = nn.Linear(mol_dim + hidden_dim + 6, hidden_dim)
-        self.output = nn.Sequential(nn.Linear(self.reactant_graph_dim + hidden_dim, hidden_dim), nn.GELU(), nn.LayerNorm(hidden_dim))
+        self.pattern_heads = nn.ModuleDict({str(int(pid)): PatternReactionReadout(
+            self.reactant_graph_dim, mol_dim, hidden_dim,
+            *(pattern_category_sizes or {}).get(pid, category_sizes[1:])) for pid in pattern_smarts})
+        self.frozen_pattern_ids = set()
+
+    def train(self, mode=True):
+        super().train(mode)
+        for pid in self.frozen_pattern_ids:
+            self.reactant_encoders[pid].eval()
+            self.pattern_heads[pid].eval()
+        return self
 
     def forward(self, *, source_atom_h: Tensor, source_mol_h: Tensor, reaction_type: Tensor,
                 reaction_tree_index: Tensor, reaction_source_atom_ptr: Tensor,
@@ -69,7 +94,7 @@ class ReactionInstanceEncoder(nn.Module):
                 reaction_source_atom_features: Tensor | None = None) -> Tensor:
         a = reaction_type.shape[0]
         if a == 0:
-            return source_atom_h.new_empty((0, self.output[0].out_features))
+            return source_atom_h.new_empty((0, self.output_dim))
         counts = reaction_source_atom_ptr[1:] - reaction_source_atom_ptr[:-1]
         owner = torch.repeat_interleave(torch.arange(a, device=counts.device), counts)
         role = torch.arange(owner.numel(), device=counts.device) - reaction_source_atom_ptr[owner]
@@ -85,7 +110,7 @@ class ReactionInstanceEncoder(nn.Module):
                 pooled = projection(csr_mean_pool(source_atom_h, ptr, index))
                 neighborhood = pooled if neighborhood is None else neighborhood + pooled
             selected = selected + neighborhood
-        atoms = selected.new_zeros((a, self.reactant_graph_dim))
+        result = selected.new_zeros((a, self.output_dim))
         known = torch.zeros(a, dtype=torch.bool, device=counts.device)
         for pattern_id, encoder in self.reactant_encoders.items():
             rows = (reaction_type[:, 0] == int(pattern_id)).nonzero().flatten()
@@ -96,10 +121,9 @@ class ReactionInstanceEncoder(nn.Module):
             slots = torch.arange(encoder.position_count, device=counts.device)
             index = reaction_source_atom_ptr[rows, None] + slots[None, :]
             _, graph_h = encoder.encode_matches(selected[index])
-            atoms[rows] = graph_h
+            result[rows] = self.pattern_heads[pattern_id](graph_h, source_mol_h[reaction_tree_index[rows]],
+                                                        reaction_type[rows], reaction_static_features[rows])
             known[rows] = True
         if not torch.all(known):
             raise ValueError("Unknown reaction pattern ID in prepared data")
-        category = sum(embedding(reaction_type[:, i]) for i, embedding in enumerate(self.categories))
-        context = self.context(torch.cat((source_mol_h[reaction_tree_index], category, reaction_static_features), dim=1))
-        return self.output(torch.cat((atoms, context), dim=1))
+        return result
