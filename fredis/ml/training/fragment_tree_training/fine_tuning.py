@@ -128,6 +128,14 @@ def initialize_from_base(model, model_config):
         if re.search(r'\.parametrizations\.[^.]+\.0\.', key):
             continue  # adapter/row values and new-row index buffer
         original_key = re.sub(r'\.parametrizations\.([^.]+)\.original$', r'.\1', key)
+        pattern_match = re.search(r'\.reactant_encoders\.(\d+)\.', original_key)
+        if pattern_match:
+            inverse = {int(new): int(old) for old, new in config['category_mapping']['categories.0']}
+            new_id = int(pattern_match.group(1))
+            if new_id not in inverse:
+                continue  # entirely new pattern-specific encoder
+            original_key = (original_key[:pattern_match.start(1)] + str(inverse[new_id])
+                            + original_key[pattern_match.end(1):])
         if original_key not in source:
             raise ValueError(f'Base checkpoint is missing {original_key}')
         old_value = source[original_key]

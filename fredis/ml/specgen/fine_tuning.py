@@ -47,10 +47,16 @@ def install_expansion(generator, config):
     width = int(config['width'])
     for parameter in generator.parameters():
         parameter.requires_grad_(False)
+    old_patterns = {str(pair[1]) for pair in config['category_mapping']['categories.0']}
+    new_reactants = [encoder for pid, encoder in generator.feature_model.reaction_instance_encoder.reactant_encoders.items()
+                    if pid not in old_patterns]
+    new_reactant_modules = {id(module) for encoder in new_reactants for module in encoder.modules()}
+    for encoder in new_reactants:
+        encoder.requires_grad_(True)
     mol_modules = {id(module) for module in generator.mol_encoder.modules()}
     # Snapshot first: newly registered low-rank parameters must not be expanded again.
     for _, module in list(generator.named_modules()):
-        if id(module) in mol_modules:
+        if id(module) in mol_modules or id(module) in new_reactant_modules:
             continue
         names = ['weight'] if isinstance(module, nn.Linear) else []
         if isinstance(module, nn.MultiheadAttention):

@@ -43,7 +43,7 @@ features use late fusion and an explicit missing-value mask. Training-split
 statistics are stored as model buffers and in `feature_configuration`.
 
 Reaction encoding uses raw atom/bond features, a shared edge-aware local
-context GCN, a separate reactant encoder per Reaction Pattern, and explicit
+context GCN, a SMARTS-sized Graphormer per Reaction Pattern, and explicit
 before/after transformation features. Reaction Sequence encoding remains
 order invariant and reuses the existing combination-search semantics.
 

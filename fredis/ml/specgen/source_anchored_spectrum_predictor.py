@@ -66,7 +66,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         self.feature_model=SourceReactionFeatureModel(self.mol_encoder,sizes,
             max_reaction_count=self.fragmenter.tree_max_reaction_count,adduct_encoder=adduct_encoder,
             collision_energy_encoder=collision_energy_encoder,
-            intensity_main_adduct_dim=main_adduct_dim,**params)
+            intensity_main_adduct_dim=main_adduct_dim,
+            pattern_smarts={pattern.pattern_id: pattern.reactant_smarts for pattern in patterns}, **params)
         self.tensorizer=FormulaTensorizer.from_symbols_and_adducts(symbols=self.mol_encoder.symbols,adducts=self.fragmenter.adduct_types)
         spectrum_params.setdefault("hidden_dim",hidden)
         ion_types=tuple(dict.fromkeys(str(value) for rule in self.fragmenter.adduct_rule_set.adduct_rules for value in rule.fragment_ion_adducts))

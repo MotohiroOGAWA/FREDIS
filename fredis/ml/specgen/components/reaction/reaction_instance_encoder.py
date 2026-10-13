@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 import torch
 from torch import Tensor, nn
-from ....common.layers.set_transformer import SetTransformer
+from ....reaction.reactant_graphormer import ReactantGraphormerEncoder
+from collections.abc import Mapping
 
 NEIGHBORHOOD_MODES = ("hop_pooling", "none")
 
@@ -27,7 +28,10 @@ class ReactionInstanceEncoder(nn.Module):
     def __init__(self, atom_dim: int, mol_dim: int, hidden_dim: int,
                  category_sizes: tuple[int, int, int], num_heads: int = 4,
                  max_roles: int = 64, reaction_neighborhood_mode: str = "hop_pooling",
-                 reaction_neighborhood_max_hop: int = 3) -> None:
+                 reaction_neighborhood_max_hop: int = 3,
+                 pattern_smarts: Mapping[int, str] | None = None,
+                 reactant_num_layers: int = 2, reactant_dropout: float = 0.0,
+                 reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None) -> None:
         super().__init__()
         if reaction_neighborhood_mode not in NEIGHBORHOOD_MODES:
             raise ValueError(f"Unsupported reaction_neighborhood_mode: {reaction_neighborhood_mode!r}")
@@ -47,9 +51,16 @@ class ReactionInstanceEncoder(nn.Module):
         self.neighborhood_projections = nn.ModuleList(nn.Linear(atom_dim, hidden_dim, bias=False) for _ in range(reaction_neighborhood_max_hop))
         for layer in self.neighborhood_projections:
             nn.init.zeros_(layer.weight)
-        self.atom_set = SetTransformer(hidden_dim, hidden_dim, hidden_dim, num_heads=num_heads, num_layers=1)
+        if not pattern_smarts:
+            raise ValueError("pattern_smarts is required for pattern-specific reactant Graphormers")
+        reactant_node_dim = hidden_dim if reactant_node_dim is None else reactant_node_dim
+        self.reactant_graph_dim = hidden_dim if reactant_graph_dim is None else reactant_graph_dim
+        self.reactant_encoders = nn.ModuleDict({str(int(pid)): ReactantGraphormerEncoder(
+            smarts, atom_dim=hidden_dim, bond_dim=0, node_dim=reactant_node_dim, graph_dim=self.reactant_graph_dim,
+            num_heads=num_heads, num_layers=reactant_num_layers, dropout=reactant_dropout)
+            for pid, smarts in pattern_smarts.items()})
         self.context = nn.Linear(mol_dim + hidden_dim + 6, hidden_dim)
-        self.output = nn.Sequential(nn.Linear(hidden_dim * 2, hidden_dim), nn.GELU(), nn.LayerNorm(hidden_dim))
+        self.output = nn.Sequential(nn.Linear(self.reactant_graph_dim + hidden_dim, hidden_dim), nn.GELU(), nn.LayerNorm(hidden_dim))
 
     def forward(self, *, source_atom_h: Tensor, source_mol_h: Tensor, reaction_type: Tensor,
                 reaction_tree_index: Tensor, reaction_source_atom_ptr: Tensor,
@@ -74,15 +85,21 @@ class ReactionInstanceEncoder(nn.Module):
                 pooled = projection(csr_mean_pool(source_atom_h, ptr, index))
                 neighborhood = pooled if neighborhood is None else neighborhood + pooled
             selected = selected + neighborhood
-        # Pad only to this batch's actual widest reaction, not the shared role
-        # embedding table's global bound; role identity itself still comes
-        # from that bounded embedding via the clamp above.
-        width = int(counts.max())
-        slot = torch.arange(width, device=counts.device)[None, :]
-        index = reaction_source_atom_ptr[:-1, None] + slot
-        valid = slot < counts[:, None]
-        padded = selected[index.clamp_max(max(selected.shape[0] - 1, 0))].masked_fill(~valid[:, :, None], 0)
-        atoms = self.atom_set(padded, key_padding_mask=~valid)
+        atoms = selected.new_zeros((a, self.reactant_graph_dim))
+        known = torch.zeros(a, dtype=torch.bool, device=counts.device)
+        for pattern_id, encoder in self.reactant_encoders.items():
+            rows = (reaction_type[:, 0] == int(pattern_id)).nonzero().flatten()
+            if rows.numel() == 0:
+                continue
+            if torch.any(counts[rows] != encoder.position_count):
+                raise ValueError(f"Reactant atom count does not match SMARTS for pattern {pattern_id}")
+            slots = torch.arange(encoder.position_count, device=counts.device)
+            index = reaction_source_atom_ptr[rows, None] + slots[None, :]
+            _, graph_h = encoder.encode_matches(selected[index])
+            atoms[rows] = graph_h
+            known[rows] = True
+        if not torch.all(known):
+            raise ValueError("Unknown reaction pattern ID in prepared data")
         category = sum(embedding(reaction_type[:, i]) for i, embedding in enumerate(self.categories))
         context = self.context(torch.cat((source_mol_h[reaction_tree_index], category, reaction_static_features), dim=1))
         return self.output(torch.cat((atoms, context), dim=1))

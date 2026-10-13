@@ -31,6 +31,9 @@ class SourceReactionFeatureModel(nn.Module):
                  intensity_main_adduct_dim: int | None = None,
                  reaction_neighborhood_mode: str = "hop_pooling",
                  reaction_neighborhood_max_hop: int = 3,
+                 pattern_smarts: dict[int, str] | None = None,
+                 reactant_num_layers: int = 2, reactant_dropout: float = 0.0,
+                 reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None,
                  ) -> None:
         super().__init__()
         if not 1 <= reaction_neighborhood_max_hop <= MAX_NEIGHBORHOOD_HOP:
@@ -38,7 +41,9 @@ class SourceReactionFeatureModel(nn.Module):
                               "(prepared datasets only carry hop neighbors up to that distance)")
         self.mol_encoder = mol_encoder
         self.reaction_instance_encoder = ReactionInstanceEncoder(mol_encoder.node_dim, mol_encoder.graph_dim, hidden_dim, category_sizes, num_heads,
-            max_roles, reaction_neighborhood_mode=reaction_neighborhood_mode, reaction_neighborhood_max_hop=reaction_neighborhood_max_hop)
+            max_roles, reaction_neighborhood_mode=reaction_neighborhood_mode, reaction_neighborhood_max_hop=reaction_neighborhood_max_hop,
+            pattern_smarts=pattern_smarts, reactant_num_layers=reactant_num_layers, reactant_dropout=reactant_dropout,
+            reactant_node_dim=reactant_node_dim, reactant_graph_dim=reactant_graph_dim)
         if not isinstance(adduct_encoder,AdductEmbeddingLayer):
             raise TypeError("Branching requires an explicit main-adduct encoder")
         if not isinstance(collision_energy_encoder,CollisionEnergyFeatureLayer):

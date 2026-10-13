@@ -61,7 +61,7 @@ def test_boundary_anchor_is_zero_and_bond_features_affect_messages():
 
 
 def test_pattern_registry_selects_independent_encoder_and_preference_is_opt_in():
-    registry=ReactantEncoderRegistry({1:2,2:3},4,2,3,8,1)
+    registry=ReactantEncoderRegistry({1:"CC",2:"CCC"},4,2,3,8,11,1,2)
     assert registry.encoders["1"] is not registry.encoders["2"]
     base=torch.tensor([.25,1.]);preference=torch.tensor([2.,3.])
     torch.testing.assert_close(combine_teacher_and_preference_weights(base,preference),base)

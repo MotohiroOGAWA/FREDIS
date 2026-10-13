@@ -15,7 +15,7 @@ class MolGraphormerEncoder(GraphormerEncoder):
     """Graphormer specialization for molecular graphs.
 
     The public constructor only exposes molecule-relevant dimensions and
-    graph-structure options. Condition tokens are intentionally not part of
+    graph-structure options. Context tokens are intentionally not part of
     this API; molecules are encoded without sample-level context such as
     collision energy or adduct type.
     """
@@ -38,14 +38,14 @@ class MolGraphormerEncoder(GraphormerEncoder):
     ) -> None:
         node_dim = int(node_dim)
         graph_dim = int(graph_dim)
-        if graph_dim <= 0 or graph_dim % node_dim != 0:
+        if node_dim <= 0 or graph_dim <= 0:
             raise ValueError(
-                "graph_dim must be a positive integer multiple of node_dim."
+                "node_dim and graph_dim must be positive."
             )
 
         atom_feature_dim = int(atom_dim)
         bond_feature_dim = int(bond_dim)
-        graph_token_count = graph_dim // node_dim
+        graph_token_count = (graph_dim + node_dim - 1) // node_dim
 
         super().__init__(
             node_dim=atom_feature_dim,
@@ -56,7 +56,7 @@ class MolGraphormerEncoder(GraphormerEncoder):
             max_degree=max_degree,
             max_spatial_dist=max_spatial_dist,
             max_edge_dist=max_edge_dist,
-            graph_token_count=graph_token_count,
+            graph_dim=graph_dim,
             dropout=dropout,
             graph_to_node=True,
             undirected_for_spd=True,

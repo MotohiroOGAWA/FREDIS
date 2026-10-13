@@ -107,7 +107,7 @@ class TestReactionInstanceEncoderNeighborhood(unittest.TestCase):
     def _encoder(self, mode='hop_pooling', seed=0, max_hop=3):
         torch.manual_seed(seed)
         return ReactionInstanceEncoder(atom_dim=4, mol_dim=6, hidden_dim=8, category_sizes=(2, 2, 2), num_heads=2, max_roles=4,
-                              reaction_neighborhood_mode=mode, reaction_neighborhood_max_hop=max_hop)
+                              reaction_neighborhood_mode=mode, reaction_neighborhood_max_hop=max_hop, pattern_smarts={0: "CC"})
 
     def _base_kwargs(self, source_atom_h):
         return dict(

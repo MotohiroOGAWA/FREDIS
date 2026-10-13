@@ -248,7 +248,7 @@ class TestGraphormerEncoder(unittest.TestCase):
             max_spatial_dist=5,
             max_edge_dist=5,
             dropout=0.0,
-            graph_token_count=1,
+            graph_dim=dim,
             start_cap=4,
             cap_growth=2.0,
         )
