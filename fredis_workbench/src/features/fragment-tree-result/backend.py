@@ -122,6 +122,9 @@ def inspect_structure(file_path: Path) -> dict:
         raise TypeError("This .preft.pt file has no saved structure.")
     structure = payload["structure"]
     metadata = dict(payload.get("metadata") or {})
+    # Incremental preparation seeds contain ReactionSequence objects. They are
+    # persisted for reuse by preparation, but are not part of the viewer data.
+    metadata.pop("reaction_sequence_compounds", None)
     required = ("teacher_node_reaction_ptr", "sample_branch_group_index", "reaction_type")
     if not all(hasattr(structure, name) for name in required):
         raise TypeError("This .preft.pt file is not a prepared fragment-tree training structure.")
