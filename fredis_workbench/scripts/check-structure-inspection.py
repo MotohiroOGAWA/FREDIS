@@ -39,3 +39,15 @@ with patch.object(backend.torch, 'load', return_value={'structure': structure, '
 assert reply['result']['metadata'] == {'smiles': 'C', 'record_indexes': [7]}
 assert metadata['reaction_sequence_compounds'][0][0] is sequence
 print('Structure inspection serializes metadata and preserves preparation seeds.')
+
+# The same combined label can arise from different base/shift decompositions.
+positive = backend._display_ion_adducts(dict(fragmentIonAdduct='[M+H]+', hydrogenShift=-2, adduct='[M+H]+'))
+negative = backend._display_ion_adducts(dict(fragmentIonAdduct='[M-H]+', hydrogenShift=0, adduct='[M-H]+'))
+assert positive['adduct'] == negative['adduct'] == '[M-H]+'
+assert positive['fragmentIonAdduct'] != negative['fragmentIonAdduct']
+sodium = dict(fragmentIonAdduct='[M+Na]+', hydrogenShift=-2, adduct='[M-2H+Na]+')
+assert backend._display_ion_adducts(sodium)['adduct'] == '[M+Na-2H]+'
+assert sodium['adduct'] == '[M-2H+Na]+'
+assert backend._display_ion_adducts(dict(adduct='[M-2H+Na]+'))['adduct'] == '[M+Na-2H]+'
+assert 'fragmentIonAdduct' not in backend._display_ion_adducts(dict(adduct='[M-H]+'))
+print('Ion labels use current canonical formatting and preserve base/shift distinctions.')

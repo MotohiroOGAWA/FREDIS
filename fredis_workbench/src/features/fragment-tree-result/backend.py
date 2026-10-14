@@ -10,6 +10,29 @@ import torch
 from fredis.analysis.prepared_result import restore_reaction_registry
 
 
+def _display_ion_adducts(match: dict) -> dict:
+    """Render saved explanations with the current Adduct formatter.
+
+    The fragment-ion adduct precedes the neutral hydrogen shift. Recompute
+    the combined name from those two components, including cancellation of H.
+    """
+    from fredis.libs.mmkit.mmkit import Adduct
+    result = dict(match)
+    base = match.get("fragmentIonAdduct")
+    if base:
+        adduct = Adduct.parse(base)
+        result["fragmentIonAdduct"] = str(adduct)
+        shift = match.get("hydrogenShift")
+        if shift is not None:
+            result["adduct"] = str(adduct.add_prefer_self(Adduct.from_dict({"H": int(shift)})))
+        elif match.get("adduct"):
+            result["adduct"] = str(Adduct.parse(match["adduct"]))
+    elif match.get("adduct"):
+        # Old annotations may lack the decomposition; do not guess a base.
+        result["adduct"] = str(Adduct.parse(match["adduct"]))
+    return result
+
+
 def _teacher_states(structure) -> list[dict]:
     """One row per (sample, normalized reaction-set) teacher state, with its
     positive branching reactions and, if materialized, the resulting fragment SMILES."""
@@ -173,6 +196,9 @@ def inspect_structure(file_path: Path) -> dict:
         view=groups[sample['branchGroup']]
         for key in ('nodes','edges','nodeCount','edgeCount','edgeTransitionCount','nodeIdSource'):
             if key in view:sample[key]=view[key]
+        if 'peaks' in sample:
+            sample['peaks'] = [{**peak, 'matches': [_display_ion_adducts(match) for match in peak.get('matches', [])]}
+                               for peak in sample['peaks']]
         start=group_offsets[sample['branchGroup']];ids=[node['id'] for node in view.get('nodes',[])]
         for peak in sample.get('peaks',[]):
             for match in peak.get('matches',[]):
