@@ -126,3 +126,18 @@ def test_global_memory_is_exported_imported_and_frozen(checkpoints):
     assert all(not p.requires_grad for p in imported.parameters())
     for key,tensor in original.state_dict().items():
         assert torch.equal(tensor,imported.state_dict()[key])
+
+
+def test_v3_import_preserves_implicit_legacy_source_descriptors(checkpoints):
+    source,_,_=checkpoints
+    saved=torch.load(source,weights_only=False)
+    saved['model_config']['mol_encoder_params'].pop('descriptors',None)
+    torch.save(saved,source)
+    target=deepcopy(saved['model_config']);target['reaction_model_params']['pattern_input_version']=3
+    target['mol_encoder_params']['descriptors']=[]
+    config=assemble_config(target,[dict(path=str(source))])
+    assert config['mol_encoder_params']['descriptors']==['FormalCharge']
+    generator=create_spectrum_generator(config)
+    model=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
+    initialize_imports(model,config)
+    assert generator.mol_encoder.descriptors==('FormalCharge',)

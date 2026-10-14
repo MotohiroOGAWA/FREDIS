@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 
 from ....domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
-from ...mol.mol_encoder import DEFAULT_MOL_ENCODER_DESCRIPTORS
 from ...mol.mol_graphormer import (
     DEFAULT_MOL_GRAPHORMER_DROPOUT,
     DEFAULT_MOL_GRAPHORMER_MAX_DEGREE,
@@ -32,7 +31,7 @@ def add_mol_encoder_arguments(parser: argparse.ArgumentParser) -> None:
                             help=f'Mol Encoder {key.replace("_", " ")} architecture setting.')
     parser.add_argument('--dropout', type=float, default=DEFAULT_MOL_GRAPHORMER_DROPOUT,
                         help='Mol Encoder dropout.')
-    parser.add_argument('--descriptors', nargs='*', choices=SUPPORTED_DESCRIPTOR_NAMES,
-                        default=list(DEFAULT_MOL_ENCODER_DESCRIPTORS),
-                        help='Molecular descriptors concatenated with the Mol Encoder graph embedding '
+    parser.add_argument('--intensity-descriptors', '--descriptors', dest='descriptors', nargs='*', choices=SUPPORTED_DESCRIPTOR_NAMES,
+                        default=[],
+                        help='Fragment molecular descriptors used only by the post-branch intensity head '
                              '(space-separated; give no names to use none).')

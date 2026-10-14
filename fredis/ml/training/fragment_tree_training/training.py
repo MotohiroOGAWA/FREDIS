@@ -575,13 +575,14 @@ MOL_ENCODER_OPTIONS = {flag: (key, kind, default)
 
 def training_model_config(args):
     config = {'max_samples':args.max_samples,'architecture': 'fragment-tree-physical-ion',
-              'reaction_model_params': {'pattern_input_version':2}, 'spectrum_model_params': {}, 'generation_params': {}}
+              'reaction_model_params': {'pattern_input_version':3}, 'spectrum_model_params': {}, 'generation_params': {}}
     config['mol_encoder_params'] = {
         key: getattr(args, flag.replace('-', '_'))
         for flag, (key, _, _) in MOL_ENCODER_OPTIONS.items()
     }
     config['mol_encoder_params']['dropout'] = args.dropout
-    config['mol_encoder_params']['descriptors'] = list(args.descriptors)
+    config['mol_encoder_params']['descriptors'] = []
+    config['spectrum_model_params']['descriptors'] = list(args.descriptors)
     for flag, (section, key, _, default) in MODEL_OPTIONS.items():
         value = getattr(args, flag.replace('-', '_'))
         if value is not None or default is not None:
@@ -657,7 +658,7 @@ def main(argv: list[str] | None = None) -> None:
         from .sources import inherit_model_config
         from .pattern_models import assemble_config
         architecture=json.loads(args.model_architecture_json or Path(args.model_architecture).read_text())
-        architecture.get('model_config',architecture).setdefault('reaction_model_params',{}).setdefault('pattern_input_version',2)
+        architecture.get('model_config',architecture).setdefault('reaction_model_params',{}).setdefault('pattern_input_version',3)
         model_config=inherit_model_config(architecture.get('model_config', architecture), args.train_dir, args.val_dir,
                                           saved_model=None, prepared_max_roles=None)
         if architecture.get('pretrained_patterns'):

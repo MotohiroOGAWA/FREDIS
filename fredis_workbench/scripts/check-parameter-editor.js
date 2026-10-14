@@ -46,14 +46,14 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');
- // Mol Encoder descriptors are checkboxes; the default is FormalCharge only.
- assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,['FormalCharge']);
- const descriptorBox=name=>walk(ionRoot).find(node=>node.dataset.parameterPath==='mol_encoder_params.descriptors.'+name);
- assert.equal(descriptorBox('FormalCharge').type,'checkbox');assert(descriptorBox('FormalCharge').checked);assert(!descriptorBox('TPSA').checked);
- descriptorBox('TPSA').checked=true;descriptorBox('TPSA').onchange();assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,['TPSA','FormalCharge']);
- descriptorBox('FormalCharge').checked=false;descriptorBox('FormalCharge').onchange();assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,['TPSA']);
+ // Descriptors are chosen only on the post-branch intensity head.
+ assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,[]);assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,[]);
+ const descriptorBox=name=>walk(ionRoot).find(node=>node.dataset.parameterPath==='spectrum_model_params.descriptors.'+name);
+ assert.equal(descriptorBox('FormalCharge').type,'checkbox');assert(!descriptorBox('FormalCharge').checked);assert(!descriptorBox('TPSA').checked);
+ descriptorBox('TPSA').checked=true;descriptorBox('TPSA').onchange();assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,['TPSA']);
+ descriptorBox('FormalCharge').checked=false;descriptorBox('FormalCharge').onchange();assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,['TPSA']);
  const descriptorArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:ionEditor.getValue()});
- assert.deepEqual(descriptorArgs.slice(descriptorArgs.indexOf('--descriptors'),descriptorArgs.indexOf('--descriptors')+2),['--descriptors','TPSA']);
+ assert.deepEqual(descriptorArgs.slice(descriptorArgs.indexOf('--intensity-descriptors'),descriptorArgs.indexOf('--intensity-descriptors')+2),['--intensity-descriptors','TPSA']);
  descriptorBox('TPSA').checked=false;descriptorBox('TPSA').onchange();
  assert(!walk(ionRoot).some(node=>node.tag==='button'&&node.textContent.startsWith('Override ')));
  assert.equal(walk(ionRoot).find(node=>node.dataset.parameterPath==='generation_params.max_fragment_nodes').value,100);
@@ -67,21 +67,10 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',fragmentLossWeight:0.4,intensityPower:1});
  assert.equal(lossArgs[lossArgs.indexOf('--fragment-loss-weight')+1],'0.4');
  assert.equal(lossArgs[lossArgs.indexOf('--intensity-power')+1],'1');
- // reaction_neighborhood_mode is a closed-choice Primitive Reaction Encoder setting,
- // defaulted like every other optional reaction_model_params field.
- const neighborhoodRoot=new Element('div'),neighborhoodEditor=createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
- const neighborhoodMode=walk(neighborhoodRoot).find(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode');
- assert.equal(neighborhoodMode.tag,'select');assert.deepEqual(neighborhoodMode.children.map(option=>option.value),['hop_pooling','none']);assert.equal(neighborhoodMode.value,'hop_pooling');
- // Neighborhood Max Hop defaults to 3 and starts enabled alongside hop_pooling.
- const maxHop=walk(neighborhoodRoot).find(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop');
- assert.equal(maxHop.value,3);assert(!maxHop.disabled);
- maxHop.value='2';maxHop.oninput();assert.equal(neighborhoodEditor.getValue().reaction_model_params.reaction_neighborhood_max_hop,2);
- neighborhoodMode.value='none';neighborhoodMode.onchange();assert.equal(neighborhoodEditor.getValue().reaction_model_params.reaction_neighborhood_mode,'none');
- // Switching to Mode=none re-renders and disables the now-meaningless Max Hop field.
- assert(walk(neighborhoodRoot).find(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop').disabled);
- const neighborhoodArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:neighborhoodEditor.getValue()});
- assert.equal(neighborhoodArgs[neighborhoodArgs.indexOf('--reaction-neighborhood-mode')+1],'none');
- assert.equal(neighborhoodArgs[neighborhoodArgs.indexOf('--reaction-neighborhood-max-hop')+1],'2');
+ // Neighborhood settings are owned by the per-pattern architecture editor.
+ const neighborhoodRoot=new Element('div');createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
+ assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode'));
+ assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop'));
  // max_roles is sized from the prepared dataset, never a form field, even
  // when a resumed/loaded config already carries one.
  const maxRolesRoot=new Element('div');

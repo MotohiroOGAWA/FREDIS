@@ -91,3 +91,23 @@ def test_pattern_input_is_raw_chemistry_plus_neighborhood_plus_position():
 @pytest.mark.parametrize('hops,width',[(-1,4),(1,0),(1.5,4)])
 def test_invalid_neighborhood_architecture(hops,width):
     with pytest.raises(ValueError):ExternalNeighborhoodEncoder(3,width,hops)
+
+
+def test_bond_features_propagate_from_third_shell_without_leaking_internal_bonds():
+    torch.manual_seed(17)
+    model=ExternalNeighborhoodEncoder(3,7,3,bond_dim=2)
+    atoms=torch.randn(6,3,requires_grad=True)
+    graph=edges([(0,1),(0,2),(2,3),(3,4),(4,5)])
+    bond=torch.randn(graph.shape[1],2,requires_grad=True)
+    sites=torch.tensor([[0,1]])
+    before=model(atoms,graph,sites,bond)
+    changed=bond.detach().clone();changed[[3,8]]+=3
+    assert not torch.equal(before[:,0],model(atoms,graph,sites,changed)[:,0])
+    far=bond.detach().clone();far[[4,9]]+=100
+    torch.testing.assert_close(before,model(atoms,graph,sites,far),rtol=0,atol=0)
+    internal=bond.detach().clone();internal[[0,5]]+=100
+    torch.testing.assert_close(before,model(atoms,graph,sites,internal),rtol=0,atol=0)
+    assert torch.count_nonzero(before[:,1])==0
+    before.square().sum().backward()
+    assert bond.grad[8].abs().sum()>0 and torch.count_nonzero(bond.grad[4])==0
+    with pytest.raises(ValueError,match='edge attributes'):model(atoms,graph,sites)

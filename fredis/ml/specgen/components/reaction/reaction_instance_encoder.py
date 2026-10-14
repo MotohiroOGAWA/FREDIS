@@ -96,10 +96,11 @@ class ReactionInstanceEncoder(nn.Module):
         for pid, smarts in pattern_smarts.items():
             config = dict(hidden_dim=reactant_node_dim, graph_dim=self.reactant_graph_dim,
                           num_heads=num_heads, num_layers=reactant_num_layers,
-                          dropout=reactant_dropout, descriptors=[], input_mode='chemical' if pattern_input_version == 2 else 'legacy',
-                          neighborhood_hops=(3 if pattern_input_version==2 else reaction_neighborhood_max_hop) if pattern_input_version==2 or reaction_neighborhood_mode!='none' else 0,
-                          neighborhood_hidden_dim=32 if pattern_input_version==2 else hidden_dim,
-                          global_num_layers=0, global_hidden_dim=32, global_num_heads=4)
+                          dropout=reactant_dropout, descriptors=[], input_mode='chemical' if pattern_input_version >= 2 else 'legacy',
+                          neighborhood_hops=(3 if pattern_input_version>=2 else reaction_neighborhood_max_hop) if pattern_input_version>=2 or reaction_neighborhood_mode!='none' else 0,
+                          neighborhood_hidden_dim=32 if pattern_input_version>=2 else hidden_dim,
+                          global_num_layers=0, global_hidden_dim=32, global_num_heads=4,
+                          neighborhood_edge_features=pattern_input_version>=3)
             override = dict(overrides.get(str(pid), overrides.get(pid, {})))
             if 'node_dim' in override:
                 if 'hidden_dim' in override:
@@ -124,7 +125,8 @@ class ReactionInstanceEncoder(nn.Module):
                 raise ValueError('raw_atom_dim is required for chemical reaction inputs')
             if chemical and config['neighborhood_hops']:
                 self.neighborhood_encoders[str(pid)] = ExternalNeighborhoodEncoder(
-                    raw_atom_dim, config['neighborhood_hidden_dim'], config['neighborhood_hops'])
+                    raw_atom_dim, config['neighborhood_hidden_dim'], config['neighborhood_hops'],
+                    bond_dim=raw_bond_dim if config['neighborhood_edge_features'] else 0)
             elif chemical:
                 # Validate even when no neighborhood parameters are allocated.
                 if type(config['neighborhood_hops']) is not int or config['neighborhood_hops'] != 0:
@@ -207,7 +209,7 @@ class ReactionInstanceEncoder(nn.Module):
                 sites = reaction_source_atom_index[index]
                 inputs = source_atom_features[sites]
                 if pattern_id in self.neighborhood_encoders:
-                    outside = self.neighborhood_encoders[pattern_id](source_atom_features, source_edge_index, sites)
+                    outside = self.neighborhood_encoders[pattern_id](source_atom_features, source_edge_index, sites, source_edge_attr)
                     inputs = torch.cat((inputs, outside), dim=-1)
                 if pattern_id in self.global_encoders:
                     if source_edge_attr is None or source_batch is None:

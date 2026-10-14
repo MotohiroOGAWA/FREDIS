@@ -4,7 +4,7 @@ const molDescriptors=require('./mol-descriptors');
 function createParameterEditor(container, initial, kind = "training", editReactionPatternSet, editAdductRuleSet) {
   const clone=value=>JSON.parse(JSON.stringify(value));
   const dataValue=value=>({fragmenter_params:clone(value.fragmenter_params||value),symbols:clone(value.symbols||['C','N','O','P','S','F','Cl','Br','I']),max_unique_fragment_smiles:value.max_unique_fragment_smiles??-1,max_reaction_combinations:value.max_reaction_combinations??-1});
-  const trainingValue=value=>{const source=value?.params||value||{},encoderDefaults={...Object.fromEntries(molEncoderFields.map(field=>[field[5],field[3]])),descriptors:['FormalCharge']},result={mol_encoder_params:{...encoderDefaults,...(source.mol_encoder_params||{})}};for(const key of ['reaction_model_params','spectrum_model_params','generation_params','fine_tuning'])if(source[key]&&typeof source[key]==='object'&&!Array.isArray(source[key]))result[key]=clone(source[key]);result.generation_params??={};return result;};
+  const trainingValue=value=>{const source=value?.params||value||{},encoderDefaults={...Object.fromEntries(molEncoderFields.map(field=>[field[5],field[3]])),descriptors:[]},result={mol_encoder_params:{...encoderDefaults,...(source.mol_encoder_params||{})}};for(const key of ['reaction_model_params','spectrum_model_params','generation_params','fine_tuning'])if(source[key]&&typeof source[key]==='object'&&!Array.isArray(source[key]))result[key]=clone(source[key]);result.generation_params??={};return result;};
   // 'fragmenter' edits a standalone fragmenter config file: the same Fragmenter
   // Parameters block as data preparation, without its symbols or search limits.
   const fragmenterValue=value=>({fragmenter_params:clone(value?.fragmenter_params||value||{})});
@@ -29,7 +29,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     hidden_dim:'Hidden representation dimension for this model component.',
     branch_main_adduct_dim:'Main-adduct feature width used only by the Branch Scorer.',
     ...Object.fromEntries(molEncoderFields.map(field=>[field[5],field[6]])),
-    descriptors:'Molecular descriptors calculated from each molecule and concatenated with the Mol Encoder graph embedding.',
+    descriptors:'Descriptors of the materialized fragment, used only to predict intensity after branch selection.',
     num_layers:'Number of transformer layers.',num_heads:'Number of attention heads. Must divide the corresponding hidden dimension.',
     max_degree:'Maximum degree represented in graph structural embeddings.',max_spatial_dist:'Maximum atom graph distance encoded by the molecular encoder.',max_edge_dist:'Maximum bond distance encoded by the molecular encoder.',
     reaction_neighborhood_mode:'How the Primitive Reaction Encoder folds in atoms outside the reacting site: hop_pooling pools hop-distance neighbors into the reaction; none ignores them entirely.',
@@ -45,11 +45,11 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     freeze_mol_encoder:'Freeze the molecular encoder during training.',
   };
   const templates={patterns:{name:'new_pattern',reactant_smarts:'[!#1:1]-[!#1:2]',products:[{name:'product',smarts:'[!#1:1]'}]},products:{name:'product',smarts:'[!#1:1]'},adduct_rules:{name:'new_rule',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']},fragment_ion_adducts:'[M+H]+',symbols:'C'};
-  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,reaction_neighborhood_mode:'hop_pooling',reaction_neighborhood_max_hop:3},mol_encoder_params:{dropout:0,descriptors:['FormalCharge']},spectrum_model_params:{ion_embedding_dim:32,hydrogen_shift_embedding_dim:16,state_hidden_dim:128,main_adduct_dim:128,collision_energy_dim:16},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,ion_prediction_threshold:0.5,peak_intensity_threshold:0}};
+  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,reaction_neighborhood_mode:'hop_pooling',reaction_neighborhood_max_hop:3},mol_encoder_params:{dropout:0,descriptors:[]},spectrum_model_params:{descriptors:[],ion_embedding_dim:32,hydrogen_shift_embedding_dim:16,state_hidden_dim:128,main_adduct_dim:128,collision_energy_dim:16},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,ion_prediction_threshold:0.5,peak_intensity_threshold:0}};
   // Purely cosmetic sub-headings for the sections with the most fields; any
   // field not listed here (e.g. a newer option) still renders, just ungrouped.
   const fieldGroups={
-    mol_encoder_params:{'Encoder Parameters':molEncoderFields.map(field=>field[5]),'Molecular Descriptors':['descriptors']},
+    mol_encoder_params:{'Encoder Parameters':molEncoderFields.map(field=>field[5])},
     reaction_model_params:{
       'Architecture':['hidden_dim','branch_main_adduct_dim','num_heads','reaction_neighborhood_mode','reaction_neighborhood_max_hop'],
       'Branch Scorer · Architecture':['state_num_layers'],
@@ -57,7 +57,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     spectrum_model_params:{
       'Fragment Transformer · Architecture':['hidden_dim','num_layers','num_heads'],
       'Ion-State Encoder · Architecture':['ion_embedding_dim','hydrogen_shift_embedding_dim','state_hidden_dim'],
-      'Intensity Head · Architecture':['main_adduct_dim','collision_energy_dim'],
+      'Intensity Head · Architecture':['main_adduct_dim','collision_energy_dim','descriptors'],
     },
     generation_params:{
       'Fragment Tree Search':['branch_path_threshold','max_fragment_nodes'],
@@ -84,8 +84,9 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     const full=path?path+'.'+key:String(key),value=parent[key];if(excludeBasic&&basic.has(full))return;if(key==='pattern_model_params'||key==='pattern_input_version'||['reaction_neighborhood_mode','reaction_neighborhood_max_hop','reactant_node_dim','reactant_graph_dim','reactant_num_layers','reactant_dropout'].includes(key)&&kind==='training'||linkedToSharedDropout.has(full)||derivedFromDataset.has(full))return;
     if(key==='reaction_pattern_set'&&editReactionPatternSet){const details=node('details'),summary=node('summary','Reaction Pattern Set · '+(value.name||'(unnamed)')),mount=node('div');mount.className='embedded-set-editor';details.append(summary,mount);details.ontoggle=()=>{if(details.open)editReactionPatternSet(clone(parent[key]),updated=>{parent[key]=clone(updated);summary.textContent='Reaction Pattern Set · '+(updated.name||'(unnamed)');},mount);};host.append(details);return;}
     if(key==='fragment_ion_adduct_rule_set'&&editAdductRuleSet){const mainAdducts=set=>[...new Set((set.adduct_rules||[]).map(rule=>rule.adduct_type).filter(Boolean))].join(', ')||'no main adducts',details=node('details'),summary=node('summary','Fragment Ion Adduct Rule Set · '+(value.name||'(unnamed)')+' · '+mainAdducts(value)),mount=node('div');mount.className='embedded-set-editor';details.append(summary,mount);details.ontoggle=()=>{if(details.open)editAdductRuleSet(clone(parent[key]),updated=>{parent[key]=clone(updated);summary.textContent='Fragment Ion Adduct Rule Set · '+(updated.name||'(unnamed)')+' · '+mainAdducts(updated);},mount);};host.append(details);return;}
-    if(full==='mol_encoder_params.descriptors'){
-      const group=node('fieldset'),legend=node('legend','Descriptors');legend.dataset.help=help(key,full);group.append(legend);
+    if(full==='mol_encoder_params.descriptors')return;
+    if(full==='spectrum_model_params.descriptors'){
+      const group=node('fieldset'),legend=node('legend','Intensity descriptors (after branch selection)');legend.dataset.help=help(key,full);group.append(legend);
       for(const name of molDescriptors){const wrapper=node('label'),input=node('input');wrapper.className='check';input.type='checkbox';input.dataset.parameterPath=full+'.'+name;input.checked=value.includes(name);
         input.onchange=()=>{parent[key]=molDescriptors.filter(item=>item===name?input.checked:parent[key].includes(item));};wrapper.append(input,node('span',name));group.append(wrapper);}
       host.append(group);return;

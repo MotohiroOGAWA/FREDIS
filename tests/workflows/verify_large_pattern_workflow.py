@@ -154,7 +154,7 @@ def prepare(label,patterns=(),model=None):
         assert int(manifest.num_valid_samples.sum())==count,(label,split,manifest.num_valid_samples.sum(),count)
         preparation_checks.append(dict(stage=label,split=split,compounds=len(expected),all_spectra=count,prepared_samples=count,rejected=0))
 
-small=['--node-dim','8','--graph-dim','11','--num-heads','2','--num-layers','1','--reaction-hidden-dim','8','--reaction-num-heads','2','--reaction-main-adduct-dim','8','--reaction-state-layers','1','--spectrum-hidden-dim','8','--spectrum-num-heads','2','--spectrum-num-layers','1','--ion-state-hidden-dim','8','--main-adduct-embedding-dim','8','--collision-energy-feature-dim','16','--dropout','0']
+small=['--node-dim','8','--graph-dim','11','--num-heads','2','--num-layers','1','--reaction-hidden-dim','8','--reaction-num-heads','2','--reaction-main-adduct-dim','8','--reaction-state-layers','1','--spectrum-hidden-dim','8','--spectrum-num-heads','2','--spectrum-num-layers','1','--ion-state-hidden-dim','8','--main-adduct-embedding-dim','8','--collision-energy-feature-dim','16','--dropout','0','--intensity-descriptors','TPSA','MolLogP']
 def train(label,architecture=None,resume=False):
     argv=['-m','fredis.cli','train','fragment-tree','--train-dir',str(out/('data_'+label)/'train_structures'),'--val-dir',str(out/('data_'+label)/'validation_structures'),'--output-dir',str(out/label),'--epochs','2' if resume else '1','--batch-size','1','--device','cuda','--lr','0.002','--warmup-steps','0','--max-samples','32',*small]
     if architecture:
@@ -175,7 +175,7 @@ for label,pattern in [('flavonoid',flav_pattern),('lipid',lipid_pattern)]:
     meta=json.loads((out/('data_'+label)/'preparation_config.json').read_text());fragmenter=Fragmenter.from_dict(meta['chemistry_config']['fragmenter_params'])
     pid=next(p.pattern_id for p in fragmenter.reaction_pattern_set.patterns if p.name==pattern['name'])
     arch=deepcopy(saved['model_config']);arch.pop('fine_tuning',None)
-    arch['reaction_model_params']['pattern_input_version']=2
+    arch['reaction_model_params']['pattern_input_version']=3
     arch['reaction_model_params']['pattern_model_params']={str(pid):dict(hidden_dim=8,graph_dim=13,num_layers=2,num_heads=2,dropout=0,neighborhood_hops=3,neighborhood_hidden_dim=8,global_num_layers=3 if label=='lipid' else 0,global_hidden_dim=8,global_num_heads=2)}
     train(label,arch)
 train('lipid',resume=True)

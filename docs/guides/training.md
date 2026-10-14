@@ -12,15 +12,14 @@ python -m fredis.cli train fragment-tree \
 The command jointly trains a newly initialized Mol Encoder and the
 fragment-tree model.
 
-The Mol Encoder concatenates its graph embedding with an embedding of the
-selected molecular descriptors (from `fredis.domain.molecule.descriptors`) and
-projects the result back to the graph dimension. Choose them with
-`--descriptors` (space-separated, e.g. `--descriptors FormalCharge TPSA`; give
-no names to use none). The default is `FormalCharge`. In Workbench they are the
-**Molecular Descriptors** checkboxes of the Molecular Architecture settings.
-Descriptor values are stored with every prepared graph, so changing the
-selection needs no new data preparation.
-The model learns CE-independent fragment branches with normalized positive MIL and depth-diverse weak negatives, then predicts CE-dependent physical-ion intensities. Their weights are configurable with `--branch-weight`, `--negative-weight`, `--branch-mil-temperature`, `--fragment-loss-weight`, `--state-loss-weight`, `--intensity-loss-weight`, `--cosine-loss-weight`, `--precursor-free-loss-weight`, and `--intensity-power`. These are training settings and are not part of `model_config`. AdamW uses `--weight-decay`; `--gradient-clip 0` disables gradient clipping.
+Descriptors are optional inputs to post-branch intensity prediction. Set
+`--intensity-descriptors TPSA MolLogP` (or its alias `--descriptors`). The
+selected descriptors are calculated for each materialized fragment and appended
+only to the intensity-head input. They do not enter reaction features, branch
+selection, fragment classification or ion-state classification. The default is
+an empty list; Workbench exposes the selection under Intensity Head. Descriptor
+values are already stored in prepared graphs, so selecting them does not require
+new data preparation.
 
 In **Workbench → Fragment Tree Training**, **Load Configuration** and **Save Configuration** are in the page header; the load control also accepts a dropped `*.pfttrain.json` file. Saved training configurations contain run settings and the trainable Mol Encoder / Branch / Fragment Transformer / Ion-State / Intensity parameters. Fragmenter settings, Reaction Patterns, ion-adduct rules, Symbols, and adduct ordering are inherited from the prepared train/validation datasets.
 
@@ -34,7 +33,7 @@ Use `--initialize-from models/base/last.pt` to fine-tune compatible model weight
 
 In **Training Data → Fragmentation**, add pretrained reaction models (`.reaction-model.pt` or a complete prediction checkpoint) and new definitions (`.reaction.pft` / `.reactionset.pft`). Imported model definitions are included in the Fragmenter before any reaction enumeration or peak assignment. Lists support per-pattern removal and the same detail component as **Models**.
 
-Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, new patterns have independent `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `dropout`, `neighborhood_hops`, `neighborhood_hidden_dim`, and `descriptors`. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
+Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, new patterns have independent `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `dropout`, `neighborhood_hops`, `neighborhood_hidden_dim`. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
 
 CLI can add every pattern from a checkpoint during preparation:
 
@@ -69,16 +68,16 @@ Training accepts `--model-architecture architecture.json` for per-pattern model 
     "reaction_model_params": {
       "pattern_input_version": 2,
       "pattern_model_params": {
-        "2": {"hidden_dim": 64, "graph_dim": 128, "num_layers": 3, "num_heads": 4, "dropout": 0, "neighborhood_hops": 3, "neighborhood_hidden_dim": 32, "descriptors": []}
+        "2": {"hidden_dim": 64, "graph_dim": 128, "num_layers": 3, "num_heads": 4, "dropout": 0, "neighborhood_hops": 3, "neighborhood_hidden_dim": 32}
       }
     }
   }
 }
 ```
 
-A SMARTS atom input is `[raw chemical features | external-neighborhood feature | fixed SMARTS-position one-hot]`, projected to `hidden_dim` before Graphormer attention. Neighborhood features use their own learnable `neighborhood_hidden_dim`. Propagation moves through external bonds from radius k toward the connected SMARTS atom and includes shells 1..k. Other SMARTS atoms are blocked while collecting that role's external structure, so a substituent on one role does not populate another role through the SMARTS backbone. Roles with no external neighbors receive exact zeros. `neighborhood_hops=0` disables this channel; the prepared full source graph permits radii beyond three without changing reaction chemistry or re-preparing data.
+A SMARTS atom input is `[raw chemical features | external-neighborhood feature | fixed SMARTS-position one-hot]`, projected to `hidden_dim` before Graphormer attention. Neighborhood features use their own learnable `neighborhood_hidden_dim`. Messages consume bond-type/ring features as well as atom hidden states. Propagation moves through external bonds from radius k toward the connected SMARTS atom and includes shells 1..k. Other SMARTS atoms are blocked while collecting that role's external structure, so a substituent on one role does not populate another role through the SMARTS backbone. Roles with no external neighbors receive exact zeros. `neighborhood_hops=0` disables this channel; the prepared full source graph permits radii beyond three without changing reaction chemistry or re-preparing data.
 
-Existing pretrained checkpoints retain their legacy input/position encoding. Fresh training and new pattern settings use `pattern_input_version=2`, and checkpoints record each pattern's input mode. Imported modules are not silently converted. Pattern-owned neighborhood weights are exported, initialized, frozen and integrated with their Graphormer/readout.
+Existing pretrained checkpoints retain their legacy input/position encoding. Fresh training and new pattern settings use `pattern_input_version=3`, and checkpoints record each pattern's input mode. Imported modules are not silently converted. Pattern-owned neighborhood weights are exported, initialized, frozen and integrated with their Graphormer/readout.
 
 The source ID belongs to the imported checkpoint. IDs in the prepared dataset are reassigned from chemical definitions. Imported architectures are restored from their source rather than overridden. The usual `train fragment-tree --train-dir ... --val-dir ...` then automatically freezes imported features and trains new pattern modules and downstream predictors.
 
@@ -254,3 +253,11 @@ between overlapping definitions. Duplicate chemical definitions with conflicting
 weights are rejected. After integration, prepare a union dataset from the integrated
 checkpoint and train the downstream predictors while all imported pattern features
 remain frozen.
+
+
+New version 3 pattern models enable `neighborhood_edge_features=true`. Version 1/2
+imports retain their original connectivity-only neighborhood weights and any
+saved descriptor-dependent source/readout modules; they are not silently
+converted. New patterns reject descriptor inputs. New source MolEncoders have no
+selected descriptors. `spectrum_model_params.descriptors` is the only descriptor
+selection for newly trained intensity models, and remains fixed on Resume.

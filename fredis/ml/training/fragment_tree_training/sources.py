@@ -108,7 +108,7 @@ def inherit_model_config(model_config, train_dir, val_dir, *, prepared_max_roles
                 raise ValueError(f'Dataset {key} differs from the training checkpoint')
         encoder_params = saved['mol_encoder_params']
     else:
-        config.setdefault('reaction_model_params',{}).setdefault('pattern_input_version',2)
+        config.setdefault('reaction_model_params',{}).setdefault('pattern_input_version',3)
         encoder_params = deepcopy(config.get('mol_encoder_params', {}))
         if not encoder_params:
             raise ValueError('Specify molecular encoder parameters for joint training')

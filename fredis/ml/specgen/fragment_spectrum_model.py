@@ -13,6 +13,7 @@ from fredis.libs.mmkit.mmkit import Adduct
 from ..common.layers.graphormer import GraphormerEncoder
 from ..mol.formula_encoder import FormulaTensorizer
 from .materialization import DecodedFragmentTreeBatch
+from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
 
 
 @dataclass(frozen=True)
@@ -161,9 +162,13 @@ class FragmentSpectrumModel(nn.Module):
                  hidden_dim:int=128,num_heads:int=4,num_layers:int=2,max_reaction_count:int=3,dropout:float=0.,
                  ion_type_count:int=1,hydrogen_shift_min:int=0,hydrogen_shift_max:int=0,
                  ion_embedding_dim:int=32,hydrogen_shift_embedding_dim:int=16,state_hidden_dim:int|None=None,
-                 main_adduct_dim:int|None=None,collision_energy_dim:int=16)->None:
+                 main_adduct_dim:int|None=None,collision_energy_dim:int=16,descriptors:Sequence[str]=())->None:
         super().__init__()
         self.mol_encoder=mol_encoder
+        self.descriptors = tuple(descriptors)
+        if len(set(self.descriptors)) != len(self.descriptors) or set(self.descriptors) - set(SUPPORTED_DESCRIPTOR_NAMES):
+            raise ValueError('Invalid intensity descriptor selection')
+        self.descriptor_indices = tuple(SUPPORTED_DESCRIPTOR_NAMES.index(name) for name in self.descriptors)
         state_hidden_dim=state_hidden_dim or hidden_dim;main_adduct_dim=main_adduct_dim or 128
         self.edge_encoder=nn.Sequential(nn.Linear(reaction_dim+mol_encoder.graph_dim*2,hidden_dim),nn.GELU(),nn.Linear(hidden_dim,hidden_dim))
         self.tree_encoder=GraphormerEncoder(node_dim=mol_encoder.graph_dim,hidden_dim=hidden_dim,edge_dim=hidden_dim,
@@ -178,7 +183,7 @@ class FragmentSpectrumModel(nn.Module):
         self.explanation_attention=nn.Linear(hidden_dim,1)
         self.main_adduct_projection=nn.Linear(main_adduct_dim,hidden_dim)
         self.collision_energy_projection=nn.Linear(collision_energy_dim,hidden_dim)
-        self.intensity_head=nn.Sequential(nn.Linear(hidden_dim*4,hidden_dim),nn.GELU(),nn.Dropout(dropout),nn.Linear(hidden_dim,1))
+        self.intensity_head=nn.Sequential(nn.Linear(hidden_dim*4+len(self.descriptors),hidden_dim),nn.GELU(),nn.Dropout(dropout),nn.Linear(hidden_dim,1))
         self.fragment_score=nn.Linear(hidden_dim,1)
         self.adduct_score=nn.Linear(hidden_dim,max(1,ion_type_count))
         self.hydrogen_shift_score=nn.Linear(hidden_dim*2,1)
@@ -225,7 +230,11 @@ class FragmentSpectrumModel(nn.Module):
         physical=explanation.new_zeros((counts.numel(),explanation.shape[-1])).index_add_(0,owner,explanation*attention_weight[:,None])
         sample=data.physical_candidate_sample_index;fragment=node_h[data.physical_candidate_node_index]
         adduct=self.main_adduct_projection(main_adduct_h[sample]);energy=self.collision_energy_projection(collision_energy_h[sample])
-        intensity=F.softplus(self.intensity_head(torch.cat((fragment,physical,adduct,energy),1)).squeeze(-1))
+        intensity_inputs=[fragment,physical,adduct,energy]
+        if self.descriptor_indices:
+            values=data.decoded.node_graph.descriptors[data.physical_candidate_node_index][:,self.descriptor_indices].to(fragment.dtype)
+            intensity_inputs.append(torch.sign(values)*torch.log1p(values.abs()))
+        intensity=F.softplus(self.intensity_head(torch.cat(intensity_inputs,1)).squeeze(-1))
         fragment_logit_by_node=self.fragment_score(node_h).squeeze(-1)
         all_adduct_logits=self.adduct_score(fragment)
         adduct_logit=all_adduct_logits[owner,data.explanation_adduct_index]

@@ -55,7 +55,15 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         hidden = params.get("hidden_dim",128)
         main_adduct_dim=spectrum_params.get("main_adduct_dim",128)
         collision_energy_dim=spectrum_params.get("collision_energy_dim",16)
-        self.mol_encoder = MolEncoder(**mol_encoder_params)
+        mol_params=dict(mol_encoder_params)
+        if params.get('pattern_input_version',1)>=3:
+            mol_params.setdefault('descriptors', [])
+            if mol_params['descriptors'] and not fine_tuning:
+                raise ValueError('New reaction features do not accept molecular descriptors; select spectrum_model_params.descriptors for intensity')
+            frozen={str(pid) for pid in (fine_tuning or {}).get('frozen_pattern_ids',[])}
+            if any(value.get('descriptors') for pid,value in params.get('pattern_model_params',{}).items() if str(pid) not in frozen):
+                raise ValueError('New reaction patterns do not accept descriptors; select intensity descriptors instead')
+        self.mol_encoder = MolEncoder(**mol_params)
         adduct_encoder=AdductEmbeddingLayer(self.adduct_type_strs,32)
         collision_energy_encoder=CollisionEnergyFeatureLayer(collision_energy_dim)
         patterns=self.fragmenter.fragment_ion_tree_builder.reaction_patterns
