@@ -37,6 +37,13 @@ function client(){
   for(const key of ['hidden_dim','graph_dim','num_layers','num_heads','dropout','neighborhood_hops','neighborhood_hidden_dim','global_num_layers','global_hidden_dim','global_num_heads']){const label=document.createElement('label'),input=document.createElement('input');label.textContent=key==='neighborhood_hops'?'Neighborhood hops (0 disables)':key==='global_num_layers'?'Global GNN layers (0 disables)':key;input.type='number';input.dataset.patternParameter=key;input.step=key==='dropout'?'any':'1';input.min=['dropout','neighborhood_hops','global_num_layers'].includes(key)?'0':'1';input.value=config[key];if(key==='neighborhood_hidden_dim')input.disabled=config.neighborhood_hops===0;input.oninput=()=>{config[key]=Number(input.value);if(key==='neighborhood_hops')view.querySelector('[data-pattern-parameter=neighborhood_hidden_dim]').disabled=config.neighborhood_hops===0;view.updateArchitecture();trainingChanged();};label.append(input);view.append(label);}
 
  }}
+ const editor=document.getElementById('dataPatternEditor');
+ document.getElementById('dataPatternEdit').onclick=()=>{
+  reconcile();editor.hidden=false;host.hidden=true;for(const id of ['dataPatternImport','dataPatternAdd','dataPatternEdit'])document.getElementById(id).disabled=true;
+  window.dispatchEvent(new CustomEvent('data/editNewPatterns',{detail:{patterns:records.filter(item=>!item.source).map(item=>item.pattern),imported:records.filter(item=>item.source).map(item=>item.pattern)}}));
+ };
+ document.getElementById('dataPatternEditClose').onclick=()=>{editor.hidden=true;host.hidden=false;for(const id of ['dataPatternImport','dataPatternAdd','dataPatternEdit'])document.getElementById(id).disabled=false;const app=document.getElementById('reactionPatternApp');app.hidden=true;document.getElementById('reactionPatternPageMount').append(app);onReactionPatternChange=()=>{};render();changed();};
+ window.addEventListener('data/patternsEdited',()=>render());
  document.getElementById('dataPatternImport').onclick=()=>vscode.postMessage({type:'models/pick',target:'data'});
  document.getElementById('dataPatternAdd').onclick=()=>vscode.postMessage({type:'models/patternPick',target:'data'});
  dataForm.addEventListener('input',event=>{if(!updating&&!host.contains(event.target))render();});

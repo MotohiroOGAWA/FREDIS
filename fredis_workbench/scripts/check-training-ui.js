@@ -110,6 +110,7 @@ assert(d.getElementById('trainingIntegrationStatus').textContent.includes('Integ
 assert(!d.getElementById('trainingIntegrate').disabled);
 mode('new');
 assert.equal(form.querySelectorAll('input[name=trainingMode]').length,2);
+assert.equal(d.getElementById('dataReactionPatterns').parentElement.dataset.modelBlock,'fragmenter_params');assert.equal(d.querySelectorAll('#dataReactionPatterns').length,1);
 assert(!form.querySelector('#trainingPatternAdd'));assert(d.getElementById('dataPatternImport'));assert(d.getElementById('dataPatternAdd'));
 const pattern=preset.fragmenter_params.fragment_ion_tree_builder.reaction_pattern_set.patterns[0];
 const inspected={pattern:{...pattern,pattern_id:0},architecture:{node_dim:8,graph_dim:11,num_layers:1,num_heads:2,dropout:0,descriptors:[]},atom_count:2,parameter_count:123,source:'/models/base.pt'};
@@ -121,6 +122,14 @@ const prepArgs=ext.buildArgs(preparation);assert(prepArgs.includes('--reaction-m
 assert(!w.eval('getTrainingConfig()').pretrainedPatterns);
 const added={name:'new oxygen',reactant_smarts:'[#8:1]-[#8:2]',products:[{name:'left',smarts:'[*:1]'}]};
 post({type:'models/patterns',patterns:[added]});assert(w.eval('getConfig()').fragmenterParams.fragment_ion_tree_builder.reaction_pattern_set.patterns.some(item=>item.name==='new oxygen'));
+assert(!d.querySelector('#dataParameterEditor .embedded-set-editor')?.closest('details')?.textContent.includes('Reaction Pattern Set'));
+d.getElementById('dataPatternEdit').click();assert(!d.getElementById('dataPatternEditor').hidden);assert(d.getElementById('dataPatternModels').hidden);
+assert.equal(d.getElementById('reactionPatternApp').parentElement.id,'dataPatternEditorMount');
+const editable=d.querySelector('#dataPatternEditorMount [data-key=reactant_smarts]');assert.equal(editable.value,added.reactant_smarts);editable.value='[#8:1]-[#6:2]';editable.dispatchEvent(new w.Event('input',{bubbles:true}));
+assert(w.eval('getConfig()').reactionModels.some(item=>item.source==='/models/base.pt'&&item.pattern.reactant_smarts===pattern.reactant_smarts));
+assert(w.eval('getConfig()').fragmenterParams.fragment_ion_tree_builder.reaction_pattern_set.patterns.some(item=>item.name==='new oxygen'&&item.reactant_smarts==='[#8:1]-[#6:2]'));
+assert.equal(d.getElementById('dataReactionPatterns').parentElement.dataset.modelBlock,'fragmenter_params');assert.equal(d.getElementById('reactionPatternApp').parentElement.id,'dataPatternEditorMount');
+d.getElementById('dataPatternEditClose').click();assert(d.getElementById('dataPatternEditor').hidden);assert(!d.getElementById('dataPatternModels').hidden);
 const remove=Array.from(d.getElementById('dataPatternModels').querySelectorAll('details')).find(view=>view.textContent.includes('new oxygen')).querySelector('button');remove.click();assert(!w.eval('getConfig()').fragmenterParams.fragment_ion_tree_builder.reaction_pattern_set.patterns.some(item=>item.name==='new oxygen'));
 const currentSources=messages.filter(item=>item.type==='training/sources').at(-1);
 const freshPattern={...pattern,pattern_id:0};

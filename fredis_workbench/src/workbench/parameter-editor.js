@@ -134,16 +134,18 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     for(const row of rows)for(const symbol of row.split(' ')){if(symbol==='.'){grid.append(node('span'));continue;}const selected=model.symbols.includes(symbol);const tile=button(symbol,()=>{model.symbols=selected?model.symbols.filter(item=>item!==symbol):[...model.symbols,symbol];render();if(container.dispatchEvent)container.dispatchEvent(new Event('input',{bubbles:true}));});tile.dataset.symbol=symbol;tile.setAttribute('aria-pressed',String(selected));tile.title=symbol+(selected?' — enabled':' — disabled');grid.append(tile);}section.append(grid);
   }
   function render(){
+    const patternManager=kind==='data'?document.getElementById?.('dataReactionPatterns'):null;
+    if(patternManager?.parentNode)patternManager.parentNode.removeChild(patternManager);
     const expanded=new Set([...container.querySelectorAll('[data-advanced]')].filter(n=>!n.hidden).map(n=>n.dataset.advanced));for(const [app,mount]of [['reactionPatternApp','reactionPatternPageMount'],['adductApp','adductPageMount']]){const element=document.getElementById?.(app),page=document.getElementById?.(mount);if(element&&page&&container.contains?.(element)){element.hidden=true;page.append(element);}}container.replaceChildren();
     for(const [key,value]of Object.entries(model)){
       if(kind==='data'&&key==='symbols'){const section=node('section');section.append(node('h2','Symbols'));renderSymbols(section);container.append(section);continue;}
       if(kind==='training'&&['architecture','fine_tuning','fragmenter_params','adduct_type_strs','symbols','max_unique_fragment_smiles','max_reaction_combinations'].includes(key))continue;
       const section=node('section'),heading=node('h2',key==='fragmenter_params'?'Fragmenter Parameters':key==='mol_encoder_params'?'Molecular Architecture':title(key));section.dataset.modelBlock=key;section.append(heading);
       if(kind==='data'&&['max_unique_fragment_smiles','max_reaction_combinations'].includes(key))continue;
-      if(kind==='data'&&key==='fragmenter_params'){renderValue(model,'max_unique_fragment_smiles',section,'');renderValue(model,'max_reaction_combinations',section,'');}
+      if(kind==='data'&&key==='fragmenter_params'){if(patternManager)section.append(patternManager);renderValue(model,'max_unique_fragment_smiles',section,'');renderValue(model,'max_reaction_combinations',section,'');}
       if(key==='fragmenter_params')for(const path of basic){const parts=path.split('.');let parent=model;for(const part of parts.slice(0,-1))parent=parent?.[part];if(parent&&parts.at(-1) in parent)renderValue(parent,parts.at(-1),section,parts.slice(0,-1).join('.'));}
       const advanced=node('div');advanced.dataset.advanced=key;advanced.hidden=!expanded.has(key);
-      if(fragmenterKind&&key==='fragmenter_params'){const builder=value.fragment_ion_tree_builder||{};for(const child of Object.keys(builder))if(child!=='max_reaction_count')renderValue(builder,child,section,'fragmenter_params.fragment_ion_tree_builder',true);for(const child of Object.keys(value))if(!['fragment_ion_tree_builder','precursor_candidate_max_reaction_count','mass_tolerance'].includes(child))renderValue(value,child,section,'fragmenter_params',true);}
+      if(fragmenterKind&&key==='fragmenter_params'){const builder=value.fragment_ion_tree_builder||{};for(const child of Object.keys(builder))if(child!=='max_reaction_count'&&!(kind==='data'&&child==='reaction_pattern_set'))renderValue(builder,child,section,'fragmenter_params.fragment_ion_tree_builder',true);for(const child of Object.keys(value))if(!['fragment_ion_tree_builder','precursor_candidate_max_reaction_count','mass_tolerance'].includes(child))renderValue(value,child,section,'fragmenter_params',true);}
       else if(['mol_encoder_params','reaction_model_params','spectrum_model_params'].includes(key)||(kind==='data'&&key!=='architecture')){const label=key==='mol_encoder_params'?'Molecular Architecture':title(key),toggle=button('Advanced '+label,()=>{advanced.hidden=!advanced.hidden;toggle.setAttribute('aria-expanded',String(!advanced.hidden));});toggle.dataset.parameterToggle=key;toggle.setAttribute('aria-expanded',String(!advanced.hidden));section.append(toggle);renderValue(model,key,advanced,'',true);section.append(advanced);}
       else renderValue(model,key,section,'');container.append(section);
     }
@@ -156,6 +158,16 @@ function client(){
   function editPatterns(target){return (value,apply,mount)=>{reactionPatternModel={reaction_pattern_set:value};reactionPatternPath='';mount.append(el('reactionPatternApp'));el('reactionPatternApp').hidden=false;el('applyParameterPatterns').hidden=true;el('reactionPatternPath').textContent='Embedded in '+(target==='data'?'Data Preparation':'Training');onReactionPatternChange=()=>{apply(reactionPatternModel.reaction_pattern_set);form.dispatchEvent(new Event('input',{bubbles:true}));};renderReactionPatterns();};}
   function editAdducts(target){return (value,apply,mount)=>{adductModel={fragment_ion_adduct_rule_set:value};adductPath='';mount.append(el('adductApp'));el('adductApp').hidden=false;el('applyParameterAdductRules').hidden=true;el('adductPath').textContent='Embedded in '+(target==='data'?'Data Preparation':'Training');onAdductChange=()=>{apply(adductModel.fragment_ion_adduct_rule_set);form.dispatchEvent(new Event('input',{bubbles:true}));};renderAdductRules();};}
   const editors={data:createParameterEditor(el('dataParameterEditor'),dataInitial,'data',editPatterns('data'),editAdducts('data')),training:createParameterEditor(el('trainingParameterEditor'),initialTraining.modelConfig||{},'training',editPatterns('training'),editAdducts('training'))};
+  window.addEventListener('data/editNewPatterns',event=>{
+    const mount=el('dataPatternEditorMount'),current=editors.data.getValue();
+    const original=current.fragmenter_params.fragment_ion_tree_builder.reaction_pattern_set;
+    editPatterns('data')({...original,patterns:event.detail.patterns},updated=>{
+      const value=editors.data.getValue();
+      value.fragmenter_params.fragment_ion_tree_builder.reaction_pattern_set={...original,patterns:[...event.detail.imported,...updated.patterns]};
+      editors.data.setValue(value);
+      window.dispatchEvent(new Event('data/patternsEdited'));
+    },mount);
+  });
   function snapshot(target,application){const config={application};for(const input of target.elements){if(input.name)config[input.name]=input.type==='number'?Number(input.value):input.type==='checkbox'?input.checked:input.value;}return config;}
   getConfig=()=>{const value=editors.data.getValue();return {...snapshot(form,'fragment-tree-data-preparation'),fragmenterParams:value.fragmenter_params,symbols:value.symbols,maxUniqueFragmentSmiles:value.max_unique_fragment_smiles,maxReactionCombinations:value.max_reaction_combinations};};
   getTrainingConfig=()=>({...snapshot(training,'fragment-tree-training'),modelConfig:editors.training.getValue()});
