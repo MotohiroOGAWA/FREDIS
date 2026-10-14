@@ -92,7 +92,7 @@ def initialize_from_base(model, model_config):
     used = set()
     for key, value in target.items():
         original_key = key
-        match = re.search(r'\.(?:reactant_encoders|pattern_heads|neighborhood_encoders)\.(\d+)\.', key)
+        match = re.search(r'\.(?:reactant_encoders|pattern_heads|neighborhood_encoders|global_encoders)\.(\d+)\.', key)
         if match:
             pid = int(match.group(1))
             if pid not in inverse:

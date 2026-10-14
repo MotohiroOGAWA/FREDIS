@@ -100,3 +100,29 @@ def test_raw_pattern_position_capacity_is_independent_of_legacy_roles(checkpoint
     reaction=generator.feature_model.reaction_instance_encoder
     assert reaction.roles.num_embeddings==64
     assert any(encoder.position_count==70 and encoder.position_encoding=='one_hot' for encoder in reaction.reactant_encoders.values())
+
+
+def test_global_memory_is_exported_imported_and_frozen(checkpoints):
+    source, _, output = checkpoints
+    saved=torch.load(source,weights_only=False)
+    params=deepcopy(saved['model_config'])
+    pid=str(Fragmenter.from_dict(params['fragmenter_params']).reaction_pattern_set.patterns[0].pattern_id)
+    reaction_params=params.setdefault('reaction_model_params',{})
+    reaction_params['pattern_input_version']=2
+    reaction_params['pattern_model_params']={pid:dict(global_num_layers=3,global_hidden_dim=8,global_num_heads=2)}
+    generator=create_spectrum_generator(params)
+    model=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
+    saved.update(model_config=params,model_state_dict=model.state_dict());torch.save(saved,source)
+    asset=output.with_name('global.reaction-model.pt')
+    exported=export_pattern(source,int(pid),asset)
+    assert exported['patterns'][0]['architecture']['global_num_layers']==3
+    config=assemble_config(params,[dict(path=str(asset))])
+    restored=create_spectrum_generator(config)
+    target=ReactionFragmentTreeTrainingModel(restored.feature_model,spectrum_model=restored.spectrum_model)
+    initialize_imports(target,config);restored.train()
+    original=generator.feature_model.reaction_instance_encoder.global_encoders[pid]
+    imported=restored.feature_model.reaction_instance_encoder.global_encoders[pid]
+    assert not imported.training
+    assert all(not p.requires_grad for p in imported.parameters())
+    for key,tensor in original.state_dict().items():
+        assert torch.equal(tensor,imported.state_dict()[key])

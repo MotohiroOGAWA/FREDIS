@@ -26,7 +26,8 @@ def pattern_config(params, pid):
                   dropout=reaction.get('reactant_dropout', 0.0), descriptors=[],
                   input_mode='chemical' if reaction.get('pattern_input_version',1)==2 else 'legacy',
                   neighborhood_hops=(3 if reaction.get('pattern_input_version',1)==2 else reaction.get('reaction_neighborhood_max_hop',3)) if reaction.get('pattern_input_version',1)==2 or reaction.get('reaction_neighborhood_mode','hop_pooling')!='none' else 0,
-                  neighborhood_hidden_dim=32 if reaction.get('pattern_input_version',1)==2 else hidden)
+                  neighborhood_hidden_dim=32 if reaction.get('pattern_input_version',1)==2 else hidden,
+                  global_num_layers=0, global_hidden_dim=32, global_num_heads=4)
     override=dict(reaction.get('pattern_model_params', {}).get(str(pid), {}))
     if 'node_dim' in override:
         override['hidden_dim']=override.pop('node_dim')

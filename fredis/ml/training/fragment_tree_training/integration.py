@@ -9,7 +9,7 @@ from fredis.domain.fragment.reaction import ReactionPatternSet
 from fredis.ml.specgen.source_anchored_spectrum_predictor import SourceAnchoredFragmentSpectrumGenerator
 from .model import ReactionFragmentTreeTrainingModel
 
-PATTERN_KEY = re.compile(r'\.(?:reactant_encoders|pattern_heads|neighborhood_encoders)\.(\d+)\.')
+PATTERN_KEY = re.compile(r'\.(?:reactant_encoders|pattern_heads|neighborhood_encoders|global_encoders)\.(\d+)\.')
 
 
 def integrate_checkpoints(checkpoints, head_checkpoint, output):

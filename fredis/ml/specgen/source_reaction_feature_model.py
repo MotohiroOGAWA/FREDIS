@@ -47,7 +47,7 @@ class SourceReactionFeatureModel(nn.Module):
             max_roles, reaction_neighborhood_mode=reaction_neighborhood_mode, reaction_neighborhood_max_hop=reaction_neighborhood_max_hop,
             pattern_smarts=pattern_smarts, reactant_num_layers=reactant_num_layers, reactant_dropout=reactant_dropout,
             reactant_node_dim=reactant_node_dim, reactant_graph_dim=reactant_graph_dim, pattern_category_sizes=pattern_category_sizes, pattern_model_params=pattern_model_params, raw_atom_dim=mol_encoder.graph_builder.atom_dim,
-            pattern_input_version=pattern_input_version)
+            pattern_input_version=pattern_input_version, raw_bond_dim=mol_encoder.graph_builder.bond_dim)
         if not isinstance(adduct_encoder,AdductEmbeddingLayer):
             raise TypeError("Branching requires an explicit main-adduct encoder")
         if not isinstance(collision_energy_encoder,CollisionEnergyFeatureLayer):
@@ -85,6 +85,8 @@ class SourceReactionFeatureModel(nn.Module):
         source_x=torch.cat(atoms);source_h=torch.cat(molecules)
         kwargs={name:getattr(data,name).to(device) for name in ('reaction_type','reaction_tree_index','reaction_source_atom_ptr','reaction_source_atom_index','reaction_static_features','reaction_source_atom_features')}
         kwargs['source_atom_features']=data.source_graph.x.to(device)
+        kwargs['source_edge_attr']=data.source_graph.edge_attr.to(device)
+        kwargs['source_batch']=data.source_graph.batch.to(device)
         kwargs['source_edge_index']=data.source_graph.edge_index.to(device)
         kwargs['source_descriptors']=data.source_graph.descriptors.to(device)
         kwargs['reaction_source_atom_hops']=self._hop_tensors(data,device)
@@ -105,7 +107,8 @@ class SourceReactionFeatureModel(nn.Module):
             reaction_source_atom_ptr=data.reaction_source_atom_ptr, reaction_source_atom_index=data.reaction_source_atom_index,
             reaction_static_features=data.reaction_static_features,reaction_source_atom_features=data.reaction_source_atom_features,
             reaction_source_atom_hops=self._hop_tensors(data), source_descriptors=data.source_graph.descriptors, source_atom_features=data.source_graph.x,
-            source_edge_index=data.source_graph.edge_index) if static_features is None else static_features[0]
+            source_edge_index=data.source_graph.edge_index, source_edge_attr=data.source_graph.edge_attr,
+            source_batch=data.source_graph.batch) if static_features is None else static_features[0]
         source_embeddings = source.embeddings if source is not None else static_features[1]
         sample_adduct=self.intensity_main_adduct_projection(self.adduct_encoder(data.condition_features[:,0].long()))
         collision_energy=self.collision_energy_encoder(data.condition_features[:,1])

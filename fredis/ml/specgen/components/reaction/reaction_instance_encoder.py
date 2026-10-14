@@ -6,6 +6,8 @@ from torch import Tensor, nn
 from ....reaction.reactant_graphormer import ReactantGraphormerEncoder
 from collections.abc import Mapping
 from ....reaction.external_neighborhood import ExternalNeighborhoodEncoder
+from ....reaction.global_attention import GlobalStructureAttention
+from rdkit import Chem
 from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
 
 NEIGHBORHOOD_MODES = ("hop_pooling", "none")
@@ -58,7 +60,7 @@ class ReactionInstanceEncoder(nn.Module):
                  reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None,
                  pattern_category_sizes: Mapping[int, tuple[int, int]] | None = None,
                  pattern_model_params: Mapping[str, dict] | None = None,
-                 raw_atom_dim: int | None = None, pattern_input_version: int = 1) -> None:
+                 raw_atom_dim: int | None = None, pattern_input_version: int = 1, raw_bond_dim: int = 0) -> None:
         super().__init__()
         if reaction_neighborhood_mode not in NEIGHBORHOOD_MODES:
             raise ValueError(f"Unsupported reaction_neighborhood_mode: {reaction_neighborhood_mode!r}")
@@ -85,6 +87,7 @@ class ReactionInstanceEncoder(nn.Module):
         self.reactant_encoders = nn.ModuleDict()
         self.pattern_heads = nn.ModuleDict()
         self.neighborhood_encoders = nn.ModuleDict()
+        self.global_encoders = nn.ModuleDict()
         self.pattern_model_params = {}
         overrides = pattern_model_params or {}
         unknown = set(map(str, overrides)) - set(map(str, pattern_smarts))
@@ -95,7 +98,8 @@ class ReactionInstanceEncoder(nn.Module):
                           num_heads=num_heads, num_layers=reactant_num_layers,
                           dropout=reactant_dropout, descriptors=[], input_mode='chemical' if pattern_input_version == 2 else 'legacy',
                           neighborhood_hops=(3 if pattern_input_version==2 else reaction_neighborhood_max_hop) if pattern_input_version==2 or reaction_neighborhood_mode!='none' else 0,
-                          neighborhood_hidden_dim=32 if pattern_input_version==2 else hidden_dim)
+                          neighborhood_hidden_dim=32 if pattern_input_version==2 else hidden_dim,
+                          global_num_layers=0, global_hidden_dim=32, global_num_heads=4)
             override = dict(overrides.get(str(pid), overrides.get(pid, {})))
             if 'node_dim' in override:
                 if 'hidden_dim' in override:
@@ -127,8 +131,18 @@ class ReactionInstanceEncoder(nn.Module):
                     raise ValueError('neighborhood_hops must be a non-negative integer')
                 if type(config['neighborhood_hidden_dim']) is not int or config['neighborhood_hidden_dim'] < 1:
                     raise ValueError('neighborhood_hidden_dim must be positive')
+            if type(config['global_num_layers']) is not int or config['global_num_layers'] < 0:
+                raise ValueError('global_num_layers must be a non-negative integer')
+            if config['global_num_layers']:
+                if not chemical:
+                    raise ValueError('Global attention requires chemical pattern inputs')
+                self.global_encoders[str(pid)] = GlobalStructureAttention(
+                    raw_atom_dim, raw_bond_dim, Chem.MolFromSmarts(smarts).GetNumAtoms(),
+                    config['global_hidden_dim'], config['global_num_layers'], config['global_num_heads'], config['dropout'])
             input_dim = ((raw_atom_dim + (config['neighborhood_hidden_dim'] if config['neighborhood_hops'] else 0))
                          if chemical else hidden_dim)
+            if config['global_num_layers']:
+                input_dim += config['global_hidden_dim']
             self.reactant_encoders[str(pid)] = ReactantGraphormerEncoder(
                 smarts, atom_dim=input_dim, bond_dim=0, hidden_dim=config['hidden_dim'],
                 graph_dim=config['graph_dim'], num_layers=config['num_layers'], num_heads=config['num_heads'],
@@ -145,6 +159,8 @@ class ReactionInstanceEncoder(nn.Module):
             self.pattern_heads[pid].eval()
             if pid in self.neighborhood_encoders:
                 self.neighborhood_encoders[pid].eval()
+            if pid in self.global_encoders:
+                self.global_encoders[pid].eval()
         return self
 
     def forward(self, *, source_atom_h: Tensor, source_mol_h: Tensor, reaction_type: Tensor,
@@ -153,7 +169,8 @@ class ReactionInstanceEncoder(nn.Module):
                 reaction_source_atom_hops: Sequence[tuple[Tensor, Tensor]],
                 reaction_source_atom_features: Tensor | None = None,
                 source_descriptors: Tensor | None = None,
-                source_atom_features: Tensor | None = None, source_edge_index: Tensor | None = None) -> Tensor:
+                source_atom_features: Tensor | None = None, source_edge_index: Tensor | None = None,
+                source_edge_attr: Tensor | None = None, source_batch: Tensor | None = None) -> Tensor:
         a = reaction_type.shape[0]
         if a == 0:
             return source_atom_h.new_empty((0, self.output_dim))
@@ -192,6 +209,12 @@ class ReactionInstanceEncoder(nn.Module):
                 if pattern_id in self.neighborhood_encoders:
                     outside = self.neighborhood_encoders[pattern_id](source_atom_features, source_edge_index, sites)
                     inputs = torch.cat((inputs, outside), dim=-1)
+                if pattern_id in self.global_encoders:
+                    if source_edge_attr is None or source_batch is None:
+                        raise ValueError('Global attention requires source bond features and molecule ownership')
+                    global_h = self.global_encoders[pattern_id](source_atom_features, source_edge_index,
+                        source_edge_attr, source_batch, sites, reaction_tree_index[rows])
+                    inputs = torch.cat((inputs, global_h), dim=-1)
             else:
                 if encoder.position_count > self.roles.num_embeddings:
                     raise ValueError('Legacy pattern exceeds its saved role capacity')

@@ -130,7 +130,14 @@ hiddenInput.value='12';hiddenInput.dispatchEvent(new w.Event('input',{bubbles:tr
 const neighborInput=d.querySelector('#trainingPatternModels [data-pattern-parameter=neighborhood_hidden_dim]');neighborInput.value='7';neighborInput.dispatchEvent(new w.Event('input',{bubbles:true}));
 assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.pattern_model_params['0'].hidden_dim,12);
 assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.pattern_model_params['0'].neighborhood_hidden_dim,7);
-const modelArgs=ext.buildTrainingArgs(w.eval('getTrainingConfig()'));const architectureJSON=JSON.parse(modelArgs[modelArgs.indexOf('--model-architecture-json')+1]);assert.equal(architectureJSON.model_config.reaction_model_params.pattern_model_params['0'].hidden_dim,12);
+const globalLayers=d.querySelector('#trainingPatternModels [data-pattern-parameter=global_num_layers]');assert(globalLayers);assert.equal(globalLayers.value,'0');
+globalLayers.value='3';globalLayers.dispatchEvent(new w.Event('input',{bubbles:true}));
+const globalWidth=d.querySelector('#trainingPatternModels [data-pattern-parameter=global_hidden_dim]');globalWidth.value='12';globalWidth.dispatchEvent(new w.Event('input',{bubbles:true}));
+assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.pattern_model_params['0'].global_num_layers,3);
+assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.pattern_model_params['0'].global_hidden_dim,12);
+globalWidth.value='13';globalWidth.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(form.dataset.patternModelsValid,'false');
+globalWidth.value='12';globalWidth.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(form.dataset.patternModelsValid,'true');
+const modelArgs=ext.buildTrainingArgs(w.eval('getTrainingConfig()'));const architectureJSON=JSON.parse(modelArgs[modelArgs.indexOf('--model-architecture-json')+1]);assert.equal(architectureJSON.model_config.reaction_model_params.pattern_model_params['0'].hidden_dim,12);assert.equal(architectureJSON.model_config.reaction_model_params.pattern_model_params['0'].global_num_layers,3);
 mode('resume');assert.equal(d.querySelectorAll('#trainingPatternModels input, #trainingPatternModels select').length,0);
 post({type:'models/inspected',target:'models',path:'/models/base.pt',modelConfig:preset,patterns:[inspected]});
 assert(d.getElementById('modelDetails').textContent.includes('123 parameters'));
