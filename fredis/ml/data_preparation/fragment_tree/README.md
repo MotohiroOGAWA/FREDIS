@@ -542,3 +542,12 @@ Typical relations:
 User-facing guides: [data preparation](../../../../docs/guides/data-preparation.md)
 and [Workbench](../../../../docs/guides/workbench.md). Training details are in
 [`fragment_tree_training/README.md`](../../training/fragment_tree_training/README.md).
+
+
+### Retaining complete reaction-count levels
+
+During training data preparation, reaching a search limit retains the largest reaction count that can be enumerated exhaustively within the limit. For example, if the search exceeds a limit at reaction count 3, all results from count 3 and above are discarded, and annotation uses the complete tree through count 2. If even count 1 cannot be completed, annotation uses count 0 (Source only). Spectra whose precursors cannot be resolved in the retained tree are still excluded.
+
+`manifest.tsv` and `.preft.pt` metadata under `metadata.search_stats` record `requested_max_reaction_count`, `completed_max_reaction_count`, `search_truncated`, and `discarded_from_reaction_count`. The saved metadata also includes `limit_attempts`, containing each failed attempt's reaction-count bound, limit name, limit value, and observed counters. Ordinary search counters describe the complete retained tree.
+
+The same behavior applies to trainable SpecID verification, which uses `ReactionStructureBuilder`. After a limit is reached, the builder retries with a lower reaction-count bound instead of retaining incomplete combinations. If existing seeds exceed the retained bound, the source is excluded with a recorded reason rather than silently dropping those seeds.

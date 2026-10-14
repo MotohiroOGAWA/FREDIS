@@ -87,16 +87,29 @@ class ReactionStructureBuilder:
                                               for reaction in sequence.reactions},key=lambda reaction:reaction.key))
         self.last_reactions=tuple(reactions)
         # Full chemistry is permitted here, never inside neural forward.
-        try:
-            tree=fragmenter.build_fragment_ion_tree(source,max_unique_fragment_smiles=self.max_unique_fragment_smiles,
-                max_reaction_combinations=self.max_reaction_combinations,
-                seed_reaction_sequences=tuple(seed_compounds or ()), seed_compounds=seed_compounds,
-                addable_pattern_ids=addable_pattern_ids,
-                precomputed_reactions=precomputed_reactions)
-        except FragmentTreeLimitExceeded as error:
-            self.last_search_stats=error.stats
-            raise
-        self.last_search_stats=tree.search_stats
+        requested_count=fragmenter.tree_max_reaction_count
+        failures=[]
+        # Retry whole depths: never keep a partially enumerated combination size.
+        # The first successful bound is the largest exhaustively completed depth.
+        for completed_count in range(requested_count,-1,-1):
+            try:
+                tree=fragmenter.build_fragment_ion_tree(source,max_unique_fragment_smiles=self.max_unique_fragment_smiles,
+                    max_reaction_combinations=self.max_reaction_combinations,max_reaction_count=completed_count,
+                    seed_reaction_sequences=tuple(seed_compounds or ()),seed_compounds=seed_compounds,
+                    addable_pattern_ids=addable_pattern_ids,precomputed_reactions=precomputed_reactions)
+                break
+            except FragmentTreeLimitExceeded as error:
+                failures.append(dict(attempted_reaction_count=completed_count,limit_name=error.limit_name,
+                                     limit=error.limit,stats=error.stats))
+                self.last_search_stats=error.stats
+                if completed_count==0:raise
+            # A seed beyond the retained depth cannot be represented faithfully.
+            if seed_compounds and max(len(sequence.reactions) for sequence in seed_compounds)>completed_count-1:
+                raise FragmentTreeLimitExceeded(failures[-1]['limit_name'],failures[-1]['limit'],self.last_search_stats)
+        self.last_search_stats={**tree.search_stats,
+            'requested_max_reaction_count':requested_count,'completed_max_reaction_count':completed_count,
+            'search_truncated':bool(failures),'discarded_from_reaction_count':completed_count+1 if failures else None,
+            'limit_attempts':failures}
         self.last_reaction_sequence_compounds=tree.reaction_sequence_compounds
         # Resolve the observed precursor against the same already-built tree so
         # unreachable records can be dropped before teacher assignment. These

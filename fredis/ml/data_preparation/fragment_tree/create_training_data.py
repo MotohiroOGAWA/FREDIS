@@ -23,7 +23,8 @@ from .record_validation import inspect_records
 # Fragment-tree search statistics copied from each source's search_stats into
 # manifest.tsv (see README.md for their meaning).
 SEARCH_STAT_FIELDS=('num_primitive_reactions','num_raw_combinations','num_compiled_sequences',
-                    'num_rdkit_run_reactants','num_generated_fragments','num_unique_fragment_smiles')
+                    'num_rdkit_run_reactants','num_generated_fragments','num_unique_fragment_smiles',
+                    'requested_max_reaction_count','completed_max_reaction_count','search_truncated','discarded_from_reaction_count')
 # Why a source was skipped: a configured search limit, an unreachable
 # precursor, any other exception while preparing it, or its worker process dying.
 SKIP_LIMIT_EXCEEDED='limit_exceeded';SKIP_UNRESOLVED_PRECURSOR='unresolved_precursor'
@@ -107,7 +108,7 @@ def _prepare_group(task, builder, options):
     reaction_sequence_compounds=[(sequence,compound.mapped_smiles)
                                for sequence,compound in builder.last_reaction_sequence_compounds.items()]
     save_fragment_tree_structure(structure=structure,output_file=path,metadata=dict(smiles=smiles,record_indexes=kept_rows,
-        sample_annotations=structure.sample_annotations,reaction_sequence_compounds=reaction_sequence_compounds,
+        sample_annotations=structure.sample_annotations,search_stats=builder.last_search_stats,reaction_sequence_compounds=reaction_sequence_compounds,
         reaction_registry=_saved_reaction_registry(builder.last_reactions,builder.generator.fragmenter)))
     return path,kept_rows,structure.sample_annotations,structure_manifest_fields(structure),builder.last_search_stats
 
