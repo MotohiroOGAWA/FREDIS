@@ -19,7 +19,8 @@ def _metadata_config(saved):
         fragmenter = config.get('fragmenter_params') or config.get('fragmenterParams')
         if not fragmenter:
             continue
-        result = {'fragmenter_params': deepcopy(fragmenter), 'symbols': deepcopy(config.get('symbols'))}
+        result = {'fragmenter_params': deepcopy(fragmenter), 'symbols': deepcopy(config.get('symbols')),
+                  'reaction_models':deepcopy(config.get('reaction_models',config.get('reactionModels',[])))}
         if config.get('adduct_type_strs') is not None:
             result['adduct_type_strs'] = list(config['adduct_type_strs'])
         return result
@@ -50,10 +51,13 @@ def dataset_chemistry_config(directory):
         saved = json.loads(file.read_text())
         config = _metadata_config(saved)
         if config is not None:
+            for record in config.get('reaction_models',[]):
+                if record.get('source'):
+                    record['source']=str((file.parent/record['source']).resolve())
             candidates.append((filename, config))
     if not candidates:
         raise ValueError(f'Dataset preparation configuration was not found in {directory}')
-    for key in ('fragmenter_params', 'symbols', 'adduct_type_strs'):
+    for key in ('fragmenter_params', 'symbols', 'adduct_type_strs', 'reaction_models'):
         defined = [(filename, config.get(key)) for filename, config in candidates if config.get(key) is not None]
         if len(defined) > 1:
             first_file, first_value = defined[0]
@@ -63,7 +67,7 @@ def dataset_chemistry_config(directory):
                         f'Dataset metadata conflict for {key}: {first_file} differs from {filename} in {directory}. '
                         'Regenerate this dataset before training.')
     result = deepcopy(candidates[0][1])
-    for key in ('fragmenter_params', 'symbols', 'adduct_type_strs'):
+    for key in ('fragmenter_params', 'symbols', 'adduct_type_strs', 'reaction_models'):
         if result.get(key) is None:
             for _, config in candidates[1:]:
                 if config.get(key) is not None:
@@ -75,6 +79,8 @@ def dataset_chemistry_config(directory):
 def dataset_sources(train_dir, val_dir):
     train = dataset_chemistry_config(train_dir)
     validation = dataset_chemistry_config(val_dir)
+    if train.get('reaction_models',[]) != validation.get('reaction_models',[]):
+        raise ValueError('Training and validation reaction model selections differ')
     if train['fragmenter_params'] != validation['fragmenter_params']:
         raise ValueError('Training Fragmenter does not match Validation Fragmenter. Regenerate or reselect compatible datasets.')
     if train.get('adduct_type_strs') != validation.get('adduct_type_strs'):
@@ -88,7 +94,7 @@ def dataset_sources(train_dir, val_dir):
         from fredis.domain.fragment.fragmenter import Fragmenter
         adducts = [str(value) for value in Fragmenter.from_dict(train['fragmenter_params']).adduct_types]
     return {'fragmenter_params': deepcopy(train['fragmenter_params']),
-            'adduct_type_strs': list(adducts), 'symbols': train_symbols}
+            'adduct_type_strs': list(adducts), 'symbols': train_symbols, 'reaction_models':deepcopy(train.get('reaction_models',[]))}
 
 
 def inherit_model_config(model_config, train_dir, val_dir, *, prepared_max_roles: int | None,
@@ -102,6 +108,7 @@ def inherit_model_config(model_config, train_dir, val_dir, *, prepared_max_roles
                 raise ValueError(f'Dataset {key} differs from the training checkpoint')
         encoder_params = saved['mol_encoder_params']
     else:
+        config.setdefault('reaction_model_params',{}).setdefault('pattern_input_version',2)
         encoder_params = deepcopy(config.get('mol_encoder_params', {}))
         if not encoder_params:
             raise ValueError('Specify molecular encoder parameters for joint training')
@@ -118,4 +125,7 @@ def inherit_model_config(model_config, train_dir, val_dir, *, prepared_max_roles
     # pattern-derived minimum instead of reading tens of gigabytes up front.
     if prepared_max_roles is not None:
         config.setdefault('reaction_model_params', {})['max_roles'] = prepared_max_roles
+    if saved_model is None and sources.get('reaction_models'):
+        from .pattern_models import apply_dataset_pattern_models
+        config=apply_dataset_pattern_models(config,sources['reaction_models'])
     return config

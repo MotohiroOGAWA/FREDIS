@@ -42,7 +42,9 @@ def test_smarts_capacity_and_batched_match_gradients(smarts, atoms):
     torch.testing.assert_close(graphs, torch.cat([model.encode_matches(row[None])[1] for row in x]))
     graphs.square().sum().backward()
     assert x.grad is not None and torch.isfinite(x.grad).all()
-    assert model.positions.weight.grad is not None
+    assert not hasattr(model,"positions")
+    assert model.node_proj.in_features == 4 + atoms
+    assert model.node_proj.weight.grad[:, -atoms:].abs().sum() > 0
     with pytest.raises(ValueError, match='SMARTS atom count'):
         model(Data(x=torch.randn(atoms + 1, 4), edge_index=torch.empty((2, 0), dtype=torch.long)))
 

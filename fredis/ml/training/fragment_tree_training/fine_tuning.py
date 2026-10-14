@@ -66,6 +66,14 @@ def prepare_model_config(*, checkpoint_path, pattern_set_path, new_params_path, 
         raise ValueError('Only the reaction pattern set may change; keep adducts, depth and other Fragmenter settings unchanged.')
     mapping = pattern_mapping(old_fragmenter.reaction_pattern_set, new_fragmenter.reaction_pattern_set, allow_same=head_only)
     config = deepcopy(new_config)
+    from .pattern_models import pattern_config
+    config.setdefault('reaction_model_params',{}).setdefault('pattern_input_version',2)
+    role_tensor=checkpoint['model_state_dict'].get('feature_model.reaction_instance_encoder.roles.weight')
+    if role_tensor is not None:
+        config['reaction_model_params']['max_roles']=role_tensor.shape[0]
+    overrides = config.setdefault('reaction_model_params', {}).setdefault('pattern_model_params', {})
+    for old_id, new_id in mapping:
+        overrides[str(new_id)] = pattern_config(base_config, old_id)
     config['fragmenter_params'] = deepcopy(new_config['fragmenter_params'])
     config['fine_tuning'] = dict(version=2, source_checkpoint=str(checkpoint_path), pattern_set_path=str(pattern_set_path),
                                  pattern_mapping=mapping, frozen_pattern_ids=([p.pattern_id for p in new_fragmenter.reaction_pattern_set.patterns] if head_only else [pair[1] for pair in mapping]), head_only=head_only)
@@ -75,13 +83,16 @@ def prepare_model_config(*, checkpoint_path, pattern_set_path, new_params_path, 
 def initialize_from_base(model, model_config):
     """Copy shared tensors and complete existing pattern features by chemical identity."""
     config = model_config['fine_tuning']
+    if config.get('pattern_imports'):
+        from .pattern_models import initialize_imports
+        return initialize_imports(model, model_config)
     source = torch.load(config['source_checkpoint'], map_location='cpu', weights_only=False)['model_state_dict']
     target = model.state_dict()
     inverse = {int(new): int(old) for old, new in config['pattern_mapping']}
     used = set()
     for key, value in target.items():
         original_key = key
-        match = re.search(r'\.(?:reactant_encoders|pattern_heads)\.(\d+)\.', key)
+        match = re.search(r'\.(?:reactant_encoders|pattern_heads|neighborhood_encoders)\.(\d+)\.', key)
         if match:
             pid = int(match.group(1))
             if pid not in inverse:

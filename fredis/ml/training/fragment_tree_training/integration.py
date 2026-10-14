@@ -9,7 +9,7 @@ from fredis.domain.fragment.reaction import ReactionPatternSet
 from fredis.ml.specgen.source_anchored_spectrum_predictor import SourceAnchoredFragmentSpectrumGenerator
 from .model import ReactionFragmentTreeTrainingModel
 
-PATTERN_KEY = re.compile(r'\.(?:reactant_encoders|pattern_heads)\.(\d+)\.')
+PATTERN_KEY = re.compile(r'\.(?:reactant_encoders|pattern_heads|neighborhood_encoders)\.(\d+)\.')
 
 
 def integrate_checkpoints(checkpoints, head_checkpoint, output):
@@ -34,7 +34,7 @@ def integrate_checkpoints(checkpoints, head_checkpoint, output):
     common = {key: tensor for key, tensor in selected['model_state_dict'].items()
               if key.startswith(('feature_model.mol_encoder.', 'spectrum_model.mol_encoder.',
                                  'feature_model.reaction_instance_encoder.')) and not PATTERN_KEY.search(key)}
-    definitions = {}; owners = {}; pattern_tensors = {}
+    definitions = {}; owners = {}; pattern_tensors = {}; architectures = {}
     reference_chemistry = fragments[0].to_dict()
     reference_chemistry['fragment_ion_tree_builder'].pop('reaction_pattern_set')
     for path, checkpoint, fragmenter in zip(paths, saved, fragments):
@@ -45,7 +45,7 @@ def integrate_checkpoints(checkpoints, head_checkpoint, output):
         params = checkpoint['model_config'].get('params', checkpoint['model_config'])
         if params['mol_encoder_params'] != selected_params['mol_encoder_params']:
             raise ValueError(f'Conflicting molecular feature configuration: {path}')
-        for name in ('hidden_dim', 'max_roles', 'reaction_neighborhood_mode', 'reaction_neighborhood_max_hop'):
+        for name in ('hidden_dim', 'reaction_neighborhood_mode', 'reaction_neighborhood_max_hop'):
             if params.get('reaction_model_params', {}).get(name) != selected_params.get('reaction_model_params', {}).get(name):
                 raise ValueError(f'Conflicting shared reaction feature setting {name}: {path}')
         state = checkpoint['model_state_dict']
@@ -62,11 +62,16 @@ def integrate_checkpoints(checkpoints, head_checkpoint, output):
             if not tensors or not any('.pattern_heads.' in key for key in tensors):
                 raise ValueError('Checkpoint lacks complete pattern-owned feature readouts')
             identity = pattern.key
+            from .pattern_models import pattern_config
+            if identity in architectures and architectures[identity] != pattern_config(params, pattern.pattern_id):
+                raise ValueError(f'Conflicting architecture for pattern {pattern.name}')
             if identity in pattern_tensors:
                 prior = pattern_tensors[identity]
                 if set(prior) != set(tensors) or any(not torch.equal(prior[key], tensor) for key, tensor in tensors.items()):
                     raise ValueError(f'Conflicting weights for pattern {pattern.name}; select compatible branches')
             else:
+                from .pattern_models import pattern_config
+                architectures[identity] = pattern_config(params, pattern.pattern_id)
                 definitions[identity] = pattern.to_dict()
                 definitions[identity].pop('pattern_id', None)
                 owners[identity] = str(path)
@@ -74,6 +79,10 @@ def integrate_checkpoints(checkpoints, head_checkpoint, output):
     union = ReactionPatternSet.from_dict({'name': 'integrated_patterns', 'patterns': list(definitions.values())})
     # PatternSet assigns IDs from chemical definitions, so transfer by key.
     config['fragmenter_params']['fragment_ion_tree_builder']['reaction_pattern_set'] = union.to_dict()
+    role_tensor=selected['model_state_dict'].get('feature_model.reaction_instance_encoder.roles.weight')
+    if role_tensor is not None:
+        config.setdefault('reaction_model_params',{})['max_roles']=role_tensor.shape[0]
+    config.setdefault('reaction_model_params', {})['pattern_model_params'] = {str(p.pattern_id): architectures[p.key] for p in union.patterns}
     config['fine_tuning'] = {'version': 2, 'frozen_pattern_ids': [p.pattern_id for p in union.patterns],
                              'pattern_mapping': [], 'source_checkpoint': str(head)}
     from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
@@ -94,7 +103,7 @@ def integrate_checkpoints(checkpoints, head_checkpoint, output):
     model.load_state_dict(target, strict=True)
     report = {'inputs': list(map(str, paths)), 'head_checkpoint': str(head),
               'patterns': [{'id': p.pattern_id, 'name': p.name, 'source': owners[p.key]} for p in union.patterns],
-              'next_step': 'Prepare union-pattern data and train --fine-tune-checkpoint OUTPUT --head-only'}
+              'next_step': 'Prepare union-pattern data with --pretrained-pattern-model OUTPUT, then train using those datasets'}
     destination.parent.mkdir(parents=True, exist_ok=True)
     torch.save({'architecture': generator.architecture, 'model_config': config,
                 'model_state_dict': model.state_dict(), 'epoch': 0, 'integration': report}, destination)

@@ -248,6 +248,11 @@ def train_reactions(*, model_config: dict, train_dir: str | Path, val_dir: str |
     params=model_config.get('params',model_config)
     model_config=inherit_model_config(model_config,train_dir,val_dir,
         saved_model=model_config if resume or params.get('fine_tuning') else None,prepared_max_roles=None)
+    from .pattern_models import pattern_config
+    from fredis.domain.fragment import Fragmenter
+    reaction_params=model_config.setdefault('reaction_model_params',{})
+    reaction_params['pattern_model_params']={str(p.pattern_id):pattern_config(model_config,p.pattern_id)
+        for p in Fragmenter.from_dict(model_config['fragmenter_params']).reaction_pattern_set.patterns}
     model_config['max_samples']=max_samples
     (output/'training_config.json').write_text(json.dumps({'model_config':model_config,'training':settings},indent=2))
     startup_progress.update(1);startup_progress.set_description_str('CUDA model',refresh=True)
@@ -570,7 +575,7 @@ MOL_ENCODER_OPTIONS = {flag: (key, kind, default)
 
 def training_model_config(args):
     config = {'max_samples':args.max_samples,'architecture': 'fragment-tree-physical-ion',
-              'reaction_model_params': {}, 'spectrum_model_params': {}, 'generation_params': {}}
+              'reaction_model_params': {'pattern_input_version':2}, 'spectrum_model_params': {}, 'generation_params': {}}
     config['mol_encoder_params'] = {
         key: getattr(args, flag.replace('-', '_'))
         for flag, (key, _, _) in MOL_ENCODER_OPTIONS.items()
@@ -611,6 +616,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     for name in ('train-dir','val-dir'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--output-dir',required=True,type=output_directory)
     parser.add_argument('--epochs',type=int,default=1);parser.add_argument('--batch-size',type=int,default=4)
+    parser.add_argument('--model-architecture-json', help='Inline architecture assembly JSON; new models only')
+    parser.add_argument('--model-architecture', help='Architecture JSON: model_config and pretrained_patterns; new models only')
     parser.add_argument('--device',default='cuda');parser.add_argument('--lr',type=float,default=1e-4);parser.add_argument('--resume')
     parser.add_argument('--initialize-from',help='Initialize compatible joint-model weights with a fresh optimizer.')
     parser.add_argument('--head-only',action='store_true',help='Freeze all pattern features and train downstream prediction only; requires --fine-tune-checkpoint.')
@@ -644,6 +651,20 @@ def main(argv: list[str] | None = None) -> None:
     output.mkdir(parents=True,exist_ok=True)
     (output/'training_args.json').write_text(json.dumps(vars(args),indent=2))
     model_config=training_model_config(args)
+    if args.model_architecture or args.model_architecture_json:
+        if args.resume or args.fine_tune_checkpoint:
+            raise ValueError('--model-architecture cannot change a resumed checkpoint')
+        from .sources import inherit_model_config
+        from .pattern_models import assemble_config
+        architecture=json.loads(args.model_architecture_json or Path(args.model_architecture).read_text())
+        architecture.get('model_config',architecture).setdefault('reaction_model_params',{}).setdefault('pattern_input_version',2)
+        model_config=inherit_model_config(architecture.get('model_config', architecture), args.train_dir, args.val_dir,
+                                          saved_model=None, prepared_max_roles=None)
+        if architecture.get('pretrained_patterns'):
+            from .sources import dataset_sources
+            if dataset_sources(args.train_dir,args.val_dir).get('reaction_models'):
+                raise ValueError('Reaction models are fixed by dataset preparation; do not override them at training time')
+            model_config=assemble_config(model_config, architecture['pretrained_patterns'])
     # A new expansion must be materialized before training.  Ordinary and
     # resumed runs defer inheritance to train_reactions(), where the already
     # loaded dataset supplies max_roles without another complete disk scan.

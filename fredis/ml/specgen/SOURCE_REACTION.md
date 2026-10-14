@@ -104,3 +104,8 @@ fine-tuning checkpoints may be extended repeatedly. Integration copies complete
 pattern units by chemical identity and rejects conflicting shared/duplicate
 features; the selected downstream predictor can then be trained with
 `--head-only`. See `docs/guides/training.md` for CLI and Workbench usage.
+
+
+New reaction modules (`pattern_input_version=2`) consume raw chemical features from the prepared source graph rather than molecular encoder atom embeddings. Each SMARTS atom receives concatenated chemical features, its pattern-owned external message-passing feature, and a fixed query-position one-hot. `hidden_dim` is the Graphormer attention width; `neighborhood_hops` and `neighborhood_hidden_dim` configure its external encoder separately. External traversal blocks all other atoms in that SMARTS match, propagates inward through shells 1..k, and produces exact zeros for roles without external connections. The full prepared source graph supports any non-negative radius. Legacy pretrained modules preserve their saved encodings.
+
+Reaction definitions and pretrained source selections belong to data preparation. New pattern architectures belong to Training and are saved with the prediction checkpoint, not in preparation metadata. Neighborhood encoders are complete pattern-owned features and are frozen/exported/remapped/integrated together with the Graphormer and readout.

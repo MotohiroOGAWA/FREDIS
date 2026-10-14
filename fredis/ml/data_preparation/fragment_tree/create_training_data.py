@@ -16,6 +16,7 @@ from .manifest_summary import structure_manifest_fields
 from .context import create_preparation_context, validate_limits
 from fredis.cli.base import output_directory
 from fredis.cli.chemistry_options import configure_chemistry_options, resolve_chemistry_options
+from .pretrained_models import stage_pretrained_models, relocate_sources
 from .datasets import load_spectrum_dataset, split_by_smiles, dedupe_validation
 from .record_validation import inspect_records
 
@@ -199,7 +200,12 @@ def create_reaction_training_data(*, dataset: MSDataset, chemistry_config: dict,
     if _check_existing and not overwrite:
         existing=list(output.rglob('*.preft.pt'))
         if existing: raise FileExistsError('Output already contains training structures. Enable overwrite or choose another directory.')
-    _reset_output(output,overwrite)
+    if preparation_config is None:
+        with stage_pretrained_models(chemistry_config) as staged:
+            _reset_output(output,overwrite)
+            chemistry_config=staged.install(output)
+    else:
+        _reset_output(output,overwrite)
     (output/'invalid_records.json').write_text(json.dumps(inspection['invalidRecords'],indent=2))
     options=dict(output_dir=str(output),adduct_type_column=adduct_type_column,collision_energy_column=collision_energy_column,
         precursor_mz_column=precursor_mz_column,minimum_relative_intensity=minimum_relative_intensity,
@@ -345,6 +351,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',required=True);parser.add_argument('--output-dir',required=True,type=output_directory)
     configure_chemistry_options(parser)
+    parser.add_argument('--pretrained-pattern-model',action='append',help='Add every pretrained reaction pattern from a prediction checkpoint or .reaction-model.pt; repeatable')
+    parser.add_argument('--reaction-models-json',help='Reaction definitions and pretrained selections; new pattern architecture is configured during training')
     for name,default in (('smiles','SMILES'),('adduct-type','AdductType'),('collision-energy','CollisionEnergy'),('precursor-mz','PrecursorMZ')):
         parser.add_argument('--'+name+'-column',default=default,help='Dataset metadata column.')
         parser.add_argument('--validation-'+name+'-column',help='Validation dataset column, if it differs from --'+name+'-column.')
@@ -368,6 +376,14 @@ def main(argv: list[str] | None = None) -> None:
     # validating either dataset; those checks can be expensive on large files.
     _confirm_existing_output(args)
     config=resolve_chemistry_options(args)
+    records=json.loads(args.reaction_models_json) if args.reaction_models_json else []
+    if args.pretrained_pattern_model:
+        from fredis.ml.training.fragment_tree_training.pattern_models import inspect_model
+        for path in args.pretrained_pattern_model:
+            records.extend(dict(pattern=item['pattern'],source=path,source_pattern_id=item['pattern']['pattern_id']) for item in inspect_model(path)['patterns'])
+    if records:
+        from fredis.ml.training.fragment_tree_training.pattern_models import prepare_pattern_models
+        config=prepare_pattern_models(config,records)
     validate_limits(args.max_unique_fragment_smiles,args.max_reaction_combinations)
     dataset=load_spectrum_dataset(args.input)
     # Exclude invalid metadata before collecting adducts or splitting molecules.
@@ -440,7 +456,10 @@ def main(argv: list[str] | None = None) -> None:
         if not isinstance(previous,dict): previous={}
     except (OSError,json.JSONDecodeError):
         previous={}
-    _reset_output(output,bool(args.overwrite),[value for value in (args.input,args.validation_input,args.params) if value])
+    with stage_pretrained_models(config) as staged:
+        _reset_output(output,bool(args.overwrite),[value for value in (args.input,args.validation_input,args.params) if value])
+        archived=staged.install(output)
+    config.clear();config.update(archived)
     workbench_path.unlink(missing_ok=True)
     aliases={'validation_input':'validationInput','validation_ratio':'validationRatio','validation_seed':'validationSeed',
         'output_dir':'outputDir','smiles_column':'smilesColumn','adduct_type_column':'adductTypeColumn',
@@ -455,7 +474,7 @@ def main(argv: list[str] | None = None) -> None:
         if key=='chemistry_config': continue
         if key=='validation_ratio' and value is None: continue
         restored[aliases.get(key,key)]=value
-    restored.update(fragmenterParams=config['fragmenter_params'],symbols=config['symbols'])
+    restored.update(fragmenterParams=config['fragmenter_params'],symbols=config['symbols'],reactionModels=config.get('reaction_models',[]))
     restored.pop('modelConfig',None);restored.pop('params',None)
     preparation_config['workbench_config']=restored
     (output/'preparation_config.json').write_text(json.dumps(preparation_config,indent=2))
@@ -464,10 +483,11 @@ def main(argv: list[str] | None = None) -> None:
     for name,split_dataset in splits:
         directory=output/(name+'_structures')
         directory.mkdir(parents=True,exist_ok=True)
-        split_config={**restored,'split':name,'status':'running'}
+        split_chemistry=relocate_sources(config,output,directory)
+        split_config={**restored,'reactionModels':split_chemistry.get('reaction_models',[]),'split':name,'status':'running'}
         (directory/'fragment-tree.pft').write_text(json.dumps(split_config,indent=2))
         # The split is newly empty after resetting Output Directory. Do not delete its configuration.
-        create_reaction_training_data(dataset=split_dataset,output_dir=directory,split=name,**{**(kwargs if name=='train' else validation_kwargs),'overwrite':False},_check_existing=False)
+        create_reaction_training_data(dataset=split_dataset,output_dir=directory,split=name,**{**(kwargs if name=='train' else validation_kwargs),'chemistry_config':split_chemistry,'overwrite':False},_check_existing=False)
         split_config['status']='completed'
         (directory/'fragment-tree.pft').write_text(json.dumps(split_config,indent=2))
     (output/'invalid_records.json').write_text(json.dumps(reports,indent=2))

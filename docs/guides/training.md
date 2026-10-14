@@ -1,4 +1,4 @@
-# Train and fine-tune
+# Train and assemble reaction models
 
 ```bash
 python -m fredis.cli train fragment-tree \
@@ -29,6 +29,70 @@ After selecting both prepared datasets, Workbench checks that their Fragmenter s
 ## Initialize from or resume a checkpoint
 
 Use `--initialize-from models/base/last.pt` to fine-tune compatible model weights with a fresh optimizer and epoch counter. Configuration and prepared structures must match the checkpoint architecture. Use `--resume` to continue an interrupted training run with its optimizer state instead.
+
+## Reaction models belong to Training Data preparation
+
+In **Training Data → Fragmentation**, add pretrained reaction models (`.reaction-model.pt` or a complete prediction checkpoint) and new definitions (`.reaction.pft` / `.reactionset.pft`). Imported model definitions are included in the Fragmenter before any reaction enumeration or peak assignment. Lists support per-pattern removal and the same detail component as **Models**.
+
+Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, new patterns have independent `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `dropout`, `neighborhood_hops`, `neighborhood_hidden_dim`, and `descriptors`. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
+
+CLI can add every pattern from a checkpoint during preparation:
+
+```bash
+python -m fredis.cli train create-fragment-tree-data \
+  --input spectra.msds --output-dir data/prepared \
+  --params chemistry.fragmenter.pft \
+  --pretrained-pattern-model models/base/last.pt
+```
+
+The repeatable `--pretrained-pattern-model` also accepts a single `.reaction-model.pt`. For selected imports and new chemical definitions, `--reaction-models-json` accepts a JSON array:
+
+```json
+[
+  {
+    "pattern": {"name": "carbon", "reactant_smarts": "[#6:1]-[#6:2]", "products": [{"name": "left", "smarts": "[*:1]"}]},
+    "source": "models/carbon.reaction-model.pt",
+    "source_pattern_id": 0
+  },
+  {
+    "pattern": {"name": "ether", "reactant_smarts": "[#6:1]-[#8:2]-[#6:3]", "products": [{"name": "oxygen", "smarts": "[*:2]"}]}
+  }
+]
+```
+
+Training accepts `--model-architecture architecture.json` for per-pattern model settings. IDs below refer to the prepared dataset, not to imported source checkpoints:
+
+```json
+{
+  "model_config": {
+    "mol_encoder_params": {"node_dim": 16, "graph_dim": 64, "num_layers": 2, "num_heads": 4},
+    "reaction_model_params": {
+      "pattern_input_version": 2,
+      "pattern_model_params": {
+        "2": {"hidden_dim": 64, "graph_dim": 128, "num_layers": 3, "num_heads": 4, "dropout": 0, "neighborhood_hops": 3, "neighborhood_hidden_dim": 32, "descriptors": []}
+      }
+    }
+  }
+}
+```
+
+A SMARTS atom input is `[raw chemical features | external-neighborhood feature | fixed SMARTS-position one-hot]`, projected to `hidden_dim` before Graphormer attention. Neighborhood features use their own learnable `neighborhood_hidden_dim`. Propagation moves through external bonds from radius k toward the connected SMARTS atom and includes shells 1..k. Other SMARTS atoms are blocked while collecting that role's external structure, so a substituent on one role does not populate another role through the SMARTS backbone. Roles with no external neighbors receive exact zeros. `neighborhood_hops=0` disables this channel; the prepared full source graph permits radii beyond three without changing reaction chemistry or re-preparing data.
+
+Existing pretrained checkpoints retain their legacy input/position encoding. Fresh training and new pattern settings use `pattern_input_version=2`, and checkpoints record each pattern's input mode. Imported modules are not silently converted. Pattern-owned neighborhood weights are exported, initialized, frozen and integrated with their Graphormer/readout.
+
+The source ID belongs to the imported checkpoint. IDs in the prepared dataset are reassigned from chemical definitions. Imported architectures are restored from their source rather than overridden. The usual `train fragment-tree --train-dir ... --val-dir ...` then automatically freezes imported features and trains new pattern modules and downstream predictors.
+
+Dataset preparation copies every selected pretrained checkpoint or `.reaction-model.pt` into the output's `pretrained_models/` directory. SHA-256 names deduplicate repeated references to the same file contents, and `manifest.json` records each copy's size and checksum. Configuration files store paths relative to their own location; train and validation splits share the copies in their dataset root. Copy or move the entire output directory, including `pretrained_models/`, to use it elsewhere. Training resolves the local copies automatically and never needs the original pretrained files. Workbench also resolves these relative paths when restoring preparation settings. Direct Python preparation calls bundle their dependencies in the same way.
+
+A reaction file includes complete encoder/readout weights and shared source-feature dependencies. Imports require compatible shared source weights and settings. Prediction checkpoints embed all weights; prediction and Resume do not require the original import files. A prediction-only integrated checkpoint is selected as a pretrained source while preparing another dataset; it cannot Resume an optimizer it does not contain.
+
+Models exports individual patterns with:
+
+```bash
+python -m fredis.cli train export-pattern \
+  --checkpoint models/base/last.pt --pattern-id 0 \
+  --output models/bond.reaction-model.pt
+```
 
 ## Fine-tune immutable pattern features
 
@@ -102,10 +166,7 @@ python -m fredis.cli train fragment-tree \
   --fine-tune-checkpoint models/lipids.pt --head-only
 ```
 
-Workbench **Fine-tune patterns** accepts checkpoints from any stage and includes
-**Train prediction heads only**. **Integrate Pattern Models** accepts one input
-checkpoint path per line, a downstream-predictor checkpoint and a new output
-path, and reports compatibility errors. The adapter-width field is removed.
+Workbench uses **New model** and **Resume training**. Add checkpoints or single reaction models under **Training Data → Fragmentation**, then select those prepared datasets in New model. Imported patterns are frozen; patterns without imported models are trained from scratch. Import an integrated checkpoint to train its prediction modules with every reaction feature frozen. **Integrate Pattern Models** combines compatible branches and selects their downstream predictor.
 
 To reproduce the complete small experimental-data workflow, run:
 
@@ -145,6 +206,6 @@ A uniformly sampled subset is fixed using the training seed so successive checks
 
 In **Workbench → New Training → Optimization and Loss**, set **Validation interval (optimizer steps, 0 disables)** to `1000` and **Intermediate validation fraction** to `0.1`. These values are included in Copy Command, Start Training, and saved training settings. New-form defaults can also be set through `fredis.workbench.trainingDefaults` using `validationIntervalSteps` and `validationFraction`.
 
-Each check emits an `intermediate_validation_end` JSON event with step, sample count, loss components, and reaction/spectrum metrics. Workbench Training Jobs shows the latest result and a loss chart against optimizer steps. Results are saved in `intermediate_validation.json` and `intermediate_validation.tsv`; `intermediate_validation_subset.json` records the selected sample indices. TensorBoard step metrics are stored under `tensorboard/iterations` and are included when opening the parent `tensorboard` directory.
+Each check emits an `intermediate_validation_end` JSON event with step, sample count, loss components, and reaction/spectrum metrics. The training progress section shows the latest result and a loss chart against optimizer steps. Results are saved in `intermediate_validation.json` and `intermediate_validation.tsv`; `intermediate_validation_subset.json` records the selected sample indices. TensorBoard step metrics are stored under `tensorboard/iterations` and are included when opening the parent `tensorboard` directory.
 
 Full validation still runs at each epoch end. Learning-rate scheduling, early stopping, and best-checkpoint selection use full-validation results; intermediate checks are for monitoring.

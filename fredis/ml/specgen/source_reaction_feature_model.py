@@ -35,6 +35,8 @@ class SourceReactionFeatureModel(nn.Module):
                  reactant_num_layers: int = 2, reactant_dropout: float = 0.0,
                  reactant_node_dim: int | None = None, reactant_graph_dim: int | None = None,
                  pattern_category_sizes: dict[int, tuple[int, int]] | None = None,
+                 pattern_model_params: dict[str, dict] | None = None,
+                 pattern_input_version: int = 1,
                  ) -> None:
         super().__init__()
         if not 1 <= reaction_neighborhood_max_hop <= MAX_NEIGHBORHOOD_HOP:
@@ -44,7 +46,8 @@ class SourceReactionFeatureModel(nn.Module):
         self.reaction_instance_encoder = ReactionInstanceEncoder(mol_encoder.node_dim, mol_encoder.graph_dim, hidden_dim, category_sizes, num_heads,
             max_roles, reaction_neighborhood_mode=reaction_neighborhood_mode, reaction_neighborhood_max_hop=reaction_neighborhood_max_hop,
             pattern_smarts=pattern_smarts, reactant_num_layers=reactant_num_layers, reactant_dropout=reactant_dropout,
-            reactant_node_dim=reactant_node_dim, reactant_graph_dim=reactant_graph_dim, pattern_category_sizes=pattern_category_sizes)
+            reactant_node_dim=reactant_node_dim, reactant_graph_dim=reactant_graph_dim, pattern_category_sizes=pattern_category_sizes, pattern_model_params=pattern_model_params, raw_atom_dim=mol_encoder.graph_builder.atom_dim,
+            pattern_input_version=pattern_input_version)
         if not isinstance(adduct_encoder,AdductEmbeddingLayer):
             raise TypeError("Branching requires an explicit main-adduct encoder")
         if not isinstance(collision_energy_encoder,CollisionEnergyFeatureLayer):
@@ -81,26 +84,28 @@ class SourceReactionFeatureModel(nn.Module):
             atoms.append(encoded.x);molecules.append(encoded.embeddings)
         source_x=torch.cat(atoms);source_h=torch.cat(molecules)
         kwargs={name:getattr(data,name).to(device) for name in ('reaction_type','reaction_tree_index','reaction_source_atom_ptr','reaction_source_atom_index','reaction_static_features','reaction_source_atom_features')}
+        kwargs['source_atom_features']=data.source_graph.x.to(device)
+        kwargs['source_edge_index']=data.source_graph.edge_index.to(device)
+        kwargs['source_descriptors']=data.source_graph.descriptors.to(device)
         kwargs['reaction_source_atom_hops']=self._hop_tensors(data,device)
         reactions=self.reaction_instance_encoder(source_atom_h=source_x,source_mol_h=source_h,**kwargs)
         return reactions,source_h
 
     def _hop_tensors(self,data,device=None):
+        if all(config['input_mode']=='chemical' for config in self.reaction_instance_encoder.pattern_model_params.values()):
+            return []
         hops=[(getattr(data,f'reaction_source_atom_hop{hop}_ptr'),getattr(data,f'reaction_source_atom_hop{hop}_index'))
               for hop in range(1,self.reaction_instance_encoder.reaction_neighborhood_max_hop+1)]
         return [(ptr.to(device),index.to(device)) for ptr,index in hops] if device is not None else hops
 
     def forward(self, data: object, training_pool: bool = False, static_features: tuple[Tensor, Tensor] | None = None) -> SourceReactionFeatures:
-        if data.max_reaction_role_count > self.reaction_instance_encoder.roles.num_embeddings:
-            raise ValueError("This data's max_reaction_role_count exceeds the model's role embedding size; "
-                             "the role capacity is derived from the configured patterns and retained in checkpoints, "
-                             "so retrain against a dataset that matches this checkpoint's reaction universe")
         source = self.mol_encoder.encode_with_nodes(data.source_graph) if static_features is None else None
         reaction = self.reaction_instance_encoder(source_atom_h=source.x, source_mol_h=source.embeddings,
             reaction_type=data.reaction_type, reaction_tree_index=data.reaction_tree_index,
             reaction_source_atom_ptr=data.reaction_source_atom_ptr, reaction_source_atom_index=data.reaction_source_atom_index,
             reaction_static_features=data.reaction_static_features,reaction_source_atom_features=data.reaction_source_atom_features,
-            reaction_source_atom_hops=self._hop_tensors(data)) if static_features is None else static_features[0]
+            reaction_source_atom_hops=self._hop_tensors(data), source_descriptors=data.source_graph.descriptors, source_atom_features=data.source_graph.x,
+            source_edge_index=data.source_graph.edge_index) if static_features is None else static_features[0]
         source_embeddings = source.embeddings if source is not None else static_features[1]
         sample_adduct=self.intensity_main_adduct_projection(self.adduct_encoder(data.condition_features[:,0].long()))
         collision_energy=self.collision_energy_encoder(data.condition_features[:,1])

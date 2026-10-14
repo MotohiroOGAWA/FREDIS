@@ -177,7 +177,7 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         // configuration by content (normalizeConfig), so any filename works.
         const picked = message.type==='loadConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadConfigJSON'?[{fsPath:message.name||'fragment-tree.pft'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
         if (picked && picked[0]) {
-          const config = normalizeConfig(JSON.parse(message.type==='loadConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8')));
+          const config = normalizeConfig(JSON.parse(message.type==='loadConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8')),message.type==='loadConfigJSON'?undefined:path.dirname(picked[0].fsPath));
           panel.webview.postMessage({ type: 'config', path: message.type==='loadConfigJSON'?undefined:picked[0].fsPath, config: normalizeConfig({ ...defaultConfig(context), ...config }) });
         }
       } else if (message.type === 'saveTrainingConfig') {
@@ -345,7 +345,7 @@ function runSpectrumPredictionBackend(context, payload) {
   });
 }
 
-function normalizeConfig(config) {
+function normalizeConfig(config, baseDirectory) {
   const result={...config,...config.workbench_config};
   delete result.workbench_config;
   const aliases={validation_input:'validationInput',validation_ratio:'validationRatio',validation_seed:'validationSeed',
@@ -356,7 +356,8 @@ function normalizeConfig(config) {
     num_workers:'numWorkers',chunk_size:'chunkSize',max_unique_fragment_smiles:'maxUniqueFragmentSmiles',max_reaction_combinations:'maxReactionCombinations'};
   for(const [from,to] of Object.entries(aliases)){if(result[from]!==undefined&&result[to]===undefined)result[to]=result[from];delete result[from];}
   const chemistry=result.chemistry_config;delete result.chemistry_config;
-  if(chemistry){result.fragmenterParams??=chemistry.fragmenter_params;result.symbols??=chemistry.symbols;}
+  if(chemistry){result.fragmenterParams??=chemistry.fragmenter_params;result.symbols??=chemistry.symbols;result.reactionModels??=chemistry.reaction_models||[];}
+  if(baseDirectory&&Array.isArray(result.reactionModels))result.reactionModels=result.reactionModels.map(record=>({...record,...(record.source?{source:path.resolve(baseDirectory,record.source)}:{})}));
   if(result.validationRatio==null)delete result.validationRatio;
   if(result.validationInput==null)result.validationInput='';
   result.input ||= result.trainInput;
@@ -432,6 +433,7 @@ function buildArgs(c) {
   const args=['-m', 'fredis.cli', 'train', 'create-fragment-tree-data',
     '--input', c.input || c.trainInput, '--output-dir', c.outputDir];
   if(c.fragmenterParams) args.push('--params-json',JSON.stringify(c.fragmenterParams));
+  if(c.reactionModels?.length)args.push('--reaction-models-json',JSON.stringify(c.reactionModels));
   if(c.symbols)args.push('--symbols-json',JSON.stringify(c.symbols));
   for(const [key,flag]of Object.entries({maxUniqueFragmentSmiles:'--max-unique-fragment-smiles',maxReactionCombinations:'--max-reaction-combinations'}))if(c[key]!==undefined)args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({smilesColumn:'--smiles-column',adductTypeColumn:'--adduct-type-column',collisionEnergyColumn:'--collision-energy-column',precursorMzColumn:'--precursor-mz-column'}))if(c[key])args.push(flag,c[key]);
@@ -453,11 +455,13 @@ function buildTrainingArgs(c) {
     '--epochs', String(c.epochs || 1), '--batch-size', String(c.batchSize || 4),
     '--device', c.device || 'cuda', '--lr', String(c.lr ?? 0.0001)];
   if(!c.resume&&!c.fineTuneCheckpoint){
+    if(c.pretrainedPatterns?.length||c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.reaction_model_params.state_dropout=c.dropout??0;model.spectrum_model_params??={};model.spectrum_model_params.dropout=c.dropout??0;a.push('--model-architecture-json',JSON.stringify({model_config:model,pretrained_patterns:c.pretrainedPatterns||[]}));}
+
     const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',state_num_layers:'reaction-state-layers',reaction_neighborhood_mode:'reaction-neighborhood-mode',reaction_neighborhood_max_hop:'reaction-neighborhood-max-hop'},spectrum_model_params:{hidden_dim:'spectrum-hidden-dim',num_layers:'spectrum-num-layers',num_heads:'spectrum-num-heads',ion_embedding_dim:'ion-embedding-dim',hydrogen_shift_embedding_dim:'hydrogen-shift-embedding-dim',state_hidden_dim:'ion-state-hidden-dim',main_adduct_dim:'main-adduct-embedding-dim',collision_energy_dim:'collision-energy-feature-dim'},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',ion_prediction_threshold:'ion-prediction-threshold',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist',dropout:'dropout'}};
     for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,String(value));}
     const descriptors=c.modelConfig?.mol_encoder_params?.descriptors;if(Array.isArray(descriptors))a.push('--descriptors',...descriptors);
   }
-  for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));
+  for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (!(c.resume&&key==='dropout')&&c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));
   if(c.cacheDatasetInMemory)a.push('--cache-dataset-in-memory');
   if(c.overwrite)a.push('--overwrite');
   if (c.initializeFrom) a.push('--initialize-from', c.initializeFrom);

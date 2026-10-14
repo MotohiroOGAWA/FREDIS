@@ -19,7 +19,11 @@ def configure_pattern_training(generator, config):
         if pid not in frozen:
             encoder.requires_grad_(True)
             reaction.pattern_heads[pid].requires_grad_(True)
+            if pid in reaction.neighborhood_encoders:
+                reaction.neighborhood_encoders[pid].requires_grad_(True)
         else:
             encoder.eval()
             reaction.pattern_heads[pid].eval()
+            if pid in reaction.neighborhood_encoders:
+                reaction.neighborhood_encoders[pid].eval()
     generator.feature_model.freeze_mol_encoder()
