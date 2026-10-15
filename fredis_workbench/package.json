@@ -118,6 +118,12 @@
           },
           {
             "filenamePattern": "*.fredis-result"
+          },
+          {
+            "filenamePattern": "*.training-data.pft"
+          },
+          {
+            "filenamePattern": "*.tuning.pft"
           }
         ],
         "priority": "default"
@@ -126,8 +132,12 @@
         "viewType": "fredis.evaluationConfigEditor",
         "displayName": "FREDIS Evaluation",
         "selector": [
-          { "filenamePattern": "*.evalcol.pft" },
-          { "filenamePattern": "*.evalgroup.pft" }
+          {
+            "filenamePattern": "*.evalcol.pft"
+          },
+          {
+            "filenamePattern": "*.evalgroup.pft"
+          }
         ],
         "priority": "default"
       },
@@ -135,7 +145,9 @@
         "viewType": "fredis.reactionPatternEditor",
         "displayName": "FREDIS Reaction Pattern",
         "selector": [
-          { "filenamePattern": "*.reaction.pft" }
+          {
+            "filenamePattern": "*.reaction.pft"
+          }
         ],
         "priority": "default"
       },
@@ -143,7 +155,9 @@
         "viewType": "fredis.reactionPatternSetEditor",
         "displayName": "FREDIS Reaction Pattern Set",
         "selector": [
-          { "filenamePattern": "*.reactionset.pft" }
+          {
+            "filenamePattern": "*.reactionset.pft"
+          }
         ],
         "priority": "default"
       },
@@ -151,7 +165,9 @@
         "viewType": "fredis.adductRuleEditor",
         "displayName": "FREDIS Fragment Ion Adduct Rule",
         "selector": [
-          { "filenamePattern": "*.adduct.pft" }
+          {
+            "filenamePattern": "*.adduct.pft"
+          }
         ],
         "priority": "default"
       },
@@ -159,7 +175,9 @@
         "viewType": "fredis.adductRuleSetEditor",
         "displayName": "FREDIS Fragment Ion Adduct Rule Set",
         "selector": [
-          { "filenamePattern": "*.adductset.pft" }
+          {
+            "filenamePattern": "*.adductset.pft"
+          }
         ],
         "priority": "default"
       },
@@ -167,7 +185,9 @@
         "viewType": "fredis.fragmenterEditor",
         "displayName": "FREDIS Fragmenter Config",
         "selector": [
-          { "filenamePattern": "*.fragmenter.pft" }
+          {
+            "filenamePattern": "*.fragmenter.pft"
+          }
         ],
         "priority": "default"
       }
@@ -241,19 +261,23 @@
     "languages": [
       {
         "id": "fredis-workbench-file",
-        "aliases": ["FREDIS Workbench File"],
+        "aliases": [
+          "FREDIS Workbench File"
+        ],
         "extensions": [
           ".pft",
-        ".fredis-result",
-        ".reaction-pattern-analysis.pft",
-        ".reactionpatternanalysis.pft",
+          ".fredis-result",
+          ".reaction-pattern-analysis.pft",
+          ".reactionpatternanalysis.pft",
           ".evalcol.pft",
           ".evalgroup.pft",
           ".reaction.pft",
           ".reactionset.pft",
           ".adduct.pft",
           ".adductset.pft",
-          ".fragmenter.pft"
+          ".fragmenter.pft",
+          ".training-data.pft",
+          ".tuning.pft"
         ],
         "icon": {
           "light": "./media/icons/fredis-file.svg",
@@ -294,7 +318,8 @@
     "check:reaction-preview": "node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-service.js",
     "check:reaction-pattern-analysis": "node --check src/features/reaction-pattern-analysis/editor.js && node --check src/features/reaction-pattern-analysis/results-view.js && node scripts/check-reaction-pattern-analysis.js",
     "check:projects": "node scripts/check-projects.js",
-    "check:workbench": "node scripts/check-projects.js && node scripts/check-workbench.js && node scripts/check-workbench-jobs.js && node scripts/check-parameter-editor.js && node scripts/check-defaults.js"
+    "check:workbench": "node scripts/check-projects.js && node scripts/check-workbench.js && node scripts/check-workbench-jobs.js && node scripts/check-parameter-editor.js && node scripts/check-defaults.js",
+    "check:tuning": "node scripts/check-tuning.js && node scripts/check-tuning-result.js && cd .. && python -m unittest discover -s tests/ml/tuning -p \"test_*.py\""
   },
   "devDependencies": {
     "@vscode/vsce": "2.15.0",

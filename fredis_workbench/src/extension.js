@@ -35,7 +35,7 @@ const fragmenterEditor = require('./features/fragmenter/editor');
 const reactionPatternHost = require('./features/reaction-pattern-set/host');
 const { projectRoot, isFredisRoot, runChemistryBackend, showElementPicker, readReactionPatternImport, safeFileStem, ensureFileSuffix } = reactionPatternHost;
 
-const RESULT_NAME = 'fragment-tree.pft';
+const RESULT_NAME = 'fragment-tree.training-data.pft';
 const REACTION_PATTERN_ANALYSIS_CONFIG_VIEW_TYPE = 'fredis.reactionPatternAnalysisConfigEditor';
 // result.reactionpatternanalysis.pft is binary HDF5; it opens in the Workbench, never as text.
 const REACTION_PATTERN_ANALYSIS_RESULT_VIEW_TYPE = 'fredis.reactionPatternAnalysisResultEditor';
@@ -170,12 +170,12 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
           panel.webview.postMessage({ type: 'picked', form: message.form, field: message.field, value: picked[0].fsPath });
         }
       } else if (message.type === 'saveConfig') {
-        const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS run configuration': ['pft'] }, defaultUri: vscode.Uri.file('fragment-tree.pft') });
+        const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS training dataset': ['training-data.pft'] }, defaultUri: vscode.Uri.file('fragment-tree.training-data.pft') });
         if (target) {await fs.promises.writeFile(target.fsPath, JSON.stringify(normalizeConfig(message.config), null, 2) + '\n');projects.record(context,'data',message.config,{label:path.basename(target.fsPath),reason:'exported',sourcePath:target.fsPath,base:projectRoot(context)});}
       } else if (['loadConfig','loadConfigFile','loadConfigJSON'].includes(message.type)) {
         // Extension-agnostic: this always loads a data-preparation run
         // configuration by content (normalizeConfig), so any filename works.
-        const picked = message.type==='loadConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadConfigJSON'?[{fsPath:message.name||'fragment-tree.pft'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
+        const picked = message.type==='loadConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadConfigJSON'?[{fsPath:message.name||'fragment-tree.training-data.pft'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
         if (picked && picked[0]) {
           const config = normalizeConfig(JSON.parse(message.type==='loadConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8')),message.type==='loadConfigJSON'?undefined:path.dirname(picked[0].fsPath));
           panel.webview.postMessage({ type: 'config', path: message.type==='loadConfigJSON'?undefined:picked[0].fsPath, config: normalizeConfig({ ...defaultConfig(context), ...config }) });
@@ -396,7 +396,7 @@ async function runFragmentTree(context, output, config, panel) {
   for (const key of ['input', 'outputDir']) if (!config[key]) throw new Error(`${key} is required.`);
   const root = projectRoot(context);
   const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
-  const resultPath = path.join(config.outputDir, 'train_structures', 'fragment-tree.pft');
+  const resultPath = path.join(config.outputDir, 'train_structures', 'fragment-tree.training-data.pft');
   const args = buildArgs(config);
   const command = shellDisplay(python, args);
   output.clear(); output.show(true); output.appendLine(`$ ${command}`);
@@ -418,14 +418,14 @@ async function runFragmentTree(context, output, config, panel) {
     const status = observed.job.status;
     if (code === 0) {
       for(const split of ['train','validation']){
-        const target=path.join(config.outputDir,split+'_structures','fragment-tree.pft');
+        const target=path.join(config.outputDir,split+'_structures','fragment-tree.training-data.pft');
         if(!fs.existsSync(target))continue;
         const saved=JSON.parse(await fs.promises.readFile(target,'utf8'));
         await fs.promises.writeFile(target,JSON.stringify({...saved,status:'completed',startedAt,finishedAt:new Date().toISOString(),exitCode:code,command:args},null,2)+'\n');
       }
     }
     panel.webview.postMessage({ type: 'status', status, text: signal ? 'Cancelled.' : code === 0 ? 'Completed.' : `Failed with exit code ${code}.`, resultPath });
-    if (code === 0) {const validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Validation Result'?validationPath:resultPath)); });}
+    if (code === 0) {const validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.training-data.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Validation Result'?validationPath:resultPath)); });}
   });
 }
 
@@ -450,6 +450,7 @@ function buildArgs(c) {
 }
 
 function buildTrainingArgs(c) {
+  if(c.tuning?.enabled){const trials=require('./workbench/tuning').plan(c,buildTrainingArgs);return ['-m','fredis.cli','train','tune-fragment-tree','--plan-json',JSON.stringify({outputDir:c.outputDir,trials})];}
   const a = ['-m', 'fredis.cli', 'train', 'fragment-tree',
     '--train-dir', c.trainDir, '--val-dir', c.valDir, '--output-dir', c.outputDir,
     '--epochs', String(c.epochs || 1), '--batch-size', String(c.batchSize || 4),
@@ -542,6 +543,7 @@ class ResultEditorProvider {
 
 async function resultHtml(manifestPath) {
   const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+  if (manifest.schema === 'fredis.tuning-result') return require('./features/tuning-result/view').html(manifest,commonCss());
   if (manifest.schema === 'fredis.training-report') {
     return trainingReport.html({ manifest, root: path.dirname(manifestPath), reportPath: manifestPath }, commonCss());
   }
@@ -723,7 +725,7 @@ function inspectFragmentTreeResult(context, target) {
 async function scan(root, dir, depth, limit, out = []) {
   if (depth < 0 || out.length >= limit) return out;
   for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
-    if (entry.name === RESULT_NAME || entry.name === 'fragment-tree.fredis-result' || entry.name.startsWith('.')) continue;
+    if (entry.name === RESULT_NAME || entry.name === 'fragment-tree.pft' || entry.name === 'fragment-tree.fredis-result' || entry.name.startsWith('.')) continue;
     if (entry.isDirectory() && entry.name === 'data' && /(?:train|validation)_structures$/.test(path.basename(dir))) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) await scan(root, full, depth - 1, limit, out);

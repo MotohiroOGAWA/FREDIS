@@ -448,10 +448,12 @@ def main(argv: list[str] | None = None) -> None:
         train,validation=dataset,None
     if not args.overwrite and (list(output.rglob('*.preft.pt')) or any(list((output/name).rglob('*.preft.pt')) for name in ('train_structures','validation_structures'))):
         raise FileExistsError('Output already contains training structures. Enable overwrite or choose another directory.')
-    workbench_path=output/'fragment-tree.pft'
+    workbench_path=output/'fragment-tree.training-data.pft'
     try:
         if workbench_path.exists(): previous=json.loads(workbench_path.read_text())
+        elif (output/'fragment-tree.pft').exists(): previous=json.loads((output/'fragment-tree.pft').read_text())
         elif (output/'preparation_config.json').exists(): previous=json.loads((output/'preparation_config.json').read_text()).get('workbench_config',{})
+        elif (output/'train_structures/fragment-tree.training-data.pft').exists(): previous=json.loads((output/'train_structures/fragment-tree.training-data.pft').read_text())
         elif (output/'train_structures/fragment-tree.pft').exists(): previous=json.loads((output/'train_structures/fragment-tree.pft').read_text())
         else: previous={}
         if not isinstance(previous,dict): previous={}
@@ -486,11 +488,11 @@ def main(argv: list[str] | None = None) -> None:
         directory.mkdir(parents=True,exist_ok=True)
         split_chemistry=relocate_sources(config,output,directory)
         split_config={**restored,'reactionModels':split_chemistry.get('reaction_models',[]),'split':name,'status':'running'}
-        (directory/'fragment-tree.pft').write_text(json.dumps(split_config,indent=2))
+        (directory/'fragment-tree.training-data.pft').write_text(json.dumps(split_config,indent=2))
         # The split is newly empty after resetting Output Directory. Do not delete its configuration.
         create_reaction_training_data(dataset=split_dataset,output_dir=directory,split=name,**{**(kwargs if name=='train' else validation_kwargs),'chemistry_config':split_chemistry,'overwrite':False},_check_existing=False)
         split_config['status']='completed'
-        (directory/'fragment-tree.pft').write_text(json.dumps(split_config,indent=2))
+        (directory/'fragment-tree.training-data.pft').write_text(json.dumps(split_config,indent=2))
     (output/'invalid_records.json').write_text(json.dumps(reports,indent=2))
     (output/'preparation_config.json').write_text(json.dumps(preparation_config,indent=2))
 

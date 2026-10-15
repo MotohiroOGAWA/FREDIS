@@ -201,7 +201,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                     '--minimum-relative-intensity','0.2','--validation-seed','7'])
             self.assertFalse((output/'orphan.txt').exists())
             self.assertFalse((output/'train_structures/stale').exists())
-            saved=json.loads((output/'train_structures/fragment-tree.pft').read_text())
+            saved=json.loads((output/'train_structures/fragment-tree.training-data.pft').read_text())
             self.assertEqual(saved['validationInput'],str(validation_file))
             self.assertEqual(saved['validationRatio'],0.25)
             self.assertEqual(saved['validationSeed'],7)
@@ -305,8 +305,8 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertFalse((root/'out/train_structures/preparation_config.json').exists())
             self.assertFalse((root/'out/validation_structures/preparation_config.json').exists())
             self.assertFalse((root/'out/fragment-tree.pft').exists())
-            self.assertTrue((root/'out/train_structures/fragment-tree.pft').exists())
-            self.assertTrue((root/'out/validation_structures/fragment-tree.pft').exists())
+            self.assertTrue((root/'out/train_structures/fragment-tree.training-data.pft').exists())
+            self.assertTrue((root/'out/validation_structures/fragment-tree.training-data.pft').exists())
             for split in ('train','validation'):
                 folder=root/'out'/f'{split}_structures'
                 self.assertEqual(len(list((folder/'data').glob('*.preft.pt'))),2)

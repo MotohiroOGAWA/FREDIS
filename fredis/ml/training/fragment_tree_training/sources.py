@@ -12,7 +12,7 @@ def canonical_symbols(symbols):
 def _metadata_config(saved):
     """Extract normalized model inputs from any supported preparation file."""
     # preparation_config.json / reaction_statistics.json carry chemistry_config;
-    # Workbench project files (fragment-tree.pft) carry the same values camelCased.
+    # Workbench project files (*.training-data.pft) carry the same values camelCased.
     for config in (saved.get('chemistry_config'), saved.get('workbench_config'), saved):
         if not isinstance(config, dict):
             continue
@@ -44,7 +44,7 @@ def dataset_chemistry_config(directory):
     if directory.name in ('train_structures', 'validation_structures'):
         files.append((directory.parent / 'preparation_config.json', '../preparation_config.json'))
     files.extend((directory / filename, filename) for filename in
-                 ('fragment-tree.pft', 'reaction_statistics.json'))
+                 ('fragment-tree.training-data.pft', 'fragment-tree.pft', 'reaction_statistics.json'))
     for file, filename in files:
         if not file.is_file():
             continue

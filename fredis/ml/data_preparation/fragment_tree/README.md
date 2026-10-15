@@ -380,7 +380,7 @@ Otherwise:
   preparation_config.json      resolved CLI settings, chemistry_config and Workbench form state
   invalid_records.json         excluded records per input: {"train": [...], "validation": [...]}
   train_structures/
-    fragment-tree.pft          Workbench configuration of this split (status: running → completed)
+    fragment-tree.training-data.pft          Workbench configuration of this split (status: running → completed)
     data/smiles_<index:06d>_<sha1[:16]>.preft.pt
     manifest.tsv               one row per source (completed or skipped)
     assignment_scores.tsv      one row per kept sample
