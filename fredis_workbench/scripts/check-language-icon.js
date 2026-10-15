@@ -7,6 +7,10 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const [language] = pkg.contributes.languages;
 assert.ok(language, 'package.json must contribute a language for the FREDIS file icon');
 assert.equal(language.id, 'fredis-workbench-file');
+// Visual editors update TextDocuments; their language must opt out of Auto Save
+// without changing the user's global setting for source/text files.
+assert.equal(pkg.contributes.configurationDefaults['['+language.id+']']['files.autoSave'], 'off');
+assert.equal(pkg.contributes.configurationDefaults['files.autoSave'], undefined);
 
 // VS Code only shows a contributed language icon when the active icon theme
 // has no opinion for that file at all; virtually every theme already claims

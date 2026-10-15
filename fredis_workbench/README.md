@@ -422,3 +422,13 @@ Dataset schema, saved molecular targets, checkpoint compatibility and actual
 memory requirements are verified by the training runtime. **Inspect Dataset**
 reveals the directory in Explorer. **Start Training** opens the existing job view
 with logs, progress and metrics. **Copy Command** uses the same CLI builder.
+
+### Saving Workbench files
+
+FREDIS configuration files (`*.pft`) use manual saving by default, even when
+VS Code Auto Save is enabled globally. Edits remain unsaved until Ctrl+S or
+Save All, and closing a modified document follows VS Code’s normal save/discard
+flow. This is contributed through the `fredis-workbench-file` language setting;
+ordinary text/source files keep their existing Auto Save behavior. An explicit
+user/workspace language override can still override this default. Reload the
+VS Code window after updating the extension to pick up the new contribution.

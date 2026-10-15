@@ -26,14 +26,14 @@ export type WorkbenchEvent =
 export type ParameterRequest =
   | { type: 'training/checkpoint'; path: string }
   | { type: 'training/sources'; requestId: string; config: { trainDir: string; valDir: string; resume?: string; fineTuneCheckpoint?: string } }
-  | { type: 'parameters/pick'; target: 'data' | 'training' }
-  | { type: 'parameters/import'; target: 'data' | 'training'; name: string; json: string }
-  | { type: 'parameters/load'; target: 'data' | 'training'; path: string }
-  | { type: 'parameters/save'; target: 'data'; fragmenterParams: Record<string, unknown> };
+  | { type: 'parameters/pick'; target: 'data' | 'training' | 'trainable' }
+  | { type: 'parameters/import'; target: 'data' | 'training' | 'trainable'; name: string; json: string }
+  | { type: 'parameters/load'; target: 'data' | 'training' | 'trainable'; path: string }
+  | { type: 'parameters/save'; target: 'data' | 'trainable'; fragmenterParams: Record<string, unknown> };
 export type ParameterEvent =
-  | { type: 'parameters/loaded'; target: 'data' | 'training'; path: string; modelConfig: Record<string, unknown> }
-  | { type: 'parameters/saved'; target: 'data'; path: string }
-  | { type: 'parameters/error'; target: 'data' | 'training'; error: string };
+  | { type: 'parameters/loaded'; target: 'data' | 'training' | 'trainable'; path: string; fragmenterParams: Record<string, unknown> }
+  | { type: 'parameters/saved'; target: 'data' | 'trainable'; path: string }
+  | { type: 'parameters/error'; target: 'data' | 'training' | 'trainable'; error: string };
 
 export type DataRequest =
   | { type: 'data/columns' | 'data/preview' | 'data/check'; target: 'train' | 'validation' | 'home' | 'prediction'; requestId: string; path: string; mapping?: Record<string, string>; fragmenterParams?: Record<string, unknown> }

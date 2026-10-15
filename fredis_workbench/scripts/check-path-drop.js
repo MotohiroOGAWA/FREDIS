@@ -106,6 +106,8 @@ function page(body, { host = false, before } = {}) {
   // a feature-specific zone. getData is protected until the drop itself.
   {
     const { dom, w, d, fire } = page('<h1 id="heading">Workbench</h1><div class="path"><input data-path-kind="file"><button>Browse</button></div>');
+    assert.match(d.getElementById('fredisExplorerDropHint').textContent, /hold Shift/);
+    assert.equal(d.querySelectorAll('#fredisExplorerDropHint').length, 1);
     let blocked = false, forwarded = 0;
     w.addEventListener('dragenter', event => {
       if (!event.defaultPrevented && !event.shiftKey) blocked = true;

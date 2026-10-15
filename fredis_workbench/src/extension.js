@@ -1,3 +1,4 @@
+const modelArchitecture=require('./features/model-architecture/editor');
 const reactionPatternUi = require('./features/reaction-pattern-set/ui');
 const {commonCss,formCss} = require('./features/reaction-pattern-set/styles');
 const projects = require('./workbench/project');
@@ -66,6 +67,7 @@ function activate(context) {
   evaluation.register(context, output, projectRoot);
   reactionPatternSetEditor.register(context);
   adductRuleSetEditor.register(context);
+  modelArchitecture.register(context);
   fragmenterEditor.register(context);
   workbench.register(context, output, projectRoot, openWorkbench);
   enableDevelopmentReload(context, output);
@@ -157,7 +159,8 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
   panel.onDidDispose(()=>{if(predictionProcess)workbench.stopChild(predictionProcess);});
   const initialConfig = defaultConfig(context);
   const initialTrainingConfig = defaultTrainingConfig(context);
-  panel.webview.html = workbench.secure(workbenchHtml(initialConfig, initialTrainingConfig,workbenchDefaults.workflowDefaults('prediction',{},projectRoot(context)),reactionPatternAnalysisUiSettings()), panel.webview);
+  modelArchitecture.attachWorkbench(panel);
+  panel.webview.html = workbench.secure(workbenchHtml(initialConfig, initialTrainingConfig,workbenchDefaults.workflowDefaults('prediction',{},projectRoot(context)),reactionPatternAnalysisUiSettings(),workbenchDefaults.workflowDefaults('trainable',{},projectRoot(context))), panel.webview);
   const panelContext = context;
   panel.webview.onDidReceiveMessage(async message => {
     if (message?.type === 'spectrumViewer') return;
@@ -776,7 +779,7 @@ const HELP = {
   ,modelPath: 'Trained fragment-tree model checkpoint (model.pt or a raw state_dict) used for spectrum prediction.'
 };
 
-function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPatternAnalysisUi = {}) {
+function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPatternAnalysisUi = {}, trainableConfig = {}) {
   return `<!doctype html><html><head><meta charset="UTF-8"><style>${commonCss()}${formCss()}${trainingCss()}${trainingWorkbench.css()}${pathDrop.css()}${workbench.css()}${parameterEditor.css()}${fragmentTreeVisualization.css()}${spectrumViewer.css()}${reactionPatternAnalysis.css()}</style></head><body><main>
   ${layout.header()}
   ${workbench.html()}<nav id="appNavigation"><button class="tab" data-app="smarts">SMARTS Search</button><button class="tab" data-app="fragmentTree">Fragment Tree</button><button class="tab" data-app="reactionViewer">Reaction Viewer</button><button class="tab" data-app="reactionPatternAnalysis">Reaction Pattern Analysis</button><button class="tab" data-app="reactionPatterns">Reaction Pattern Set</button><button class="tab" data-app="adduct">Adduct Rule Set</button><button class="tab active" data-app="data">Data Preparation</button><button class="tab" data-app="training">Training</button><button class="tab" data-app="predict">Predict Spectrum</button></nav>
@@ -791,7 +794,7 @@ function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPa
   ${trainingWorkbench.html({pathField,field,optimization:workbench.trainingHtml(),parameters:parameterEditor.importHtml('training'),defaults:workbenchDefaults.html('training')})}
   <form id="predictForm" data-app-panel="predict" class="preparation-page prediction-page" novalidate hidden>
     ${spectrumPrediction.html()}${workbenchDefaults.html('prediction')}
-  </form><div id="helpTooltip" role="tooltip"></div><script>const vscode=acquireVsCodeApi();window.fredisMsentityBridge={postMessage:message=>vscode.postMessage({type:'spectrumViewer',message})}; const initial=${safeJson(config)}; const initialTraining=${safeJson(trainingConfig)};const initialPrediction=${safeJson(predictionConfig)}; ${pathDrop.script({host:true})}${webviewScript()}${reactionPatternVisualEditor.script()}${reactionPatternPreview.script()}${spectrumPrediction.script()}${workbench.script()}${parameterEditor.script()}${fragmentTreeVisualization.script()}${reactionPatternAnalysis.script(reactionPatternAnalysisUi)}${layout.script()}${datasetUpload.script()}${preparation.script()}${workbenchDefaults.script()}${trainingWorkbench.script()}${projects.script()}${spectrumViewer.script()}</script></main></body></html>`;
+  </form><div id="helpTooltip" role="tooltip"></div><script>const vscode=acquireVsCodeApi();window.fredisMsentityBridge={postMessage:message=>vscode.postMessage({type:'spectrumViewer',message})}; const initial=${safeJson(config)}; const initialTraining=${safeJson(trainingConfig)};const initialPrediction=${safeJson(predictionConfig)};const initialTrainable=${safeJson(trainableConfig)}; ${pathDrop.script({host:true})}${webviewScript()}${reactionPatternVisualEditor.script()}${reactionPatternPreview.script()}${spectrumPrediction.script()}${workbench.script()}${parameterEditor.script()}${fragmentTreeVisualization.script()}${reactionPatternAnalysis.script(reactionPatternAnalysisUi)}${layout.script()}${datasetUpload.script()}${preparation.script()}${workbenchDefaults.script()}${trainingWorkbench.script()}${projects.script()}${spectrumViewer.script()}</script></main></body></html>`;
 }
 function pathField(name,label,kind,form='data') { return `<label data-help="${HELP[name] || ''}">${label}<div class="path"><input name="${name}" data-path-kind="${kind}"><button type="button" data-pick="${name}" data-kind="${kind}" data-form="${form}">Browse</button></div>${HELP[name]?`<small class="field-help">${HELP[name]}</small>`:''}</label>`; }
 function field(name,label,type,step='1') { return `<label data-help="${HELP[name] || ''}">${label}<input name="${name}" type="${type}"${type==='number'?` step="${step}"`:''}>${HELP[name]?`<small class="field-help">${HELP[name]}</small>`:''}</label>`; }

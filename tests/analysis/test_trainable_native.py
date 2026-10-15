@@ -15,7 +15,13 @@ def test_native_backward_metadata_failure_and_resume(tmp_path):
     peaks=np.array([[47.0494,1.],[31.0184,.5]]*4);peaks[-1,1]=np.nan
     data=MSDataset(meta,PeakSeries(peaks,np.arange(0,9,2)));file=tmp_path/'data.msds';data.save(str(file))
     out=tmp_path/'fredis'
-    stats=extract(file,out,chemistry(),model_config=cfg,workers=1,batch_size=2,max_reaction_combinations=1000)
+    def check_saved_architecture(event):
+        assert (out/'model.architecture.pft').is_file()
+    stats=extract(file,out,chemistry(),model_config=cfg,workers=1,batch_size=2,max_reaction_combinations=1000,progress=check_saved_architecture)
+    architecture=json.loads((out/'model.architecture.pft').read_text())
+    assert set(architecture)=={'model_config'}
+    assert set(architecture['model_config'])=={'mol_encoder_params','reaction_model_params','spectrum_model_params'}
+    assert architecture['model_config']=={key:stats['native_config']['model_config'][key] for key in architecture['model_config']}
     assert stats['trainable']==2 and stats['excluded']==2
     assert stats['funnel']['native_checked']==2
     assert (out/'trainable_spec_ids.txt').read_text()=='first\nsecond\n'

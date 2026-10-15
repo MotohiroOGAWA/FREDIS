@@ -118,6 +118,7 @@ def extract(input_path,output_dir,chemistry,*,model_config=None,mapping=None,id_
     else:
         if resume:raise ValueError('No previous run to resume')
         (output/'run').mkdir(parents=True);atomic_json(manifest_path,fingerprint)
+    atomic_json(output/'model.architecture.pft', dict(model_config={key:model_config[key] for key in ['mol_encoder_params','reaction_model_params','spectrum_model_params'] if key in model_config}))
     for name in ['input','groups','prepared']:(output/'run'/name).mkdir(exist_ok=True)
     config_path=output/'run/native_config.json';atomic_json(config_path,config)
     inspection=inspect_records(dataset,context.fragmenter,mapping,symbols=chemistry['symbols'])

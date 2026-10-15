@@ -30,7 +30,8 @@
     "onCustomEditor:fredis.reactionPatternEditor",
     "onCustomEditor:fredis.adductRuleEditor",
     "onCustomEditor:fredis.adductRuleSetEditor",
-    "onCustomEditor:fredis.fragmenterEditor"
+    "onCustomEditor:fredis.fragmenterEditor",
+    "onCustomEditor:fredis.modelArchitectureEditor"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -190,6 +191,16 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "fredis.modelArchitectureEditor",
+        "displayName": "FREDIS Model Architecture",
+        "selector": [
+          {
+            "filenamePattern": "*.architecture.pft"
+          }
+        ],
+        "priority": "default"
       }
     ],
     "configuration": {
@@ -255,6 +266,11 @@
           "minimum": 80,
           "maximum": 1200,
           "description": "Maximum width in pixels of the SMILES column in Reaction Pattern Analysis. Full SMILES remain available from the Copy button."
+        },
+        "fredis.workbench.trainableDefaults": {
+          "type": "object",
+          "default": {},
+          "description": "Default Fragmenter configuration for Trainable Spectra. Save from the Trainable Spectra editor."
         }
       }
     },
@@ -277,7 +293,8 @@
           ".adductset.pft",
           ".fragmenter.pft",
           ".training-data.pft",
-          ".tuning.pft"
+          ".tuning.pft",
+          ".architecture.pft"
         ],
         "icon": {
           "light": "./media/icons/fredis-file.svg",
@@ -301,13 +318,18 @@
           "name": "FREDIS Workbench"
         }
       ]
+    },
+    "configurationDefaults": {
+      "[fredis-workbench-file]": {
+        "files.autoSave": "off"
+      }
     }
   },
   "scripts": {
     "build:spectrum-viewer": "node scripts/build-spectrum-viewer.js",
     "vscode:prepublish": "npm run build:spectrum-viewer",
     "dev": "code --extensionDevelopmentPath=. --new-window .",
-    "check": "node --check src/extension.js && node --check src/configuration.js && node --check src/webview-path-drop.js && node --check src/features/evaluation/editor.js && node --check src/features/evaluation/grouped-boxplot.js && node --check src/features/smarts-search/editor.js && node --check src/features/reaction-pattern-set/editor.js && node --check src/features/reaction-pattern-set/visual-editor.js && node --check src/features/reaction-pattern-set/reaction-preview.js && node --check src/features/reaction-pattern-set/reaction-service.js && node --check src/features/reaction-pattern-set/host.js && node --check src/features/adduct-rule-set/editor.js && node --check src/features/adduct-rule-set/ui.js && node --check src/features/spectrum-viewer/host.js && node --check src/features/spectrum-viewer/extension.js && node --check src/features/spectrum-viewer/workbench.js && node --check src/features/spectrum-viewer/upstream.js && node scripts/check-reaction-service.js && node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js && node scripts/check-adduct-rule-ui.js && node --check src/features/spectrum-prediction/editor.js && python scripts/check-reaction-pattern-visual-products.py && node scripts/check-fragmenter-editor.js && node scripts/check-evaluation.js && node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js && node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js && node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py && node scripts/check-result-webview.js && node scripts/check-smarts-compound-view.js && node scripts/check-step-validation.js && node scripts/check-training-metrics.js && node scripts/check-training-report.js && node scripts/check-language-icon.js && node scripts/check-fragmenter-file-editor.js && node scripts/check-fragment-tree-visualization.js && node scripts/check-trainable-spectra.js",
+    "check": "node --check src/extension.js && node --check src/configuration.js && node --check src/webview-path-drop.js && node --check src/features/evaluation/editor.js && node --check src/features/evaluation/grouped-boxplot.js && node --check src/features/smarts-search/editor.js && node --check src/features/reaction-pattern-set/editor.js && node --check src/features/reaction-pattern-set/visual-editor.js && node --check src/features/reaction-pattern-set/reaction-preview.js && node --check src/features/reaction-pattern-set/reaction-service.js && node --check src/features/reaction-pattern-set/host.js && node --check src/features/adduct-rule-set/editor.js && node --check src/features/adduct-rule-set/ui.js && node --check src/features/spectrum-viewer/host.js && node --check src/features/spectrum-viewer/extension.js && node --check src/features/spectrum-viewer/workbench.js && node --check src/features/spectrum-viewer/upstream.js && node scripts/check-reaction-service.js && node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js && node scripts/check-adduct-rule-ui.js && node --check src/features/spectrum-prediction/editor.js && python scripts/check-reaction-pattern-visual-products.py && node scripts/check-fragmenter-editor.js && node scripts/check-evaluation.js && node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js && node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js && node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py && node scripts/check-result-webview.js && node scripts/check-smarts-compound-view.js && node scripts/check-step-validation.js && node scripts/check-training-metrics.js && node scripts/check-training-report.js && node scripts/check-language-icon.js && node scripts/check-fragmenter-file-editor.js && node scripts/check-fragment-tree-visualization.js && node scripts/check-trainable-spectra.js && node scripts/check-model-architecture.js",
     "package": "mkdir -p artifacts && npx @vscode/vsce package --allow-missing-repository --out artifacts/fredis_workbench-${npm_package_version}.vsix",
     "check:path-drop": "node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js",
     "check:training-sources": "python scripts/check-training-sources.py",

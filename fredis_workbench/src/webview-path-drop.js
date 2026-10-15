@@ -294,6 +294,16 @@ function installPathDrop() {
   installFileDropGuard(document);
   function decorate() {
     if (!window.document?.body) return;
+    // Explorer drags are intercepted before entering the webview. Shift is
+    // VS Code's bypass; a DOM event guard cannot remove the host's overlay.
+    if (!document.getElementById('fredisExplorerDropHint')) {
+      const hint = document.createElement('p');
+      hint.id = 'fredisExplorerDropHint';
+      hint.className = 'path-drop-hint';
+      hint.setAttribute('role', 'note');
+      hint.textContent = 'VS Code Explorer: hold Shift while dropping a file or folder. Release Shift after the mouse button.';
+      (document.querySelector('main') || document.body).prepend(hint);
+    }
     for (const button of document.querySelectorAll('button')) {
       if (!/^Browse[.…]*$/i.test(button.textContent.trim())) continue;
       const host = button.closest('.path') || button.parentElement;
@@ -369,7 +379,7 @@ function script(options = {}) {
 }
 
 function css() {
-  return '.file-drop-zone{max-width:100%;min-width:0;white-space:normal;border-style:dashed}.file-drop-zone.path-drop-active{border-color:var(--vscode-focusBorder,#36c5a2)!important;box-shadow:0 0 0 1px var(--vscode-focusBorder,#36c5a2);background:color-mix(in srgb,var(--vscode-focusBorder,#36c5a2) 12%,var(--vscode-button-secondaryBackground))}.path:has(.file-drop-zone){flex-wrap:wrap}.path .file-drop-zone{flex-basis:100%;padding:14px}.path-drop-error{flex-basis:100%;color:var(--vscode-errorForeground,#f48771)}input[data-path-kind]{transition:border-color .12s,box-shadow .12s,background-color .12s}input[data-path-kind].path-drop-active{border-color:var(--vscode-focusBorder,#36c5a2)!important;box-shadow:0 0 0 1px var(--vscode-focusBorder,#36c5a2);background:color-mix(in srgb,var(--vscode-focusBorder,#36c5a2) 12%,var(--vscode-input-background))}';
+  return '.path-drop-hint{font-size:12px;color:var(--vscode-descriptionForeground);margin:8px 0 12px;line-height:1.5}.file-drop-zone{max-width:100%;min-width:0;white-space:normal;border-style:dashed}.file-drop-zone.path-drop-active{border-color:var(--vscode-focusBorder,#36c5a2)!important;box-shadow:0 0 0 1px var(--vscode-focusBorder,#36c5a2);background:color-mix(in srgb,var(--vscode-focusBorder,#36c5a2) 12%,var(--vscode-button-secondaryBackground))}.path:has(.file-drop-zone){flex-wrap:wrap}.path .file-drop-zone{flex-basis:100%;padding:14px}.path-drop-error{flex-basis:100%;color:var(--vscode-errorForeground,#f48771)}input[data-path-kind]{transition:border-color .12s,box-shadow .12s,background-color .12s}input[data-path-kind].path-drop-active{border-color:var(--vscode-focusBorder,#36c5a2)!important;box-shadow:0 0 0 1px var(--vscode-focusBorder,#36c5a2);background:color-mix(in srgb,var(--vscode-focusBorder,#36c5a2) 12%,var(--vscode-input-background))}';
 }
 
 module.exports = {
