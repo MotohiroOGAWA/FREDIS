@@ -19,11 +19,13 @@ class TrainableIdsCommand(CLICommand):
         parser.add_argument('--workers',type=int,default=1)
         parser.add_argument('--batch-size',type=int,default=8);parser.add_argument('--seed',type=int,default=42)
         parser.add_argument('--minimum-relative-intensity',type=float,default=0.)
-        parser.add_argument('--max-unique-fragment-smiles',type=int,default=-1);parser.add_argument('--max-reaction-combinations',type=int,default=-1)
+        parser.add_argument('--max-unique-fragment-smiles',type=int,default=10000);parser.add_argument('--max-reaction-combinations',type=int,default=10000)
         parser.add_argument('--resume',action='store_true');parser.add_argument('--keep-export',action='store_true')
     def run(self,args):
         default=Path(__file__).resolve().parents[3]/'presets/fragment/reaction_pattern_sets/nonring_single_bond/nonring_single_bond.fragmenter.pft'
-        chemistry=resolve_chemistry_options(args,base=dict(fragmenter_params=json.loads(default.read_text())))
+        fragmenter=json.loads(default.read_text())
+        fragmenter['fragment_ion_tree_builder']['max_reaction_count']=1
+        chemistry=resolve_chemistry_options(args,base=dict(fragmenter_params=fragmenter))
         architecture=json.loads(Path(args.model_architecture).read_text()) if args.model_architecture else json.loads(args.model_architecture_json) if args.model_architecture_json else None
         if architecture:architecture=architecture.get('model_config',architecture)
         def progress(event):print(json.dumps(dict(event='trainable_progress',**event)),flush=True)

@@ -161,6 +161,7 @@ function client(){
   const trainableFragmenter=JSON.parse(JSON.stringify(initialTrainable.fragmenterParams||initial.fragmenterParams));
   if(!initialTrainable.fragmenterParams){
     trainableFragmenter.fragment_ion_tree_builder??={};
+    trainableFragmenter.fragment_ion_tree_builder.max_reaction_count=1;
     trainableFragmenter.fragment_ion_tree_builder.fragment_ion_adduct_rule_set={name:'M_H_plus',hydrogen_shift_min:-5,hydrogen_shift_max:0,adduct_rules:[{name:'protonated',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']}]};
   }
   editors.trainable=createParameterEditor(el('trainableParameterEditor'),{fragmenter_params:trainableFragmenter},'fragmenter',editPatterns('trainable'),editAdducts('trainable'));

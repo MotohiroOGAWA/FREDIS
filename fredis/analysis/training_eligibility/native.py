@@ -65,6 +65,11 @@ def default_model(chemistry):
     from fredis.domain.fragment import Fragmenter
     args=build_arg_parser().parse_args(['--train-dir','unused','--val-dir','unused','--output-dir','unused'])
     model=training_model_config(args)
+    # Eligibility needs finite forward/backward passes, not a full-size model.
+    model['mol_encoder_params'].update(node_dim=16,graph_dim=16,num_layers=1,num_heads=1,dropout=0.)
+    model['reaction_model_params'].update(hidden_dim=16,branch_main_adduct_dim=16,num_heads=1,state_num_layers=1,state_dropout=0.)
+    model['spectrum_model_params'].update(hidden_dim=16,num_layers=1,num_heads=1,state_hidden_dim=16,
+        ion_embedding_dim=8,hydrogen_shift_embedding_dim=8,main_adduct_dim=16,collision_energy_dim=16,dropout=0.)
     model['fragmenter_params']=chemistry['fragmenter_params'];model['mol_encoder_params']['symbols']=chemistry['symbols']
     model['adduct_type_strs']=[str(value) for value in Fragmenter.from_dict(chemistry['fragmenter_params']).adduct_types]
     return model
@@ -72,7 +77,7 @@ def default_model(chemistry):
 
 def extract(input_path,output_dir,chemistry,*,model_config=None,mapping=None,id_column='SpecID',workers=1,
             batch_size=8,seed=42,resume=False,keep_export=False,minimum_relative_intensity=0,
-            max_unique_fragment_smiles=-1,max_reaction_combinations=-1,progress=None):
+            max_unique_fragment_smiles=10000,max_reaction_combinations=10000,progress=None):
     from rdkit import rdBase
     import pandas as pd
     from fredis.libs.msentity.msentity.core.MSDataset import MSDataset

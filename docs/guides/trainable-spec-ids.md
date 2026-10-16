@@ -14,7 +14,7 @@ fredis train trainable-ids \
 
 The input requires unique, nonempty `SpecID` values. Use `--spec-id-column` and the other column options for custom metadata mappings. Reaction patterns, adducts, peak filtering, and search limits affect eligibility; use the same settings as production preparation. Without `--params`, the command uses the nonring single bond preset.
 
-Use `--model-architecture architecture.json` to supply production model settings, either directly or inside a `model_config` object. Otherwise, the default training architecture is used. Eligibility depends on the architecture and batch size; `stats.json` records the effective configuration. This check does not guarantee that every future model or training epoch will succeed. Additional assignment-score thresholds are not applied.
+Use `--model-architecture architecture.json` to supply production model settings, either directly or inside a `model_config` object. Otherwise, a compact eligibility architecture is used (16-dimensional node/graph/hidden features and one encoder/transformer layer). Eligibility depends on the architecture and batch size; `stats.json` records the effective configuration. This check does not guarantee that every future model or training epoch will succeed. Additional assignment-score thresholds are not applied.
 
 Choose a new output directory.
 
@@ -38,7 +38,7 @@ Verification runs on CPU. `--workers` controls the number of parallel worker pro
 
 Open Data → **Trainable Spectra**.
 
-1. Edit reaction patterns, adduct rules, and fragmentation parameters in the shared Fragmenter editor on Trainable Spectra. Use Load/Save for `.fragmenter.pft` files, or **Use Training Data fragmenter** to copy those settings. Symbols and preparation limits still come from Training Data.
+1. Edit reaction patterns, adduct rules, and fragmentation parameters in the shared Fragmenter editor on Trainable Spectra. Use Load/Save for `.fragmenter.pft` files, or **Use Training Data fragmenter** to copy those settings. Symbols still come from Training Data. Trainable preparation limits are edited on this page.
 2. Select the input `.msds` and a new output directory, then click **Verify and export SpecIDs**. Optionally use the current Training architecture.
 3. Pass the exported `trainable_spec_ids.txt` to your external intersection tool.
 
@@ -61,3 +61,5 @@ record verification starts. Pass it to `--model-architecture` to reuse it with
 the same chemistry/preparation settings as the original run.
 
 Trainable Spectra starts with only the `[M+H]+` adduct rule. Use **Save as Defaults** under its Fragmenter editor to store your current Fragmenter for new Workbench windows. Defaults are saved to workspace settings when a workspace is open, otherwise to user settings. Saved adduct selections override the built-in `[M+H]+` default.
+
+The built-in Trainable defaults use `max_reaction_count=1`, `max_reaction_combinations=10000`, and `max_unique_fragment_smiles=10000`. Both preparation limits can be edited and saved as defaults. Existing saved Fragmenter settings and explicitly loaded files retain their configured reaction count. Limits can change eligibility; use a new output directory when changing them. CLI defaults use the same compact model and limits; supplied Fragmenter/model configurations override their defaults.

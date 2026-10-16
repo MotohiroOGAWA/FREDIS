@@ -30,7 +30,7 @@ function client(){
   for(const workflow of ['data','training','prediction','trainable']){
     const button=document.getElementById(workflow+'SaveDefaults');
     if(!button)continue;
-    button.onclick=()=>{let config;if(workflow==='data')config=getConfig();else if(workflow==='training')config=getTrainingConfig();else if(workflow==='trainable')config={fragmenterParams:window.getTrainableFragmenterConfig()};else{config={};for(const input of document.getElementById('predictForm').elements)if(input.name)config[input.name]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}
+    button.onclick=()=>{let config;if(workflow==='data')config=getConfig();else if(workflow==='training')config=getTrainingConfig();else if(workflow==='trainable')config={fragmenterParams:window.getTrainableFragmenterConfig(),maxReactionCombinations:Number(document.getElementById('trainableExtractForm').elements.maxReactionCombinations.value),maxUniqueFragmentSmiles:Number(document.getElementById('trainableExtractForm').elements.maxUniqueFragmentSmiles.value)};else{config={};for(const input of document.getElementById('predictForm').elements)if(input.name)config[input.name]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}
       vscode.postMessage({type:'defaults/save',workflow,config});};
   }
   window.addEventListener('message',event=>{const m=event.data;if(['defaults/saved','defaults/error'].includes(m.type)){const status=document.getElementById(m.workflow+'DefaultsStatus');if(status)status.textContent=m.error||'Defaults saved. They apply when you open a new Workbench. Output directories use the default output root in Preferences.';}});

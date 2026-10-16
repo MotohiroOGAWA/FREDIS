@@ -9,16 +9,22 @@ from fredis.analysis.training_eligibility.native import extract
 from tests.ml.reaction.TestReactionPipeline import config,chemistry
 
 
-def test_native_backward_metadata_failure_and_resume(tmp_path):
+@pytest.mark.parametrize('compact',[False,True])
+def test_native_backward_metadata_failure_and_resume(tmp_path,compact):
     cfg=config();cfg['reaction_model_params']['pattern_input_version']=3;cfg['mol_encoder_params']['descriptors']=[]
     meta=pd.DataFrame(dict(SpecID=['first','second','bad-adduct','bad-peaks'],SMILES=['CCO']*4,AdductType=['[M+H]+','[M+H]+','invalid','[M+H]+'],CollisionEnergy=[10.,40.,20.,20.],PrecursorMZ=[47.0494]*4))
     peaks=np.array([[47.0494,1.],[31.0184,.5]]*4);peaks[-1,1]=np.nan
     data=MSDataset(meta,PeakSeries(peaks,np.arange(0,9,2)));file=tmp_path/'data.msds';data.save(str(file))
+    if compact:cfg=None
     out=tmp_path/'fredis'
     def check_saved_architecture(event):
         assert (out/'model.architecture.pft').is_file()
     stats=extract(file,out,chemistry(),model_config=cfg,workers=1,batch_size=2,max_reaction_combinations=1000,progress=check_saved_architecture)
     architecture=json.loads((out/'model.architecture.pft').read_text())
+    if compact:
+        assert architecture['model_config']['mol_encoder_params']['node_dim']==16
+        assert architecture['model_config']['mol_encoder_params']['num_layers']==1
+        assert architecture['model_config']['spectrum_model_params']['hidden_dim']==16
     assert set(architecture)=={'model_config'}
     assert set(architecture['model_config'])=={'mol_encoder_params','reaction_model_params','spectrum_model_params'}
     assert architecture['model_config']=={key:stats['native_config']['model_config'][key] for key in architecture['model_config']}
