@@ -66,3 +66,7 @@ training report. Viewer choices are retained in editor state.
 New preparation outputs use `fragment-tree.training-data.pft`. Readers retain
 compatibility with old `fragment-tree.pft` dataset manifests. Prepared tensors
 still use `.preft.pt`.
+
+The reaction pattern set is fixed when preparing the training dataset and is
+not a search dimension. Per-pattern Reactant Graphormer architecture parameters
+remain eligible for tuning; they do not change the dataset reaction definitions.
