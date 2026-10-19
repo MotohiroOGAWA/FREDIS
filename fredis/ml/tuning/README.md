@@ -70,3 +70,23 @@ still use `.preft.pt`.
 The reaction pattern set is fixed when preparing the training dataset and is
 not a search dimension. Per-pattern Reactant Graphormer architecture parameters
 remain eligible for tuning; they do not change the dataset reaction definitions.
+
+Workbench supports linked tuning across reaction patterns. Enable Tune for a
+pattern parameter, enter candidates (for example `1, 2, 3` for
+`neighborhood_hops`), then choose **Link all patterns**. This enables tuning of
+the same editable parameter on all available patterns and assigns a shared link
+group. Imported/fixed parameters are excluded. For a subset, enable Tune on the
+selected parameters and enter the same **Link group** name. Joining a group
+copies its candidates; editing candidates updates every member. Clear the group
+name to return a parameter to independent tuning. **Unlink all patterns** removes
+the shared group while keeping Tune enabled for independent tuning. Uncheck Tune to remove it
+from the search.
+
+Saved Workbench configurations retain `tuning.parameters` candidate lists and
+`tuning.groups`, a mapping from parameter paths to group names. Each group is
+one search dimension: three patterns linked to hop candidates `[1, 2, 3]`
+produce three trials. Independent dimensions still form a Cartesian product.
+All group members must have identical candidate lists; inconsistent imported
+configurations are rejected. Linking shares architecture settings during search;
+model weights remain separately learned. Workbench expands these groups into
+the explicit `trials` format before submitting the plan to the orchestrator.
