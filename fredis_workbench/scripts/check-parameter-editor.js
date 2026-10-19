@@ -40,9 +40,9 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  // spectrum_model_params.dropout (training_model_config writes both from the one
  // shared --dropout), but only that one shared field may ever be edited.
  const dropoutConfigRoot=new Element('div');
- createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{dropout:0.3}},'training');
+ createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{state_dropout:0.3}},'training');
  assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.state_dropout'));
- assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.dropout'));
+ assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');
@@ -57,25 +57,20 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  descriptorBox('TPSA').checked=false;descriptorBox('TPSA').onchange();
  assert(!walk(ionRoot).some(node=>node.tag==='button'&&node.textContent.startsWith('Override ')));
  assert.equal(walk(ionRoot).find(node=>node.dataset.parameterPath==='generation_params.max_fragment_nodes').value,100);
- assert.equal(walk(ionRoot).find(node=>node.dataset.parameterPath==='generation_params.ion_prediction_threshold').value,0.5);
+ assert(!walk(ionRoot).some(node=>node.dataset.parameterPath==='generation_params.ion_prediction_threshold'));
  assert(!walk(ionRoot).some(node=>/loss_weight|intensity_power/.test(node.dataset.parameterPath||'')));
  assert(walk(ionRoot).some(node=>node.className==='parameter-group-heading'&&node.textContent==='Fragment Tree Search'));
  const ionArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:ionEditor.getValue()});
  assert.equal(ionArgs[ionArgs.indexOf('--max-fragment-nodes')+1],'100');
- assert.equal(ionArgs[ionArgs.indexOf('--ion-prediction-threshold')+1],'0.5');
+ assert(!ionArgs.includes('--ion-prediction-threshold'));
  assert(!ionArgs.includes('--fragment-loss-weight'));
- const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',fragmentLossWeight:0.4,intensityPower:1});
- assert.equal(lossArgs[lossArgs.indexOf('--fragment-loss-weight')+1],'0.4');
- assert.equal(lossArgs[lossArgs.indexOf('--intensity-power')+1],'1');
+ const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',intensityLossWeight:0.4,cosineLossWeight:1});
+ assert.equal(lossArgs[lossArgs.indexOf('--intensity-loss-weight')+1],'0.4');
+ assert.equal(lossArgs[lossArgs.indexOf('--cosine-loss-weight')+1],'1');
  // Neighborhood settings are owned by the per-pattern architecture editor.
  const neighborhoodRoot=new Element('div');createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
  assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode'));
  assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop'));
- // max_roles is sized from the prepared dataset, never a form field, even
- // when a resumed/loaded config already carries one.
- const maxRolesRoot=new Element('div');
- createParameterEditor(maxRolesRoot,{reaction_model_params:{max_roles:96}},'training');
- assert(!walk(maxRolesRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.max_roles'));
  // Dropout is one shared training-level flag, not a per-component model_config override.
  const dropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',dropout:0.3});
  assert.equal(dropoutArgs[dropoutArgs.indexOf('--fragment-tree-dropout')+1],'0.3');

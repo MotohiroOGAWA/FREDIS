@@ -90,7 +90,7 @@ class TestConfigOptions(unittest.TestCase):
         args=training.build_arg_parser().parse_args(['--train-dir','train','--val-dir','val','--output-dir','out',
             '--node-dim','48','--max-fragment-nodes','80',
             '--cache-dataset-in-memory',
-            '--weight-decay','0','--fragment-loss-weight','0.4','--state-loss-weight','0.6','--intensity-loss-weight','0.5',
+            '--weight-decay','0','--cosine-loss-weight','0.4','--intensity-loss-weight','0.5',
             '--train-log-interval-steps','25',
             '--validation-interval-steps','1000','--validation-fraction','0.1'])
         with tempfile.TemporaryDirectory() as directory, patch('fredis.ml.training.fragment_tree_training.sources.inherit_model_config',side_effect=lambda config,*args,**kwargs:config) as inherit, patch.object(training,'train_reactions',return_value={}) as run, patch('builtins.print'):
@@ -100,8 +100,7 @@ class TestConfigOptions(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs['model_config']['mol_encoder_params']['node_dim'],48)
         self.assertEqual(run.call_args.kwargs['model_config']['generation_params']['max_fragment_nodes'],80)
         self.assertEqual(run.call_args.kwargs['weight_decay'],0)
-        self.assertEqual(run.call_args.kwargs['fragment_loss_weight'],0.4)
-        self.assertEqual(run.call_args.kwargs['state_loss_weight'],0.6)
+        self.assertEqual(run.call_args.kwargs['cosine_loss_weight'],0.4)
         self.assertEqual(run.call_args.kwargs['intensity_loss_weight'],0.5)
         self.assertNotIn('fragment_loss_weight',run.call_args.kwargs['model_config']['spectrum_model_params'])
         self.assertTrue(run.call_args.kwargs['train_mol_encoder'])

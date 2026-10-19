@@ -2,7 +2,10 @@ from typing import Optional, Tuple
 import torch
 from torch_geometric.data import Data
 
-from ...domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES, compute_descriptor_values
+from ...domain.molecule.descriptors import (
+    SUPPORTED_DESCRIPTOR_NAMES,
+    compute_descriptor_values,
+)
 from ...libs.mmkit.mmkit import Compound
 from .atom_feature import AtomFeatureLayer
 from .bond_feature import BondFeatureLayer
@@ -28,17 +31,22 @@ class MolGraphBuilder:
     @property
     def bond_dim(self) -> int:
         return self.bond_layer.feature_dim
-    
+
     @property
     def symbols(self) -> Tuple[str]:
         return self.atom_layer.symbols
 
     def graph_atoms(self, compound):
         """Atoms represented by this encoder; hydrogen counts remain features."""
-        return [atom for atom in compound.mapped_mol.GetAtoms()
-                if atom.GetAtomicNum() != 1 or 'H' in self.symbols]
+        return [
+            atom
+            for atom in compound.mapped_mol.GetAtoms()
+            if atom.GetAtomicNum() != 1 or "H" in self.symbols
+        ]
 
-    def build(self, compound: Compound, *, device: Optional[torch.device] = None) -> Data:
+    def build(
+        self, compound: Compound, *, device: Optional[torch.device] = None
+    ) -> Data:
         """
         Build a PyTorch Geometric Data object from a Compound.
 
@@ -60,7 +68,13 @@ class MolGraphBuilder:
         atoms = self.graph_atoms(compound)
         atom_indices = {atom.GetIdx(): index for index, atom in enumerate(atoms)}
         atom_features = [self.atom_layer.encode(atom) for atom in atoms]
-        x = (torch.stack(atom_features, dim=0) if atom_features else torch.empty((0, self.atom_dim))).to(device=device)  # [num_atoms, atom_dim]
+        x = (
+            torch.stack(atom_features, dim=0)
+            if atom_features
+            else torch.empty((0, self.atom_dim))
+        ).to(
+            device=device
+        )  # [num_atoms, atom_dim]
 
         # --- bond features (bidirectional) ---
         edge_indices = []
@@ -79,14 +93,21 @@ class MolGraphBuilder:
             bond_features.append(bond_vec.clone())
 
         if edge_indices:
-            edge_index = torch.tensor(edge_indices, dtype=torch.long, device=device).T  # [2, E]
+            edge_index = torch.tensor(
+                edge_indices, dtype=torch.long, device=device
+            ).T  # [2, E]
             edge_attr = torch.stack(bond_features, dim=0)  # [E, bond_dim]
         else:
             edge_index = torch.empty((2, 0), dtype=torch.long, device=device)
-            edge_attr = torch.empty((0, self.bond_dim), dtype=torch.float32, device=device)
+            edge_attr = torch.empty(
+                (0, self.bond_dim), dtype=torch.float32, device=device
+            )
 
         descriptors = torch.tensor(
-            [compute_descriptor_values(mol, SUPPORTED_DESCRIPTOR_NAMES)], dtype=torch.float32, device=device)
+            [compute_descriptor_values(mol, SUPPORTED_DESCRIPTOR_NAMES)],
+            dtype=torch.float32,
+            device=device,
+        )
 
         return Data(
             x=x,

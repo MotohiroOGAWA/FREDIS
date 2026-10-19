@@ -7,11 +7,11 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-
 # ============================================================
 # Set Transformer (generic, batch_first)
 # - Supports variable-sized sets via padding + key_padding_mask
 # ============================================================
+
 
 class MAB(nn.Module):
     """
@@ -33,6 +33,7 @@ class MAB(nn.Module):
     Output:
         H: [B, Lq, dim_out]
     """
+
     def __init__(
         self,
         dim_q: int,
@@ -92,7 +93,9 @@ class MAB(nn.Module):
                 raise ValueError("key_padding_mask must be [B, Lk]")
 
             B = int(Q.size(0))
-            if int(key_padding_mask.size(0)) != B or int(key_padding_mask.size(1)) != int(K.size(1)):
+            if int(key_padding_mask.size(0)) != B or int(
+                key_padding_mask.size(1)
+            ) != int(K.size(1)):
                 raise ValueError(
                     f"key_padding_mask shape mismatch: got {tuple(key_padding_mask.shape)}, "
                     f"expected ({B}, {int(K.size(1))})"
@@ -122,6 +125,7 @@ class SAB(nn.Module):
     """
     Self-Attention Block: MAB(X, X)
     """
+
     def __init__(
         self,
         dim: int,
@@ -132,9 +136,19 @@ class SAB(nn.Module):
         ffn_mult: int = 2,
     ) -> None:
         super().__init__()
-        self.mab = MAB(dim, dim, dim, num_heads=num_heads, dropout=dropout, ln=ln, ffn_mult=ffn_mult)
+        self.mab = MAB(
+            dim,
+            dim,
+            dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            ln=ln,
+            ffn_mult=ffn_mult,
+        )
 
-    def forward(self, X: Tensor, *, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(
+        self, X: Tensor, *, key_padding_mask: Optional[Tensor] = None
+    ) -> Tensor:
         return self.mab(X, X, key_padding_mask=key_padding_mask)
 
 
@@ -153,6 +167,7 @@ class ISAB(nn.Module):
     Output:
       Y: [B, L, D]
     """
+
     def __init__(
         self,
         dim: int,
@@ -165,14 +180,32 @@ class ISAB(nn.Module):
     ) -> None:
         super().__init__()
         self.I = nn.Parameter(torch.randn(1, num_inducing_points, dim) * 0.02)
-        self.mab0 = MAB(dim, dim, dim, num_heads=num_heads, dropout=dropout, ln=ln, ffn_mult=ffn_mult)
-        self.mab1 = MAB(dim, dim, dim, num_heads=num_heads, dropout=dropout, ln=ln, ffn_mult=ffn_mult)
+        self.mab0 = MAB(
+            dim,
+            dim,
+            dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            ln=ln,
+            ffn_mult=ffn_mult,
+        )
+        self.mab1 = MAB(
+            dim,
+            dim,
+            dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            ln=ln,
+            ffn_mult=ffn_mult,
+        )
 
-    def forward(self, X: Tensor, *, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(
+        self, X: Tensor, *, key_padding_mask: Optional[Tensor] = None
+    ) -> Tensor:
         B = int(X.size(0))
         I = self.I.expand(B, -1, -1)  # [B, m, D]
-        H = self.mab0(I, X, key_padding_mask=key_padding_mask)   # mask applies to K/V=X
-        Y = self.mab1(X, H, key_padding_mask=None)               # H has no padding
+        H = self.mab0(I, X, key_padding_mask=key_padding_mask)  # mask applies to K/V=X
+        Y = self.mab1(X, H, key_padding_mask=None)  # H has no padding
         return Y
 
 
@@ -188,6 +221,7 @@ class PMA(nn.Module):
     Output:
       P: [B, k, D]
     """
+
     def __init__(
         self,
         dim: int,
@@ -200,9 +234,19 @@ class PMA(nn.Module):
     ) -> None:
         super().__init__()
         self.S = nn.Parameter(torch.randn(1, num_seeds, dim) * 0.02)
-        self.mab = MAB(dim, dim, dim, num_heads=num_heads, dropout=dropout, ln=ln, ffn_mult=ffn_mult)
+        self.mab = MAB(
+            dim,
+            dim,
+            dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            ln=ln,
+            ffn_mult=ffn_mult,
+        )
 
-    def forward(self, X: Tensor, *, key_padding_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(
+        self, X: Tensor, *, key_padding_mask: Optional[Tensor] = None
+    ) -> Tensor:
         B = int(X.size(0))
         S = self.S.expand(B, -1, -1)  # [B, k, D]
         return self.mab(S, X, key_padding_mask=key_padding_mask)
@@ -220,6 +264,7 @@ class SetTransformer(nn.Module):
     Output:
       out: [B, out_dim] (if num_seeds==1) or [B, num_seeds, out_dim] (if keep_seeds=True)
     """
+
     def __init__(
         self,
         in_dim: int,
@@ -237,27 +282,48 @@ class SetTransformer(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.in_proj = nn.Linear(in_dim, hidden_dim) if in_dim != hidden_dim else nn.Identity()
+        self.in_proj = (
+            nn.Linear(in_dim, hidden_dim) if in_dim != hidden_dim else nn.Identity()
+        )
 
         blocks = []
         for _ in range(num_layers):
             if block_type == "sab":
-                blocks.append(SAB(hidden_dim, num_heads=num_heads, dropout=dropout, ln=ln, ffn_mult=ffn_mult))
+                blocks.append(
+                    SAB(
+                        hidden_dim,
+                        num_heads=num_heads,
+                        dropout=dropout,
+                        ln=ln,
+                        ffn_mult=ffn_mult,
+                    )
+                )
             elif block_type == "isab":
-                blocks.append(ISAB(
-                    hidden_dim,
-                    num_heads=num_heads,
-                    num_inducing_points=num_inducing_points,
-                    dropout=dropout,
-                    ln=ln,
-                    ffn_mult=ffn_mult,
-                ))
+                blocks.append(
+                    ISAB(
+                        hidden_dim,
+                        num_heads=num_heads,
+                        num_inducing_points=num_inducing_points,
+                        dropout=dropout,
+                        ln=ln,
+                        ffn_mult=ffn_mult,
+                    )
+                )
             else:
                 raise ValueError(f"Unknown block_type='{block_type}'")
         self.blocks = nn.ModuleList(blocks)
 
-        self.pma = PMA(hidden_dim, num_heads=num_heads, num_seeds=num_seeds, dropout=dropout, ln=ln, ffn_mult=ffn_mult)
-        self.out_proj = nn.Linear(hidden_dim, out_dim) if hidden_dim != out_dim else nn.Identity()
+        self.pma = PMA(
+            hidden_dim,
+            num_heads=num_heads,
+            num_seeds=num_seeds,
+            dropout=dropout,
+            ln=ln,
+            ffn_mult=ffn_mult,
+        )
+        self.out_proj = (
+            nn.Linear(hidden_dim, out_dim) if hidden_dim != out_dim else nn.Identity()
+        )
         self.num_seeds = num_seeds
 
     def forward(
@@ -273,12 +339,11 @@ class SetTransformer(nn.Module):
             H = blk(H, key_padding_mask=key_padding_mask)
 
         P = self.pma(H, key_padding_mask=key_padding_mask)  # [B, k, Dh]
-        P = self.out_proj(P)                                # [B, k, Dout]
+        P = self.out_proj(P)  # [B, k, Dout]
 
         if keep_seeds or self.num_seeds != 1:
             return P
         return P[:, 0, :]  # [B, Dout]
-
 
     # ============================================================
     # Helpers: pack ragged sets (group_id) -> padded [G, Lmax, D]
@@ -293,14 +358,15 @@ class SetTransformer(nn.Module):
         key_padding_mask: [G, Lmax] bool (True for PAD)
         counts: [G] long
         """
+
         X: Tensor
         key_padding_mask: Tensor
         counts: Tensor
 
     @staticmethod
     def pack_sets_by_group(
-        feats: Tensor,          # [M, D]
-        group_id: Tensor,       # [M] long in [0..G-1]
+        feats: Tensor,  # [M, D]
+        group_id: Tensor,  # [M] long in [0..G-1]
         num_groups: int,
     ) -> SetTransformer.PackedSets:
         """
@@ -328,7 +394,7 @@ class SetTransformer(nn.Module):
         # Sort by group_id so each group's elements are contiguous
         order = torch.argsort(group_id)
         gid = group_id[order]  # [M]
-        x = feats[order]       # [M, D]
+        x = feats[order]  # [M, D]
 
         counts = torch.bincount(gid, minlength=G)  # [G]
         Lmax = int(counts.max().item()) if G > 0 else 0
@@ -340,9 +406,11 @@ class SetTransformer(nn.Module):
 
         # Compute position within each group for each sorted element
         # group_starts[g] = starting index in the sorted array for group g
-        group_starts = torch.cumsum(counts, dim=0) - counts                  # [G]
-        starts_for_each_elem = group_starts[gid]                              # [M]
-        pos_in_group = torch.arange(M, device=feats.device) - starts_for_each_elem  # [M], 0..count-1 per group
+        group_starts = torch.cumsum(counts, dim=0) - counts  # [G]
+        starts_for_each_elem = group_starts[gid]  # [M]
+        pos_in_group = (
+            torch.arange(M, device=feats.device) - starts_for_each_elem
+        )  # [M], 0..count-1 per group
 
         # Scatter into padded tensor
         X = torch.zeros((G, Lmax, D), dtype=feats.dtype, device=feats.device)
@@ -351,8 +419,9 @@ class SetTransformer(nn.Module):
         # Build padding mask: True indicates padding (to be ignored)
         # mask_valid[g, j] = j < counts[g]
         j = torch.arange(Lmax, device=feats.device).unsqueeze(0)  # [1, Lmax]
-        valid = j < counts.unsqueeze(1)                           # [G, Lmax]
-        key_padding_mask = ~valid                                 # True for PAD
+        valid = j < counts.unsqueeze(1)  # [G, Lmax]
+        key_padding_mask = ~valid  # True for PAD
 
-        return SetTransformer.PackedSets(X=X, key_padding_mask=key_padding_mask, counts=counts)
-
+        return SetTransformer.PackedSets(
+            X=X, key_padding_mask=key_padding_mask, counts=counts
+        )

@@ -1,4 +1,5 @@
 """Concrete edits at one manually selected reactant SMARTS match."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
@@ -41,52 +42,93 @@ class ReactionInstance:
     def __post_init__(self) -> None:
         if self.product_molecule_id < 0:
             raise ValueError("product_molecule_id must be nonnegative")
-        object.__setattr__(self, "bond_updates", frozenset((*bond_key(u, v), order)
-                           for u, v, order in self.bond_updates))
+        object.__setattr__(
+            self,
+            "bond_updates",
+            frozenset((*bond_key(u, v), order) for u, v, order in self.bond_updates),
+        )
         object.__setattr__(self, "source_atom_maps", tuple(self.source_atom_maps))
         for name in ("retained_atom_maps", "discarded_atom_maps"):
             object.__setattr__(self, name, frozenset(getattr(self, name)))
         for name in ("matched_bond_maps", "cut_bond_maps", "changed_bond_maps"):
-            object.__setattr__(self, name, frozenset(bond_key(*b) for b in getattr(self, name)))
+            object.__setattr__(
+                self, name, frozenset(bond_key(*b) for b in getattr(self, name))
+            )
         universe = self.retained_atom_maps | self.discarded_atom_maps
         if not universe or any(m <= 0 for m in universe):
             raise ValueError("Source atom maps must be positive")
         if self.retained_atom_maps & self.discarded_atom_maps:
             raise ValueError("Retained and discarded atoms must be disjoint")
-        if (not self.source_atom_maps or len(set(self.source_atom_maps)) != len(self.source_atom_maps)
-                or not set(self.source_atom_maps) <= universe):
+        if (
+            not self.source_atom_maps
+            or len(set(self.source_atom_maps)) != len(self.source_atom_maps)
+            or not set(self.source_atom_maps) <= universe
+        ):
             raise ValueError("Match requires distinct atoms belonging to Source")
-        if any(not set(b) <= set(self.source_atom_maps) for b in self.matched_bond_maps):
+        if any(
+            not set(b) <= set(self.source_atom_maps) for b in self.matched_bond_maps
+        ):
             raise ValueError("Matched bonds must belong to the concrete SMARTS match")
         if not self.cut_bond_maps <= self.matched_bond_maps:
             raise ValueError("Cut bonds must belong to matched SMARTS bonds")
 
         update_edges = frozenset((u, v) for u, v, _ in self.bond_updates)
-        if not update_edges <= self.matched_bond_maps or update_edges & self.cut_bond_maps:
+        if (
+            not update_edges <= self.matched_bond_maps
+            or update_edges & self.cut_bond_maps
+        ):
             raise ValueError("Updated bonds must be matched and must not be cut")
         if any(not {u, v} <= self.retained_atom_maps for u, v, _ in self.bond_updates):
             raise ValueError("Updated bonds must retain both endpoints")
         if len(update_edges) != len(self.bond_updates):
             raise ValueError("Each bond must have one target bond order")
-        if any(order not in (Chem.BondType.SINGLE, Chem.BondType.DOUBLE, Chem.BondType.TRIPLE)
-               for _, _, order in self.bond_updates):
-            raise ValueError("Only single, double and triple bond updates are supported")
-        changed = self.changed_bond_maps | self.cut_bond_maps | update_edges | frozenset(
-            edge for edge in self.matched_bond_maps if not set(edge) <= self.retained_atom_maps)
+        if any(
+            order
+            not in (Chem.BondType.SINGLE, Chem.BondType.DOUBLE, Chem.BondType.TRIPLE)
+            for _, _, order in self.bond_updates
+        ):
+            raise ValueError(
+                "Only single, double and triple bond updates are supported"
+            )
+        changed = (
+            self.changed_bond_maps
+            | self.cut_bond_maps
+            | update_edges
+            | frozenset(
+                edge
+                for edge in self.matched_bond_maps
+                if not set(edge) <= self.retained_atom_maps
+            )
+        )
         if any(not set(edge) <= universe for edge in changed):
             raise ValueError("Changed bonds must belong to Source")
         object.__setattr__(self, "changed_bond_maps", changed)
 
     @property
     def key(self) -> tuple[
-        int, int, int, tuple[int, ...], tuple[int, ...], tuple[int, ...],
-        tuple[tuple[int, int], ...], tuple[tuple[int, int], ...],
-        tuple[tuple[int, int, Chem.BondType], ...], tuple[tuple[int, int], ...],
+        int,
+        int,
+        int,
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[tuple[int, int], ...],
+        tuple[tuple[int, int], ...],
+        tuple[tuple[int, int, Chem.BondType], ...],
+        tuple[tuple[int, int], ...],
     ]:
-        return (self.reaction_pattern_id, self.reaction_rule_id, self.product_molecule_id, self.source_atom_maps,
-                tuple(sorted(self.retained_atom_maps)), tuple(sorted(self.discarded_atom_maps)),
-                tuple(sorted(self.matched_bond_maps)), tuple(sorted(self.cut_bond_maps)),
-                tuple(sorted(self.bond_updates)), tuple(sorted(self.changed_bond_maps)))
+        return (
+            self.reaction_pattern_id,
+            self.reaction_rule_id,
+            self.product_molecule_id,
+            self.source_atom_maps,
+            tuple(sorted(self.retained_atom_maps)),
+            tuple(sorted(self.discarded_atom_maps)),
+            tuple(sorted(self.matched_bond_maps)),
+            tuple(sorted(self.cut_bond_maps)),
+            tuple(sorted(self.bond_updates)),
+            tuple(sorted(self.changed_bond_maps)),
+        )
 
     @classmethod
     def from_match(
@@ -116,15 +158,23 @@ class ReactionInstance:
             raise ValueError("Match references atoms absent from Source")
         # Pin each query atom to its chosen source index without listing matches.
         from rdkit.Chem import rdqueries
+
         probe = Chem.Mol(mol)
         pinned = Chem.Mol(query)
         for atom in probe.GetAtoms():
             atom.SetIntProp("_reaction_source_index", atom.GetIdx())
         for atom, m in zip(pinned.GetAtoms(), roles):
-            atom.ExpandQuery(rdqueries.HasIntPropWithValueQueryAtom("_reaction_source_index", by_map[m]))
+            atom.ExpandQuery(
+                rdqueries.HasIntPropWithValueQueryAtom(
+                    "_reaction_source_index", by_map[m]
+                )
+            )
         if not probe.HasSubstructMatch(pinned):
             raise ValueError("Selected Source atoms do not match reactant SMARTS")
-        rule = next((r for r in reaction_pattern.reaction_rules if r.id == reaction_rule_id), None)
+        rule = next(
+            (r for r in reaction_pattern.reaction_rules if r.id == reaction_rule_id),
+            None,
+        )
         if rule is None:
             raise ValueError("Unknown reaction_rule_id")
         if not 0 <= product_molecule_id < len(rule.prod_temp):
@@ -137,8 +187,10 @@ class ReactionInstance:
         retained = frozenset(retained_atom_maps)
         if not retained <= by_map.keys():
             raise ValueError("Retained atoms must belong to Source")
-        matched = frozenset(bond_key(roles[b.GetBeginAtomIdx()], roles[b.GetEndAtomIdx()])
-                            for b in query.GetBonds())
+        matched = frozenset(
+            bond_key(roles[b.GetBeginAtomIdx()], roles[b.GetEndAtomIdx()])
+            for b in query.GetBonds()
+        )
         template = rule.prod_temp[product_molecule_id]
         map_to_source = {a.GetAtomMapNum(): roles[a.GetIdx()] for a in query.GetAtoms()}
         product_bonds = {}
@@ -158,11 +210,26 @@ class ReactionInstance:
             elif set(edge) <= retained:
                 original = mol.GetBondBetweenAtoms(*(by_map[m] for m in edge))
                 order = product_bonds[edge]
-                if order != Chem.BondType.UNSPECIFIED and original.GetBondType() != order:
+                if (
+                    order != Chem.BondType.UNSPECIFIED
+                    and original.GetBondType() != order
+                ):
                     updates.add((*edge, order))
-        changed = frozenset(bond_key(b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum())
-                            for b in mol.GetBonds()
-                            if not {b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum()} <= retained)
-        return cls(pattern_id, reaction_rule_id, roles, retained, frozenset(by_map) - retained,
-                   matched, frozenset(cuts), frozenset(updates), changed,
-                   product_molecule_id=product_molecule_id)
+        changed = frozenset(
+            bond_key(b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum())
+            for b in mol.GetBonds()
+            if not {b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum()}
+            <= retained
+        )
+        return cls(
+            pattern_id,
+            reaction_rule_id,
+            roles,
+            retained,
+            frozenset(by_map) - retained,
+            matched,
+            frozenset(cuts),
+            frozenset(updates),
+            changed,
+            product_molecule_id=product_molecule_id,
+        )

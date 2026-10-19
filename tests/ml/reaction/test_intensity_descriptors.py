@@ -10,12 +10,10 @@ from .TestReactionPipeline import config
 def test_descriptors_only_affect_post_branch_intensity():
     torch.manual_seed(23)
     params=config();params['mol_encoder_params']['descriptors']=[]
-    params['reaction_model_params']['pattern_input_version']=3
     params['spectrum_model_params']['descriptors']=['TPSA','MolLogP']
     generator=create_spectrum_generator(params).eval()
     assert generator.mol_encoder.descriptor_projection is None
     reaction=generator.feature_model.reaction_instance_encoder
-    assert all(not head.descriptor_indices for head in reaction.pattern_heads.values())
     assert all(encoder.bond_dim>0 for encoder in reaction.neighborhood_encoders.values())
     source=Compound.from_smiles('CC(O)N');adduct=Adduct.parse('[M+H]+')
     data,_=ReactionStructureBuilder(generator).build(source,[adduct],[20.],[[18.033826,44.049476]],[[.5,1.]])
@@ -33,18 +31,15 @@ def test_descriptors_only_affect_post_branch_intensity():
         after_features,after=output(modified)
     torch.testing.assert_close(before_features.reaction_h,after_features.reaction_h,rtol=0,atol=0)
     torch.testing.assert_close(before_features.source_embeddings,after_features.source_embeddings,rtol=0,atol=0)
-    torch.testing.assert_close(before.fragment_probability,after.fragment_probability,rtol=0,atol=0)
-    torch.testing.assert_close(before.adduct_logit,after.adduct_logit,rtol=0,atol=0)
-    torch.testing.assert_close(before.hydrogen_shift_logit,after.hydrogen_shift_logit,rtol=0,atol=0)
     assert not torch.equal(before.intensity,after.intensity)
     _,train=output(data)
     train.intensity.square().sum().backward()
-    grad=generator.spectrum_model.intensity_head[0].weight.grad[:,-2:]
+    grad=generator.spectrum_model.transition_score[0].weight.grad
     assert grad.abs().sum()>0
 
 
 def test_new_patterns_reject_descriptor_inputs():
-    params=config();params['reaction_model_params']['pattern_input_version']=3
+    params=config();params['mol_encoder_params']['descriptors']=['FormalCharge']
     with pytest.raises(ValueError,match='intensity'):create_spectrum_generator(params)
     params['mol_encoder_params']['descriptors']=[]
     pid=params['fragmenter_params']['fragment_ion_tree_builder']['reaction_pattern_set']['patterns'][0].get('pattern_id',0)

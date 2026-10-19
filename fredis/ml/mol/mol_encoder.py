@@ -18,7 +18,6 @@ from .mol_graphormer import (
     MolGraphormerEncoder,
 )
 
-
 DEFAULT_MOL_ENCODER_DESCRIPTORS = ("FormalCharge",)
 
 
@@ -51,7 +50,9 @@ class MolEncoder(nn.Module):
         names = tuple(str(value) for value in descriptors)
         unknown = [name for name in names if name not in SUPPORTED_DESCRIPTOR_NAMES]
         if unknown:
-            raise ValueError(f"Unsupported descriptors: {unknown}. Supported: {list(SUPPORTED_DESCRIPTOR_NAMES)}")
+            raise ValueError(
+                f"Unsupported descriptors: {unknown}. Supported: {list(SUPPORTED_DESCRIPTOR_NAMES)}"
+            )
         if len(set(names)) != len(names):
             raise ValueError("descriptors must not contain duplicates")
         self.graph_builder = MolGraphBuilder(symbols=symbols)
@@ -72,12 +73,17 @@ class MolEncoder(nn.Module):
         self.descriptors = names
         self.register_buffer(
             "descriptor_index",
-            torch.tensor([SUPPORTED_DESCRIPTOR_NAMES.index(name) for name in names], dtype=torch.long),
+            torch.tensor(
+                [SUPPORTED_DESCRIPTOR_NAMES.index(name) for name in names],
+                dtype=torch.long,
+            ),
             persistent=False,
         )
         if names:
             self.descriptor_projection = nn.Sequential(
-                nn.Linear(len(names), self._graph_dim), nn.GELU(), nn.Linear(self._graph_dim, self._graph_dim)
+                nn.Linear(len(names), self._graph_dim),
+                nn.GELU(),
+                nn.Linear(self._graph_dim, self._graph_dim),
             )
             self.descriptor_fusion = nn.Linear(self._graph_dim * 2, self._graph_dim)
         else:
@@ -85,15 +91,24 @@ class MolEncoder(nn.Module):
             self.descriptor_fusion = None
 
     @property
-    def node_dim(self) -> int:return self._node_dim
+    def node_dim(self) -> int:
+        return self._node_dim
+
     @property
-    def graph_dim(self) -> int:return self._graph_dim
+    def graph_dim(self) -> int:
+        return self._graph_dim
+
     @property
-    def atom_dim(self) -> int:return self.graph_builder.atom_dim
+    def atom_dim(self) -> int:
+        return self.graph_builder.atom_dim
+
     @property
-    def bond_dim(self) -> int:return self.graph_builder.bond_dim
+    def bond_dim(self) -> int:
+        return self.graph_builder.bond_dim
+
     @property
-    def symbols(self) -> Tuple[str, ...]:return self.graph_builder.symbols
+    def symbols(self) -> Tuple[str, ...]:
+        return self.graph_builder.symbols
 
     def encode_components(self, compound: Compound) -> Data:
         device = next(self.parameters()).device
@@ -103,11 +118,15 @@ class MolEncoder(nn.Module):
         node_h, graph_h = self.encoder(batch)
         if self.descriptor_projection is None:
             return node_h, graph_h
-        values = batch.descriptors.to(graph_h.dtype).index_select(1, self.descriptor_index)
+        values = batch.descriptors.to(graph_h.dtype).index_select(
+            1, self.descriptor_index
+        )
         # Signed log scaling keeps counts, masses and charges in a comparable range.
         values = torch.sign(values) * torch.log1p(values.abs())
         descriptor_h = self.descriptor_projection(values)
-        return node_h, self.descriptor_fusion(torch.cat((graph_h, descriptor_h), dim=-1))
+        return node_h, self.descriptor_fusion(
+            torch.cat((graph_h, descriptor_h), dim=-1)
+        )
 
     def forward(self, batch: Batch) -> Tensor:
         return self._encode_graph(batch)[1]
@@ -126,14 +145,20 @@ class MolEncoder(nn.Module):
         except Exception:
             return None
 
-    def encode_batch(self, compounds: List[Compound]) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    def encode_batch(
+        self, compounds: List[Compound]
+    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
         data_list: list[Data] = []
         indices: list[int] = []
         device = next(self.parameters()).device
         for index, compound in enumerate(compounds):
             try:
-                data_list.append(self.graph_builder.build(compound, device=device));indices.append(index)
+                data_list.append(self.graph_builder.build(compound, device=device))
+                indices.append(index)
             except Exception:
                 pass
-        if not data_list:return None,None
-        return self(Batch.from_data_list(data_list)),torch.tensor(indices,dtype=torch.long,device=device)
+        if not data_list:
+            return None, None
+        return self(Batch.from_data_list(data_list)), torch.tensor(
+            indices, dtype=torch.long, device=device
+        )

@@ -63,16 +63,16 @@ def test_one_hot_positions_are_fixed_input_columns():
 
 
 def test_pattern_input_is_raw_chemistry_plus_neighborhood_plus_position():
-    model=ReactionInstanceEncoder(4,6,8,(2,1,1),num_heads=2,pattern_smarts={0:'CC',1:'CC'},
-        raw_atom_dim=3,pattern_input_version=2,pattern_model_params={
+    model=ReactionInstanceEncoder(3,6,8,(2,1,1),num_heads=2,pattern_smarts={0:'CC',1:'CC'},
+        pattern_model_params={
             '0':dict(hidden_dim=8,graph_dim=11,num_heads=2,neighborhood_hops=3,neighborhood_hidden_dim=5),
             '1':dict(hidden_dim=12,graph_dim=19,num_heads=3,neighborhood_hops=0,neighborhood_hidden_dim=7)})
     chemical=torch.randn(6,3,requires_grad=True)
-    args=dict(source_atom_h=torch.randn(6,4),source_mol_h=torch.randn(1,6),
+    args=dict(source_mol_h=torch.randn(1,6),
         source_atom_features=chemical,source_edge_index=edges([(0,1),(0,2),(2,3),(3,4),(4,5)]),
         reaction_type=torch.tensor([[0,0,0],[1,0,0]]),reaction_tree_index=torch.tensor([0,0]),
         reaction_source_atom_ptr=torch.tensor([0,2,4]),reaction_source_atom_index=torch.tensor([0,1,0,1]),
-        reaction_static_features=torch.zeros(2,6),reaction_source_atom_hops=[])
+        reaction_static_features=torch.zeros(2,6))
     captured=[];handle=model.reactant_encoders['0'].node_proj.register_forward_pre_hook(lambda module,values:captured.append(values[0]))
     output=model(**args);handle.remove()
     assert output.shape==(2,8)
@@ -80,9 +80,7 @@ def test_pattern_input_is_raw_chemistry_plus_neighborhood_plus_position():
     torch.testing.assert_close(captured[0][...,:3],chemical[:2].unsqueeze(0))
     assert torch.count_nonzero(captured[0][0,1,3:8])==0
     assert '1' not in model.neighborhood_encoders
-    # The global molecular atom encoder must not enter the SMARTS input.
-    changed={**args,'source_atom_h':torch.randn(6,4)*100}
-    torch.testing.assert_close(output,model(**changed),rtol=0,atol=0)
+
     output[:,0].sum().backward()
     assert chemical.grad[4].abs().sum()>0
     assert torch.count_nonzero(chemical.grad[5])==0
@@ -111,3 +109,22 @@ def test_bond_features_propagate_from_third_shell_without_leaking_internal_bonds
     before.square().sum().backward()
     assert bond.grad[8].abs().sum()>0 and torch.count_nonzero(bond.grad[4])==0
     with pytest.raises(ValueError,match='edge attributes'):model(atoms,graph,sites)
+
+
+def test_four_and_five_hop_context_is_not_limited_by_preparation():
+    graph_edges = edges([(i, i + 1) for i in range(6)])
+    sites = torch.tensor([[0]])
+    features = torch.zeros(7, 1)
+    features[5] = 1
+    for radius in (4, 5):
+        model = ExternalNeighborhoodEncoder(1, 1, radius)
+        with torch.no_grad():
+            model.atom_projection.weight.fill_(1)
+            for message in model.messages:
+                message.weight.fill_(1)
+        output = model(features, graph_edges, sites)
+        assert bool(output.abs().sum() > 0) == (radius == 5)
+
+    from dataclasses import fields
+    from fredis.ml.input.source_reaction_structure import SourceReactionStructure
+    assert not any('hop' in field.name for field in fields(SourceReactionStructure))

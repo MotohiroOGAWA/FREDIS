@@ -1,40 +1,36 @@
+import math
 from typing import Tuple
 import torch
 import torch.nn as nn
 
 from ....common.torch_utils.nn_utils import build_fc_layers
 
+
 class CollisionEnergyFeatureLayer(nn.Module):
     def __init__(
         self,
         feature_dim: int,
-        fc_dims: Tuple[int, ...] = (),
+        fc_dims: Tuple[int, ...] = (32,),
+        *,
+        dropout: float = 0.0,
+        center: float = 0.0,
+        scale: float = 100.0,
     ):
         super().__init__()
         self._feature_dim = int(feature_dim)
-        if self._feature_dim != 16:
+        if not math.isfinite(center) or not math.isfinite(scale) or scale <= 0:
             raise ValueError(
-                "CollisionEnergyFeatureLayer uses eight sin/cos pairs and "
-                "therefore requires feature_dim=16."
+                "CE center must be finite and scale must be finite and positive"
             )
-        self.register_buffer(
-            "frequencies",
-            torch.exp(
-                -torch.log(torch.tensor(10000.0))
-                * torch.arange(8, dtype=torch.float32)
-                / 8.0
-            ),
-        )
-        self.register_buffer("ce_center", torch.tensor(0.0))
-        self.register_buffer("ce_scale", torch.tensor(1.0))
+        self.register_buffer("ce_center", torch.tensor(float(center)))
+        self.register_buffer("ce_scale", torch.tensor(float(scale)))
         self.proj = build_fc_layers(
-            input_dim=16,
+            input_dim=1,
             fc_dims=fc_dims,
             output_dim=self._feature_dim,
-            dropout=0.0,
+            dropout=dropout,
         )
 
-        self.norm = nn.LayerNorm(self._feature_dim)
         self._init_weights()
 
     def _init_weights(self):
@@ -85,12 +81,10 @@ class CollisionEnergyFeatureLayer(nn.Module):
             raise ValueError("ce must be [B] or [B,1]")
 
         normalized = (ce - self.ce_center) / self.ce_scale.clamp_min(1e-6)
-        angles = normalized * self.frequencies.to(ce.dtype).view(1, -1)
-        encoded = torch.cat((torch.sin(angles), torch.cos(angles)), dim=-1)
+        encoded = normalized
         out = self.proj(encoded)
-        out = self.norm(out)
         return out
-    
+
     @property
     def feature_dim(self) -> int:
         return self._feature_dim

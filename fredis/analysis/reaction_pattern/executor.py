@@ -1,4 +1,5 @@
 """Run chemistry task queues serially or in a process pool."""
+
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -14,20 +15,42 @@ from .constants import FAILED, SKIP_WORKER_CRASH
 
 
 def _crash_result(task: chemistry.ChemistryTask, message: str) -> dict:
-    return {"compound_id": task.compound.compound_id, "steps": [
-        dict(compound_id=task.compound.compound_id, condition_id=step.condition_id,
-             parent_condition_id=step.parent_condition_id, status=FAILED, skip_category=SKIP_WORKER_CRASH,
-             reason=message, error="", kept=[], counts=[], file="", incremental=False, search_stats=None,
-             seconds=0.0) for step in task.steps]}
+    return {
+        "compound_id": task.compound.compound_id,
+        "steps": [
+            dict(
+                compound_id=task.compound.compound_id,
+                condition_id=step.condition_id,
+                parent_condition_id=step.parent_condition_id,
+                status=FAILED,
+                skip_category=SKIP_WORKER_CRASH,
+                reason=message,
+                error="",
+                kept=[],
+                counts=[],
+                file="",
+                incremental=False,
+                search_stats=None,
+                seconds=0.0,
+            )
+            for step in task.steps
+        ],
+    }
 
 
 def _chunks(tasks: list, size: int) -> list[list]:
-    return [tasks[start:start + size] for start in range(0, len(tasks), size)]
+    return [tasks[start : start + size] for start in range(0, len(tasks), size)]
 
 
-def execute(tasks: Iterable[chemistry.ChemistryTask], options: chemistry.ChemistryOptions, *,
-            num_workers: int = 1, chunk_size: int = 1, description: str = "Chemistry",
-            on_result: Callable[[dict], None]) -> None:
+def execute(
+    tasks: Iterable[chemistry.ChemistryTask],
+    options: chemistry.ChemistryOptions,
+    *,
+    num_workers: int = 1,
+    chunk_size: int = 1,
+    description: str = "Chemistry",
+    on_result: Callable[[dict], None],
+) -> None:
     """Run every task once; ``on_result`` receives results in completion order.
 
     A Python exception is already classified inside ``chemistry.run_task``.
@@ -38,7 +61,10 @@ def execute(tasks: Iterable[chemistry.ChemistryTask], options: chemistry.Chemist
     tasks = list(tasks)
     if not tasks:
         return
-    with tqdm(total=len(tasks), desc=description, unit="task", file=sys.stderr) as progress:
+    with tqdm(
+        total=len(tasks), desc=description, unit="task", file=sys.stderr
+    ) as progress:
+
         def consume(result: dict) -> None:
             on_result(result)
             progress.update(1)
@@ -52,8 +78,12 @@ def execute(tasks: Iterable[chemistry.ChemistryTask], options: chemistry.Chemist
         chunk_size = max(1, min(chunk_size, len(tasks) // num_workers or 1))
         pending_chunks = _chunks(tasks, chunk_size)
         crashed: list[list] = []
-        with ProcessPoolExecutor(max_workers=num_workers, mp_context=context,
-                                 initializer=chemistry.initialize, initargs=(options,)) as pool:
+        with ProcessPoolExecutor(
+            max_workers=num_workers,
+            mp_context=context,
+            initializer=chemistry.initialize,
+            initargs=(options,),
+        ) as pool:
             in_flight = {}
             window = num_workers * 2
             chunk_iter = iter(pending_chunks)
@@ -92,8 +122,12 @@ def execute(tasks: Iterable[chemistry.ChemistryTask], options: chemistry.Chemist
                 crashed.extend(chunk_iter)
         for task in (task for chunk in crashed for task in chunk):
             try:
-                with ProcessPoolExecutor(max_workers=1, mp_context=context,
-                                         initializer=chemistry.initialize, initargs=(options,)) as single:
+                with ProcessPoolExecutor(
+                    max_workers=1,
+                    mp_context=context,
+                    initializer=chemistry.initialize,
+                    initargs=(options,),
+                ) as single:
                     consume(single.submit(chemistry.run_task, task).result())
             except BrokenProcessPool:
                 consume(_crash_result(task, "Worker process exited unexpectedly."))

@@ -1,4 +1,5 @@
 """Pure Python combination search; RDKit is used only after normalization."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -35,7 +36,9 @@ class FragmentTreeLimitExceeded(ValueError):
     was hit (the builder attaches them), so a skipped source stays diagnosable.
     """
 
-    def __init__(self, limit_name: str, limit: int, stats: dict[str, int] | None = None) -> None:
+    def __init__(
+        self, limit_name: str, limit: int, stats: dict[str, int] | None = None
+    ) -> None:
         self.limit_name = limit_name
         self.limit = limit
         self.stats = stats
@@ -45,10 +48,14 @@ class FragmentTreeLimitExceeded(ValueError):
         return type(self), (self.limit_name, self.limit, self.stats)
 
 
-def validate_search_limits(max_unique_fragment_smiles: int = -1, max_reaction_combinations: int = -1) -> None:
+def validate_search_limits(
+    max_unique_fragment_smiles: int = -1, max_reaction_combinations: int = -1
+) -> None:
     """Both limits are -1 (unlimited) or a positive integer."""
-    for name, value in (("max_unique_fragment_smiles", max_unique_fragment_smiles),
-                        ("max_reaction_combinations", max_reaction_combinations)):
+    for name, value in (
+        ("max_unique_fragment_smiles", max_unique_fragment_smiles),
+        ("max_reaction_combinations", max_reaction_combinations),
+    ):
         if type(value) is not int or not (value == -1 or value > 0):
             raise ValueError(f"{name} must be -1 or a positive integer.")
 
@@ -86,13 +93,24 @@ class ReactionSequenceSearch:
         # Cached seeds are replayed into the tree in prefix order so their
         # original baseline transitions can be reconstructed without running
         # the baseline reactions again.
-        seeds = tuple(sorted(set(seed_reaction_sequences or ()), key=lambda s: (len(s.reactions), s.key)))
+        seeds = tuple(
+            sorted(
+                set(seed_reaction_sequences or ()),
+                key=lambda s: (len(s.reactions), s.key),
+            )
+        )
         if any(len(seed.reactions) > max_reaction_count for seed in seeds):
             raise ValueError("Seed exceeds max_reaction_count")
-        self.reactions = tuple(sorted(set(reactions) | {a for seed in seeds for a in seed.reactions},
-                                    key=lambda a: a.key))
+        self.reactions = tuple(
+            sorted(
+                set(reactions) | {a for seed in seeds for a in seed.reactions},
+                key=lambda a: a.key,
+            )
+        )
         self.index_by_reaction = {a: i for i, a in enumerate(self.reactions)}
-        self.addable_reactions = frozenset(reactions if addable_reactions is None else addable_reactions)
+        self.addable_reactions = frozenset(
+            reactions if addable_reactions is None else addable_reactions
+        )
         if not self.addable_reactions <= set(self.reactions):
             raise ValueError("addable_reactions must belong to the reaction universe")
         self.relations = ReactionRelations.from_reactions(self.reactions)
@@ -100,7 +118,9 @@ class ReactionSequenceSearch:
         self.seeds = seeds
         self.include_source = include_source
         self.max_reaction_combinations = max_reaction_combinations
-        self.stats = ReactionSequenceSearchStats(num_primitive_reactions=len(self.addable_reactions))
+        self.stats = ReactionSequenceSearchStats(
+            num_primitive_reactions=len(self.addable_reactions)
+        )
         self.visited_sequence_keys: set[tuple[tuple[object, ...], ...]] = set()
 
     def enumerate(self) -> tuple[_ReactionSequenceCandidate, ...]:
@@ -120,7 +140,9 @@ class ReactionSequenceSearch:
         minimum_cursor: dict[ReactionSequence | None, int] = {}
         serial = 0
         for seed in self.seeds:
-            rejection = self.relations.rejection(tuple(self.index_by_reaction[a] for a in seed.reactions))
+            rejection = self.relations.rejection(
+                tuple(self.index_by_reaction[a] for a in seed.reactions)
+            )
             if rejection:
                 raise ValueError(f"Invalid seed reaction sequence: {rejection}")
             self.visited_sequence_keys.add(seed.key)
@@ -146,8 +168,14 @@ class ReactionSequenceSearch:
                 if reaction in previous or reaction not in self.addable_reactions:
                     continue
                 self.stats.num_raw_combinations += 1
-                if 0 <= self.max_reaction_combinations < self.stats.num_raw_combinations:
-                    raise FragmentTreeLimitExceeded("max_reaction_combinations", self.max_reaction_combinations)
+                if (
+                    0
+                    <= self.max_reaction_combinations
+                    < self.stats.num_raw_combinations
+                ):
+                    raise FragmentTreeLimitExceeded(
+                        "max_reaction_combinations", self.max_reaction_combinations
+                    )
                 indices = tuple(self.index_by_reaction[a] for a in previous) + (i,)
                 rejection = self.relations.rejection(indices)
                 if rejection:
@@ -159,7 +187,10 @@ class ReactionSequenceSearch:
                 sequence = ReactionSequence((*previous, reaction))
                 if len(sequence.reactions) < len(previous) + 1:
                     self.stats.num_redundancy_pruned += 1
-                if not sequence.retained_atom_maps or len(sequence.reactions) > self.max_reaction_count:
+                if (
+                    not sequence.retained_atom_maps
+                    or len(sequence.reactions) > self.max_reaction_count
+                ):
                     continue
                 if sequence == parent:
                     self.stats.num_duplicate_sequence_pruned += 1
@@ -174,5 +205,7 @@ class ReactionSequenceSearch:
                     yield candidate
                 if sequence not in minimum_cursor or i < minimum_cursor[sequence]:
                     minimum_cursor[sequence] = i
-                    heapq.heappush(frontier, (len(sequence.reactions), serial, sequence, i))
+                    heapq.heappush(
+                        frontier, (len(sequence.reactions), serial, sequence, i)
+                    )
                     serial += 1

@@ -29,11 +29,7 @@ def default_report_file(output_file: str) -> str:
     """Return default TSV report path."""
 
     output_path = Path(output_file)
-    return str(
-        output_path.with_name(
-            output_path.stem + "_assign_formula_report.tsv"
-        )
-    )
+    return str(output_path.with_name(output_path.stem + "_assign_formula_report.tsv"))
 
 
 def get_record_spec_id(record, *, default: str = "") -> str:

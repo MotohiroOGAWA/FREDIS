@@ -1,111 +1,99 @@
-# Source-anchored fragment-tree model
+# Source-anchored competitive fragmentation model
 
-Primitive reactions are encoded once from the source molecular graph.
-Each branch group is identified by `(compound, normalized main adduct)` and
-starts from the empty Source reaction state. `ReactionSequenceEncoder` represents the
-selected reaction set without positional encoding. `BranchingReactionDecoder`
-scores every chemically compatible next reaction from the complete primitive
-reaction universe; collision energy is not an input to this scorer.
+The current architecture is `fragment-tree-competitive-ion`. Prepared tensors,
+analysis artifacts and fine-tuning metadata start at schema/version **1**.
+There is one supported model path; older encodings and format conversions are
+not implemented. Model configurations are plain `model_config` dictionaries.
 
-Reactions in a state are an unordered, simultaneous reaction set. There is no
-"run A before B" interpretation. For candidate `B` and every selected reaction
-`A`, compatibility requires both:
+## Reaction features and candidate graph
+
+Each source reaction instance has a pattern-owned Reactant Graphormer. Its
+inputs are raw chemical atom features, fixed SMARTS-position one-hot features,
+and optionally external-neighborhood and whole-molecule features. External
+neighborhoods use the original source graph, block paths through other SMARTS
+atoms and support any non-negative `neighborhood_hops`, including 4 and above.
+No fixed 1/2/3-hop CSR tensors are prepared or stored.
+
+The pattern readout produces `h_reaction` in a common feature space. The
+reaction-set Set Transformer summarizes selected reactions with a BOS token;
+that state summary is separate from `h_reaction`. Main adduct conditions the
+proposal decoder, while CE does not change proposal features.
+
+The decoder proposes bounded reaction sets, retaining the best cumulative
+proposal score for duplicate sets. It then retains **all chemically valid
+transitions between accepted sets**, including alternate parents. RDKit
+materializes accepted reaction sets after decoding. Distinct sets keep distinct
+internal states even when their product SMILES match; molecular embeddings can
+still be shared. Preparation includes every exhaustively enumerated state,
+including alternatives without observed peaks.
+
+## Competitive ion transitions
+
+Each structural state has physical ion candidates with deduplicated
+`fragment_ion_adduct × hydrogen_shift` explanations. Both fields are embedded
+and passed through a configurable combination MLP. Equivalent explanations
+share a physical parent state, whose features are their mean; outgoing child
+explanations retain their individual combination embeddings.
+
+For every structural edge and valid parent/child ion pair, a transition MLP
+scores the parent and child molecular embeddings, optional fragment descriptors,
+reused `h_reaction`, parent ion features, child combination features, main adduct
+and CE. Transitions must retain charge and have elementwise nonnegative neutral
+loss. These constraints supplement structural compatibility and adduct rules;
+they are not a complete model of ion chemistry.
+
+All outgoing events compete with a learned self transition in a source-wise
+softmax. Duplicate enumerated events are excluded. Equivalent explanations and
+alternative paths contribute by **addition**, not by maximum-path selection.
+
+Starting from the observed precursor ion, probabilities propagate for a fixed
+number of steps:
 
 ```text
-B.source_atom_maps ⊆ A.retained_atom_maps
-A.source_atom_maps ⊆ B.retained_atom_maps
-A.changed_bond_maps ∩ B.changed_bond_maps = ∅
+p[t + 1, child] = sum_parent p[t, parent] * T[parent, child]
 ```
 
-The tensor candidate mask is therefore:
+Initialization prefers a matching source-root ion. If a neutral-loss precursor
+matches only downstream structural states, its initial mass is distributed
+uniformly among those matches. Self transitions mean persistence for one step;
+leaf states persist with probability one. `propagation_steps` includes self
+transitions and is separate from the maximum reaction count.
 
-```text
-pool_valid(B)
-AND B not already selected
-AND mutual_source_retention(A, B) for every selected A
-AND no_changed_bond_conflict(A, B) for every selected A
-AND intersection(retained_atom_maps of the normalized set) is non-empty
-AND normalized set differs from the parent set
-AND normalized reaction count <= max_reaction_count
-```
+Final probabilities are summed by sample and output formula before spectrum
+comparison or peak-intensity filtering. Candidate intensities are divided by the
+maximum formula-grouped probability in that sample. The spectrum objective is
+cross entropy against sum-normalized target intensities plus a weighted cosine
+term; proposal branch loss remains separate. There is no independent intensity
+regressor, fragment/state BCE classifier or ion-confidence threshold. Output
+confidence is one for the viewer interface, not a learned presence probability.
+Transition outputs retain each event's source, target, explanation, reaction and
+probability; self events use explanation/reaction index -1.
 
-Preparation stores the directional invalidation relation `A -> B` when
-`B.source_atom_maps` is not a subset of `A.retained_atom_maps`. The mask checks
-all ordered pairs in the proposed set, so either `A -> B` or `B -> A` rejects
-the composite reaction. A changed bond merely appearing in another reaction's
-matched SMARTS context does not establish ordering; only two reactions changing
-the same Source bond is a conflict.
+## Configurable MLPs
 
-Search accumulates `logsigmoid` transition scores, prunes on cumulative path
-probability when enabled, deduplicates equal normalized states by maximum score,
-and enforces `max_reaction_count` plus one shared `max_fragment_nodes` budget per
-branch group. There is no learned absolute reaction filter, top-k pool, beam, or
-EOS classifier.
+All three MLPs use `build_fc_layers` from `common/torch_utils/nn_utils.py`:
+Linear/ReLU/Dropout hidden blocks followed by a linear output. Widths are
+comma-separated positive integers; an empty list selects a linear map.
 
-After search, selected states cross the explicit chemistry boundary and are
-materialized. The spectrum model encodes the resulting fragment tree. Prepared ion
-explanations embed the ion adduct and hydrogen shift;
-normalized attention combines explanations of the same physical ion. An
-independent fragment logit and state logits produce physical probability in log
-space (`logsigmoid(fragment) + logsigmoid(state)`). Intensity is predicted from
-fragment, physical ion, main adduct, and collision-energy features and is not
-used as either classification logit.
+CE is exactly `MLP((CE - ce_center) / ce_scale)`. There is no sinusoidal encoding
+or post-MLP LayerNorm. Defaults center 0 and scale 100 map CE 0..100 to 0..1;
+normalization does not convert instrument units or fit dataset statistics.
 
-Training uses prepared graphs and packed transition/path/candidate tensors only.
-It does not parse SMILES, match SMARTS, materialize fragments, calculate
-formulas, generate ion candidates, or call RDKit.
+| CLI argument | Spectrum model setting | Default |
+|---|---|---|
+| `--transition-fc-dims` | `transition_fc_dims` | `128,64` |
+| `--transition-dropout` | `transition_dropout` | `0` |
+| `--propagation-steps` | `propagation_steps` | `6` |
+| `--ion-state-fc-dims` | `state_fc_dims` | `128` |
+| `--ion-state-hidden-dim` | `state_hidden_dim` (output width) | `128` |
+| `--ion-state-dropout` | `state_dropout` | `0` |
+| `--ce-fc-dims` | `ce_fc_dims` | `32` |
+| `--ce-dropout` | `ce_dropout` | `0` |
+| `--collision-energy-feature-dim` | `collision_energy_dim` | `16` |
+| `--ce-center` | `ce_center` | `0` |
+| `--ce-scale` | `ce_scale` | `100` |
 
-Reactant matches are encoded by an independent `ReactantGraphormerEncoder` for
-each Reaction Pattern, shared across that pattern's rules and product choices.
-Its fixed capacity is the number of atoms returned by `MolFromSmarts`; no
-`start_cap`, `cap_growth` or attention-routing parameter is exposed. The
-training encoder batches matches by pattern, uses the SMARTS bond topology,
-and adds a learned SMARTS-position embedding to each source atom token. The
-existing source atom, transformation-status and hop-context features remain
-inputs. `reactant_num_layers` (default 2) and `reactant_dropout` (default 0)
-in `reaction_model_params` control the pattern encoders. `reactant_node_dim`
-and `reactant_graph_dim` optionally set their token and graph widths; both
-default to `hidden_dim`. Attention heads follow `num_heads`.
-
-The standalone reactant encoder accepts `reactant_smarts`, input `atom_dim` and
-`bond_dim`, token `node_dim`, output `graph_dim`, `num_layers`, `num_heads` and
-`dropout`. It returns node and graph embeddings. `graph_dim` may be any positive
-integer: `ceil(graph_dim / node_dim)` independent learned graph tokens are
-concatenated and projected by one Linear layer to exactly `graph_dim`.
-Generic Graphormer calls use `graph_dim` instead of a caller-supplied graph
-token count; their token width is named `hidden_dim`. Omitting `graph_dim`
-retains masked mean pooling for node-only uses such as the spectrum tree.
-
-This architecture changes checkpoint parameter names/shapes (pattern encoders
-and graph readout projections). Checkpoints from the previous GNN/shared
-SetTransformer architecture require retraining. Prepared training structures
-remain usable when their pattern definitions match the model configuration.
-
-Generic Graphormer accepts external context through `context_dim` and
-`forward(data, context_repr=...)`. No context token count is supplied by the
-caller: it is `ceil(context_dim / hidden_dim)`. Context is projected to the
-resulting token width and kept separate from graph/node tokens. Each block
-runs graph/node self-attention, reads context through a dedicated cross-attention
-sublayer, and applies its FFN. Queries come from graph/node features; keys and
-values come from context. Every valid graph/node token receives the residual
-update; only padded positions are masked. Context is never updated from graph
-contents. With one context token, attention weights are always one, so the
-context update is shared, but the subsequent FFN and layers still act on each
-node's distinct features. No cross-attention parameters are created when
-context is disabled. Previous context-enabled checkpoints need retraining;
-context-disabled molecular/reactant models keep their parameter layout.
-
-Pattern features are now immutable units for staged fine-tuning. Each pattern
-owns a Graphormer plus its rule/product embeddings, source-context fusion and
-final readout (`pattern_heads`). Shared input features and all inherited pattern
-units are frozen, including their training mode; new pattern units and
-downstream prediction modules are optimized without adapters. Version 2
-fine-tuning checkpoints may be extended repeatedly. Integration copies complete
-pattern units by chemical identity and rejects conflicting shared/duplicate
-features; the selected downstream predictor can then be trained with
-`--head-only`. See `docs/guides/training.md` for CLI and Workbench usage.
-
-
-New reaction modules (`pattern_input_version=2`) consume raw chemical features from the prepared source graph rather than molecular encoder atom embeddings. Each SMARTS atom receives concatenated chemical features, its pattern-owned external message-passing feature, and a fixed query-position one-hot. `hidden_dim` is the Graphormer attention width; `neighborhood_hops` and `neighborhood_hidden_dim` configure its external encoder separately. External traversal blocks all other atoms in that SMARTS match, propagates inward through shells 1..k, and produces exact zeros for roles without external connections. The full prepared source graph supports any non-negative radius. Legacy pretrained modules preserve their saved encodings.
-
-Reaction definitions and pretrained source selections belong to data preparation. New pattern architectures belong to Training and are saved with the prediction checkpoint, not in preparation metadata. Neighborhood encoders are complete pattern-owned features and are frozen/exported/remapped/integrated together with the Graphormer and readout.
+Workbench exposes these fields under Spectrum Model Params. Architecture and
+normalization are saved with the checkpoint. Candidate proposal pruning limits
+the states available to probability propagation, so coverage and predictive
+accuracy need evaluation on real datasets.

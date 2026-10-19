@@ -240,12 +240,6 @@ group. `prepare_spectrum_model_batch` groups each node's formula entries into
 **physical-ion candidates**: (node, formula, net adduct, charge), each with its
 (fragment-ion adduct, ΔH) explanations.
 
-- Every sample/node gets an independent fragment label. Every `(fragment-ion adduct, ΔH)`
-  explanation gets an independent state label; fragment-negative states
-  remain in state supervision.
-- Positive fragment/state rows store the maximum relative intensity of their
-  matched peaks (base peak = 1). The model applies `intensity_power` to these
-  prepared weights.
 - `target_intensity` is the highest observed intensity within tolerance of the
   candidate m/z, or 0.
 
@@ -253,10 +247,9 @@ The saved payload contains source graphs and primitive-reaction features, teache
 reaction sets at every depth, valid continuations and next-state indices,
 positive paths per experimental peak, weak negatives, materialized fragment
 graph tensors, physical-ion candidates with explanations, formula tensors,
-exact m/z, charge, fragment/state labels and positive weights, intensity
-targets and peak annotations. The payload has a single
-current format with no version field, so regenerate `.preft.pt` files after a
-format change.
+exact m/z, charge, precursor formulas, intensity targets and peak annotations.
+The current payload uses `schema_version=1`. No format conversion is provided;
+regenerate `.preft.pt` files after a format change.
 
 ## Validation split
 
@@ -451,7 +444,7 @@ Split-level summary:
 
 ```json
 {
-  "architecture": "fragment-tree-physical-ion",
+  "architecture": "fragment-tree-competitive-ion",
   "max_primitive_reactions": 83,
   "max_primitive_reactions_smiles": "…",
   "max_raw_combinations": 91234,

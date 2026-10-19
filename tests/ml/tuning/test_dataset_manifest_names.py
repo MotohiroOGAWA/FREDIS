@@ -12,9 +12,9 @@ spec.loader.exec_module(sources)
 
 
 class DatasetManifestNames(unittest.TestCase):
-    def test_new_and_legacy_manifest(self):
+    def test_current_manifest(self):
         config = {'fragmenterParams': {'example': True}, 'symbols': ['C', 'H']}
-        for name in ['fragment-tree.training-data.pft', 'fragment-tree.pft']:
+        for name in ['fragment-tree.training-data.pft']:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 (Path(tmp) / name).write_text(json.dumps(config))
                 self.assertEqual(sources.dataset_chemistry_config(tmp)['fragmenter_params'], {'example': True})

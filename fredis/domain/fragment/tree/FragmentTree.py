@@ -157,14 +157,10 @@ class FragmentTree:
     ) -> None:
         for edge in edges:
             if not 0 <= edge.source_index < num_nodes:
-                raise ValueError(
-                    f"Invalid source_index: {edge.source_index}"
-                )
+                raise ValueError(f"Invalid source_index: {edge.source_index}")
 
             if not 0 <= edge.target_index < num_nodes:
-                raise ValueError(
-                    f"Invalid target_index: {edge.target_index}"
-                )
+                raise ValueError(f"Invalid target_index: {edge.target_index}")
 
     @property
     def node_smiles(self) -> np.ndarray:
@@ -270,10 +266,7 @@ class FragmentTree:
             node_index,
         )
 
-        return [
-            self.get_edge(int(edge_index))
-            for edge_index in edge_indices
-        ]
+        return [self.get_edge(int(edge_index)) for edge_index in edge_indices]
 
     def get_out_edges(self, node_index: int) -> list[FragmentEdge]:
         """Return outgoing edges of a node."""
@@ -281,16 +274,12 @@ class FragmentTree:
             node_index,
         )
 
-        return [
-            self.get_edge(int(edge_index))
-            for edge_index in edge_indices
-        ]
+        return [self.get_edge(int(edge_index)) for edge_index in edge_indices]
 
     def get_parent_nodes(self, child_index: int) -> list[FragmentNode]:
         """Return parent nodes connected to a child node."""
         return [
-            self.get_node(edge.source_index)
-            for edge in self.get_in_edges(child_index)
+            self.get_node(edge.source_index) for edge in self.get_in_edges(child_index)
         ]
 
     def get_child_nodes(self, parent_index: int) -> list[FragmentNode]:
@@ -326,7 +315,9 @@ class FragmentTree:
             edge = self.get_edge(edge_index)
             for transition in edge.transitions:
                 count = len(transition.reaction_sequence.reactions)
-                counts[edge.target_index] = min(counts.get(edge.target_index, count), count)
+                counts[edge.target_index] = min(
+                    counts.get(edge.target_index, count), count
+                )
         return counts
 
     def get_nodes_by_depth(self) -> Dict[int, np.ndarray]:
@@ -339,14 +330,6 @@ class FragmentTree:
             smiles=self.smiles,
             node_store=self.node_store.copy(),
             edge_store=self.edge_store.copy(),
-            adjacency=(
-                None
-                if self.adjacency is None
-                else self.adjacency.copy()
-            ),
-            depths=(
-                None
-                if self.depths is None
-                else self.depths.copy()
-            ),
+            adjacency=(None if self.adjacency is None else self.adjacency.copy()),
+            depths=(None if self.depths is None else self.depths.copy()),
         )

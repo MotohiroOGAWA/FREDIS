@@ -9,6 +9,7 @@ fredis.utils.parallel_subprocess, and consuming the result) lives in
 build_prediction_cache() in source_reaction_msdataset.py, mirroring the
 create_training_data.py / subprocess_worker.py split.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,9 +46,18 @@ def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
                 # most once per compound regardless of how many adducts it
                 # was requested with.
                 precursor_tree = fragmenter.build_fragment_ion_tree(
-                    source, max_reaction_count=fragmenter.precursor_candidate_max_reaction_count)
-            sequences = {pa.reaction_sequence for pa in fragmenter.resolve_precursor_reactions(precursor_tree, adduct)}
-            precursor_sequences[adduct_str] = tuple(sorted(sequences, key=lambda seq: (seq is not None, seq.key if seq else ())))
+                    source,
+                    max_reaction_count=fragmenter.precursor_candidate_max_reaction_count,
+                )
+            sequences = {
+                pa.reaction_sequence
+                for pa in fragmenter.resolve_precursor_reactions(precursor_tree, adduct)
+            }
+            precursor_sequences[adduct_str] = tuple(
+                sorted(
+                    sequences, key=lambda seq: (seq is not None, seq.key if seq else ())
+                )
+            )
         except Exception:
             precursor_sequences[adduct_str] = ()
     return {"reactions": reactions, "precursor_sequences": precursor_sequences}
@@ -61,7 +71,10 @@ def prepare_chunk(groups: dict[str, list[str]], prep_config: dict) -> dict[str, 
     results = {}
     for smiles, adduct_strs in groups.items():
         try:
-            results[smiles] = {"ok": True, **prepare_compound_cache(smiles, adduct_strs, fragmenter)}
+            results[smiles] = {
+                "ok": True,
+                **prepare_compound_cache(smiles, adduct_strs, fragmenter),
+            }
         except Exception as error:
             results[smiles] = {"ok": False, "error": f"{type(error).__name__}: {error}"}
     return results

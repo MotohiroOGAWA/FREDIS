@@ -1,4 +1,4 @@
-"""initialize_from_base() requires every base parameter, including neighborhood projections."""
+"""initialize_from_base() requires every base parameter, including pattern neighborhood encoders."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,10 +14,8 @@ def _toy_generator():
     generator.feature_model = nn.Module()
     generator.feature_model.reaction_instance_encoder = nn.Module()
     reaction_instance_encoder = generator.feature_model.reaction_instance_encoder
-    reaction_instance_encoder.atom_projection = nn.Linear(4, 4)
-    reaction_instance_encoder.neighborhood_projections = nn.ModuleList(nn.Linear(4, 4, bias=False) for _ in range(3))
-    for layer in reaction_instance_encoder.neighborhood_projections:
-        nn.init.zeros_(layer.weight)
+    generator.feature_model.mol_encoder = nn.Linear(4, 4)
+    reaction_instance_encoder.neighborhood_encoders = nn.ModuleDict({'0': nn.Linear(4, 4, bias=False)})
     return generator
 
 
@@ -30,24 +28,24 @@ class TestNeighborhoodFineTuning(unittest.TestCase):
             torch.save({'model_state_dict': broken_state}, checkpoint_path)
             new = _toy_generator()
             with self.assertRaisesRegex(ValueError, 'Base checkpoint is missing'):
-                initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'pattern_mapping': []}})
+                initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'pattern_mapping': [[0, 0]]}})
 
     def test_missing_base_parameter_raises(self):
-        self._assert_missing_raises('feature_model.reaction_instance_encoder.atom_projection.bias')
+        self._assert_missing_raises('feature_model.mol_encoder.bias')
 
-    def test_missing_neighborhood_projection_raises(self):
-        self._assert_missing_raises('feature_model.reaction_instance_encoder.neighborhood_projections.0.weight')
+    def test_missing_neighborhood_encoder_raises(self):
+        self._assert_missing_raises('feature_model.reaction_instance_encoder.neighborhood_encoders.0.weight')
 
     def test_complete_base_checkpoint_is_restored(self):
         old = _toy_generator()
-        nn.init.normal_(old.feature_model.reaction_instance_encoder.neighborhood_projections[0].weight)
+        nn.init.normal_(old.feature_model.reaction_instance_encoder.neighborhood_encoders['0'].weight)
         with tempfile.TemporaryDirectory() as directory:
             checkpoint_path = Path(directory) / 'base.pt'
             torch.save({'model_state_dict': old.state_dict()}, checkpoint_path)
             new = _toy_generator()
-            initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'pattern_mapping': []}})
-            self.assertTrue(torch.equal(new.feature_model.reaction_instance_encoder.neighborhood_projections[0].weight,
-                                        old.feature_model.reaction_instance_encoder.neighborhood_projections[0].weight))
+            initialize_from_base(new, {'fine_tuning': {'source_checkpoint': str(checkpoint_path), 'pattern_mapping': [[0, 0]]}})
+            self.assertTrue(torch.equal(new.feature_model.reaction_instance_encoder.neighborhood_encoders['0'].weight,
+                                        old.feature_model.reaction_instance_encoder.neighborhood_encoders['0'].weight))
 
 
 if __name__ == '__main__':

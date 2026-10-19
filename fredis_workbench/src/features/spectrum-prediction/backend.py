@@ -237,7 +237,6 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
 
     if not result.spectra.mz.numel():
         raise ValueError("The model did not produce any peaks for this input.")
-    threshold = generator.generation.ion_prediction_threshold
     intensity_threshold = generator.generation.peak_intensity_threshold
     node_indices = result.spectrum_batch.physical_candidate_node_index.detach().cpu().tolist()
     node_smiles = result.spectrum_batch.node_smiles
@@ -263,7 +262,7 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
             # Below the trained ion confidence threshold: the same unrelated
             # adduct/hydrogen-shift candidate this model now learns to push
             # toward zero, kept out of the predicted spectrum shown here.
-            if confidence >= threshold and intensity >= intensity_threshold
+            if intensity >= intensity_threshold
         ),
         key=lambda peak: peak["mz"],
     )

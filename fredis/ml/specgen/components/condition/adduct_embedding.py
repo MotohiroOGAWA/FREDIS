@@ -4,6 +4,7 @@ import torch.nn as nn
 
 from .....libs.mmkit.mmkit import Adduct
 
+
 class AdductEmbeddingLayer(nn.Module):
     def __init__(
         self,
@@ -73,23 +74,23 @@ class AdductEmbeddingLayer(nn.Module):
             shape: [B, embedding_dim]
         """
         return self.embedding(adduct_idx)
-    
+
     @property
     def feature_dim(self) -> int:
         return self.embedding.embedding_dim
-    
+
     @property
     def adduct_types(self) -> Tuple["Adduct"]:
         return self._adduct_types
-    
+
     @property
     def adduct_type_strs(self) -> Tuple[str, ...]:
         return self._adduct_type_strs
-    
+
     @property
     def num_adduct_types(self) -> int:
         return len(self._adduct_type_strs)
-    
+
     @property
     def adduct2idx(self) -> Dict[str, int]:
         return self._adduct2idx

@@ -23,11 +23,11 @@ class BondFeatureLayer(nn.Module):
 
         self.base_bond_type_vector = nn.Parameter(
             torch.zeros(len(self.feature_sets["bond_type"]), dtype=torch.float32),
-            requires_grad=False
+            requires_grad=False,
         )
         self.base_ring_type_vector = nn.Parameter(
             torch.zeros(len(self.feature_sets["ring_type"]), dtype=torch.float32),
-            requires_grad=False
+            requires_grad=False,
         )
 
     @property
@@ -54,7 +54,9 @@ class BondFeatureLayer(nn.Module):
         if bond.GetIsAromatic():
             one_hot[bond_types.index("AROMATIC")] = 1.0
         else:
-            btype = bond.GetBondType().name.upper()  # e.g., 'SINGLE', 'DOUBLE', 'TRIPLE'
+            btype = (
+                bond.GetBondType().name.upper()
+            )  # e.g., 'SINGLE', 'DOUBLE', 'TRIPLE'
             if btype in bond_types:
                 one_hot[bond_types.index(btype)] = 1.0
         return one_hot

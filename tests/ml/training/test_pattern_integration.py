@@ -27,7 +27,7 @@ def test_integration_preserves_patterns_and_exports_chemistry(checkpoints):
     before = torch.load(a,weights_only=False)
     merged = torch.load(output,weights_only=False)
     assert report['patterns']
-    assert merged['model_config']['fine_tuning']['version'] == 2
+    assert merged['model_config']['fine_tuning']['version'] == 1
     assert all(torch.equal(value,merged['model_state_dict'][key]) for key,value in before['model_state_dict'].items())
     chemistry = json.loads(output.with_suffix('.fragmenter.pft').read_text())
     assert chemistry['fragmenter_params'] == merged['model_config']['fragmenter_params']
@@ -41,10 +41,10 @@ def test_integration_rejects_conflicting_features(checkpoints,scope,message):
     a,b,output = checkpoints
     checkpoint = torch.load(b,weights_only=False)
     if scope=='mode':
-        checkpoint['model_config'].setdefault('reaction_model_params',{})['reaction_neighborhood_mode']='none'
+        checkpoint['model_config'].setdefault('reaction_model_params',{})['hidden_dim']=32
     else:
         key = next(key for key in checkpoint['model_state_dict'] if
-                   ('feature_model.reaction_instance_encoder.atom_projection.weight' == key if scope=='shared'
+                   (key.startswith('feature_model.mol_encoder.') and checkpoint['model_state_dict'][key].is_floating_point() if scope=='shared'
                     else '.pattern_heads.' in key))
         checkpoint['model_state_dict'][key] = checkpoint['model_state_dict'][key]+0.1
     torch.save(checkpoint,b)

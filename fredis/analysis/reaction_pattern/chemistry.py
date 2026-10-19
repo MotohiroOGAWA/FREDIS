@@ -11,6 +11,7 @@ history containing a new reaction has a parent-only prefix shorter than
 Every saved tree keeps its reaction-sequence compounds so that later runs can
 add children below it without recalculating it.
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -20,7 +21,13 @@ import time
 import traceback
 
 from .constants import (
-    COMPLETED, FAILED, SKIP_ERROR, SKIP_LIMIT_EXCEEDED, SKIP_PARENT_UNAVAILABLE, SKIP_UNRESOLVED_PRECURSOR, SKIPPED,
+    COMPLETED,
+    FAILED,
+    SKIP_ERROR,
+    SKIP_LIMIT_EXCEEDED,
+    SKIP_PARENT_UNAVAILABLE,
+    SKIP_UNRESOLVED_PRECURSOR,
+    SKIPPED,
 )
 
 
@@ -41,6 +48,7 @@ class CompoundInput:
 @dataclass
 class ConditionStep:
     """One condition to calculate; ``parent_condition_id`` is None for a root."""
+
     condition_id: int
     parent_condition_id: int | None
     pattern_ids: tuple[int, ...]
@@ -51,6 +59,7 @@ class ConditionStep:
 @dataclass
 class ResolvedCondition:
     """A condition already available for this compound (e.g. from a previous result)."""
+
     condition_id: int
     status: str
     kept: tuple[int, ...]
@@ -77,15 +86,23 @@ _SEED_CACHE_SIZE = 8
 
 def initialize(options: ChemistryOptions) -> None:
     """Create one builder per process over the analysis-wide pattern library."""
-    from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
+    from fredis.ml.data_preparation.fragment_tree.context import (
+        create_preparation_context,
+    )
     from fredis.ml.input.structure_builder import ReactionStructureBuilder
 
     generator = create_preparation_context(options.chemistry_config)
     _STATE.clear()
-    _STATE["builder"] = ReactionStructureBuilder(generator, max_unique_fragment_smiles=options.max_unique_fragment_smiles,
-                                               max_reaction_combinations=options.max_reaction_combinations)
-    _STATE["max_reaction_count"] = int(options.chemistry_config["fragmenter_params"]["fragment_ion_tree_builder"]
-                                     .get("max_reaction_count", 2))
+    _STATE["builder"] = ReactionStructureBuilder(
+        generator,
+        max_unique_fragment_smiles=options.max_unique_fragment_smiles,
+        max_reaction_combinations=options.max_reaction_combinations,
+    )
+    _STATE["max_reaction_count"] = int(
+        options.chemistry_config["fragmenter_params"]["fragment_ion_tree_builder"].get(
+            "max_reaction_count", 2
+        )
+    )
     _STATE["seeds"] = OrderedDict()
 
 
@@ -94,7 +111,9 @@ def run_tasks(tasks: list[ChemistryTask]) -> list[dict]:
 
 
 def _classify(error: Exception) -> tuple[str, str, str]:
-    from fredis.domain.fragment.tree.FragmentTreeBuilder import FragmentTreeLimitExceeded
+    from fredis.domain.fragment.tree.FragmentTreeBuilder import (
+        FragmentTreeLimitExceeded,
+    )
     from fredis.ml.input.source_reaction_structure import UnresolvedPrecursorError
 
     if isinstance(error, FragmentTreeLimitExceeded):
@@ -114,15 +133,21 @@ class _CompoundReactions:
         self.by_pattern: dict[int, tuple] = {}
 
     def __call__(self, pattern_ids) -> tuple:
-        from fredis.domain.fragment.reaction import ReactionPatternSet, create_reaction_instances
+        from fredis.domain.fragment.reaction import (
+            ReactionPatternSet,
+            create_reaction_instances,
+        )
 
-        pattern_set = _STATE["builder"].generator.fragmenter.fragment_ion_tree_builder.reaction_pattern_set
+        pattern_set = _STATE[
+            "builder"
+        ].generator.fragmenter.fragment_ion_tree_builder.reaction_pattern_set
         result = []
         for pattern_id in pattern_ids:
             if pattern_id not in self.by_pattern:
                 pattern = pattern_set.get_pattern(int(pattern_id))
                 self.by_pattern[pattern_id] = create_reaction_instances(
-                    self.source, ReactionPatternSet(pattern.name, (pattern,)))
+                    self.source, ReactionPatternSet(pattern.name, (pattern,))
+                )
             result.extend(self.by_pattern[pattern_id])
         return tuple(result)
 
@@ -139,8 +164,15 @@ def _seeds_from_file(seed_file: str) -> dict | None:
     _, metadata = load_prepared_structure(seed_file)
     stored = metadata.get("reaction_sequence_compounds")
     limit = _STATE["max_reaction_count"]
-    seeds = None if not stored else {sequence: Compound.from_smiles(mapped_smiles)
-                                     for sequence, mapped_smiles in stored if len(sequence.reactions) < limit}
+    seeds = (
+        None
+        if not stored
+        else {
+            sequence: Compound.from_smiles(mapped_smiles)
+            for sequence, mapped_smiles in stored
+            if len(sequence.reactions) < limit
+        }
+    )
     cache[seed_file] = seeds
     while len(cache) > _SEED_CACHE_SIZE:
         cache.popitem(last=False)
@@ -152,12 +184,17 @@ def run_task(task: ChemistryTask) -> dict:
     reactions = _CompoundReactions(compound.smiles)
     # condition_id -> (status, kept positions, in-memory seeds or None, seed file)
     state: dict[int, tuple[str, tuple[int, ...], dict | None, str]] = {
-        key: (value.status, tuple(value.kept), None, value.seed_file) for key, value in task.resolved.items()}
+        key: (value.status, tuple(value.kept), None, value.seed_file)
+        for key, value in task.resolved.items()
+    }
     results = []
     for step in task.steps:
         started = time.monotonic()
-        base = dict(compound_id=compound.compound_id, condition_id=step.condition_id,
-                    parent_condition_id=step.parent_condition_id)
+        base = dict(
+            compound_id=compound.compound_id,
+            condition_id=step.condition_id,
+            parent_condition_id=step.parent_condition_id,
+        )
         builder = _STATE["builder"]
         builder.last_search_stats = None
         incremental = False
@@ -167,69 +204,157 @@ def run_task(task: ChemistryTask) -> dict:
             else:
                 parent = state.get(step.parent_condition_id)
                 if parent is None or parent[0] != COMPLETED:
-                    results.append(dict(base, status=SKIPPED, skip_category=SKIP_PARENT_UNAVAILABLE,
-                                        reason="The parent condition is unavailable for this compound.",
-                                        error="", kept=[], counts=[], file="", incremental=False,
-                                        search_stats=None, seconds=0.0))
+                    results.append(
+                        dict(
+                            base,
+                            status=SKIPPED,
+                            skip_category=SKIP_PARENT_UNAVAILABLE,
+                            reason="The parent condition is unavailable for this compound.",
+                            error="",
+                            kept=[],
+                            counts=[],
+                            file="",
+                            incremental=False,
+                            search_stats=None,
+                            seconds=0.0,
+                        )
+                    )
                     state[step.condition_id] = (SKIPPED, (), None, "")
                     continue
                 positions = list(parent[1])
-                seeds = parent[2] if parent[2] is not None else (_seeds_from_file(parent[3]) if parent[3] else None)
+                seeds = (
+                    parent[2]
+                    if parent[2] is not None
+                    else (_seeds_from_file(parent[3]) if parent[3] else None)
+                )
                 incremental = seeds is not None
-            result = _build(builder, compound, step, positions, reactions, seeds if incremental else None)
+            result = _build(
+                builder,
+                compound,
+                step,
+                positions,
+                reactions,
+                seeds if incremental else None,
+            )
         except Exception as error:  # one compound/condition never aborts the run
             status, category, detail = _classify(error)
-            results.append(dict(base, status=status, skip_category=category, reason=f"{type(error).__name__}: {error}",
-                                error=detail, kept=[], counts=[], file="", incremental=incremental,
-                                search_stats=builder.last_search_stats, seconds=time.monotonic() - started))
+            results.append(
+                dict(
+                    base,
+                    status=status,
+                    skip_category=category,
+                    reason=f"{type(error).__name__}: {error}",
+                    error=detail,
+                    kept=[],
+                    counts=[],
+                    file="",
+                    incremental=incremental,
+                    search_stats=builder.last_search_stats,
+                    seconds=time.monotonic() - started,
+                )
+            )
             state[step.condition_id] = (status, (), None, "")
             continue
         limit = _STATE["max_reaction_count"]
-        seeds_out = {sequence: value for sequence, value in builder.last_reaction_sequence_compounds.items()
-                     if len(sequence.reactions) < limit}
-        state[step.condition_id] = (COMPLETED, tuple(result["kept"]), seeds_out, result["file"])
-        results.append(dict(base, status=COMPLETED, skip_category="", reason="", error="", incremental=incremental,
-                            search_stats=builder.last_search_stats, seconds=time.monotonic() - started, **result))
+        seeds_out = {
+            sequence: value
+            for sequence, value in builder.last_reaction_sequence_compounds.items()
+            if len(sequence.reactions) < limit
+        }
+        state[step.condition_id] = (
+            COMPLETED,
+            tuple(result["kept"]),
+            seeds_out,
+            result["file"],
+        )
+        results.append(
+            dict(
+                base,
+                status=COMPLETED,
+                skip_category="",
+                reason="",
+                error="",
+                incremental=incremental,
+                search_stats=builder.last_search_stats,
+                seconds=time.monotonic() - started,
+                **result,
+            )
+        )
     return {"compound_id": compound.compound_id, "steps": results}
 
 
-def _build(builder, compound: CompoundInput, step: ConditionStep, positions: list[int], reactions: _CompoundReactions,
-           seeds: dict | None) -> dict:
+def _build(
+    builder,
+    compound: CompoundInput,
+    step: ConditionStep,
+    positions: list[int],
+    reactions: _CompoundReactions,
+    seeds: dict | None,
+) -> dict:
     from fredis.libs.mmkit.mmkit import Adduct, Compound
-    from fredis.ml.data_preparation.fragment_tree.create_training_data import _saved_reaction_registry
+    from fredis.ml.data_preparation.fragment_tree.create_training_data import (
+        _saved_reaction_registry,
+    )
     from fredis.ml.input.source_reaction_structure import save_fragment_tree_structure
 
-    index = {position: offset for offset, position in enumerate(compound.source_positions)}
+    index = {
+        position: offset for offset, position in enumerate(compound.source_positions)
+    }
     rows = [index[position] for position in positions]
     pick = lambda values: [values[row] for row in rows]
     if seeds is None:
         options = dict(precomputed_reactions=reactions(step.pattern_ids))
     else:
-        options = dict(seed_compounds=seeds, addable_pattern_ids=frozenset(step.added_pattern_ids),
-                       precomputed_reactions=reactions(step.added_pattern_ids))
+        options = dict(
+            seed_compounds=seeds,
+            addable_pattern_ids=frozenset(step.added_pattern_ids),
+            precomputed_reactions=reactions(step.added_pattern_ids),
+        )
     structure, relative_kept = builder.build(
-        Compound.from_smiles(compound.smiles), [Adduct.parse(value) for value in pick(compound.adducts)],
-        pick(compound.collision_energies), pick(compound.peaks_mz), pick(compound.peaks_intensity), **options)
+        Compound.from_smiles(compound.smiles),
+        [Adduct.parse(value) for value in pick(compound.adducts)],
+        pick(compound.collision_energies),
+        pick(compound.peaks_mz),
+        pick(compound.peaks_intensity),
+        **options,
+    )
     relative_kept = [int(value) for value in relative_kept]
     kept = [int(positions[value]) for value in relative_kept]
     if step.parent_condition_id is not None and kept != positions:
-        raise RuntimeError("The child condition did not retain the complete sample population of its parent")
+        raise RuntimeError(
+            "The child condition did not retain the complete sample population of its parent"
+        )
     annotations = structure.sample_annotations
     metadata = dict(
-        smiles=compound.smiles, compound_id=compound.compound_id, detail_kind="condition",
-        condition_id=int(step.condition_id), pattern_ids=list(step.pattern_ids),
-        added_pattern_ids=list(step.added_pattern_ids), incremental=seeds is not None,
+        smiles=compound.smiles,
+        compound_id=compound.compound_id,
+        detail_kind="condition",
+        condition_id=int(step.condition_id),
+        pattern_ids=list(step.pattern_ids),
+        added_pattern_ids=list(step.added_pattern_ids),
+        incremental=seeds is not None,
         sample_ids=[pick(compound.sample_ids)[value] for value in relative_kept],
         dataset_ids=[pick(compound.dataset_ids)[value] for value in relative_kept],
-        record_indexes=[pick(compound.record_indexes)[value] for value in relative_kept],
+        record_indexes=[
+            pick(compound.record_indexes)[value] for value in relative_kept
+        ],
         sample_annotations=annotations,
         # Seeds for children, including ones added by a later run.
-        reaction_sequence_compounds=[(sequence, value.mapped_smiles) for sequence, value
-                                   in builder.last_reaction_sequence_compounds.items()],
-        reaction_registry=_saved_reaction_registry(builder.last_reactions, builder.generator.fragmenter),
+        reaction_sequence_compounds=[
+            (sequence, value.mapped_smiles)
+            for sequence, value in builder.last_reaction_sequence_compounds.items()
+        ],
+        reaction_registry=_saved_reaction_registry(
+            builder.last_reactions, builder.generator.fragmenter
+        ),
     )
     output = Path(step.output_file)
     output.parent.mkdir(parents=True, exist_ok=True)
-    save_fragment_tree_structure(structure=structure, output_file=output, metadata=metadata)
-    counts = [[len(peak.get("matches", ())) for peak in annotation.get("peaks", ())] for annotation in annotations]
+    save_fragment_tree_structure(
+        structure=structure, output_file=output, metadata=metadata
+    )
+    counts = [
+        [len(peak.get("matches", ())) for peak in annotation.get("peaks", ())]
+        for annotation in annotations
+    ]
     return dict(file=str(output), kept=kept, counts=counts)

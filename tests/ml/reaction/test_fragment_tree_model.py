@@ -13,7 +13,7 @@ from fredis.ml.input.source_reaction_structure import prepare_source_reactions
 from fredis.ml.mol.graph_builder import MolGraphBuilder
 from fredis.ml.specgen import materialization
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
-from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings,normalized_attention_pool,balanced_binary_loss
+from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
 from fredis.ml.specgen.components.reaction.reaction_compatibility import ReactionCompatibilityEngine
 from fredis.ml.training.fragment_tree_training.model import ReactionFragmentTreeTrainingModel,smooth_max_mil
 from .TestReactionPipeline import config
@@ -35,7 +35,7 @@ def test_ce_spectra_share_one_branch_group_and_tree():
     generator.eval();source=Compound.from_smiles('CC(O)N');adduct=Adduct.parse('[M+H]+')
     output=generator.predict([source,source],[adduct,adduct],[10.,40.])
     assert len(output.fragments.trees)==1
-    assert output.spectrum_batch.tree_graph.num_graphs==1
+    assert len(output.spectrum_batch.decoded.trees)==1
     first=output.spectra.intensity[output.spectra.sample_index==0]
     second=output.spectra.intensity[output.spectra.sample_index==1]
     assert first.shape==second.shape and not torch.equal(first,second)
@@ -124,94 +124,6 @@ def test_physical_candidates_preserve_equivalent_explanations_without_sum_bias()
     candidate=int((counts>1).nonzero()[0]);start,stop=spectrum_batch.physical_candidate_explanation_ptr[candidate:candidate+2]
     pairs=set(zip(spectrum_batch.explanation_adduct_index[start:stop].tolist(),spectrum_batch.explanation_hydrogen_shift[start:stop].tolist()))
     assert len(pairs)==int(counts[candidate])
-    values=torch.tensor([[2.,-1.],[2.,-1.]])
-    attention=torch.nn.Linear(2,1,bias=False);torch.nn.init.zeros_(attention.weight)
-    one=normalized_attention_pool(values[:1],torch.tensor([0]),1,attention)
-    duplicate=normalized_attention_pool(values,torch.tensor([0,0]),1,attention)
-    torch.testing.assert_close(one,duplicate)
-
-
-def test_balanced_fragment_and_state_bce_exact_values_and_empty_classes():
-    logits=torch.tensor([0.,math.log(3.),-math.log(3.)])
-    labels=torch.tensor([True,True,False]);weights=torch.tensor([.25,1.,0.])
-    loss,positive,negative=balanced_binary_loss(logits,labels,weights)
-    expected_positive=(.25*math.log(2)+math.log(4/3))/1.25
-    assert positive.item()==pytest.approx(expected_positive)
-    assert negative.item()==pytest.approx(math.log(4/3))
-    assert loss.item()==pytest.approx(.5*(expected_positive+math.log(4/3)))
-    positive_only=balanced_binary_loss(logits[:2],torch.ones(2,dtype=torch.bool),weights[:2])
-    assert positive_only[0].item()==pytest.approx(positive_only[1].item())
-    negative_only=balanced_binary_loss(logits[:2],torch.zeros(2,dtype=torch.bool))[0]
-    assert torch.isfinite(negative_only)
-
-
-def test_prepared_fragment_and_state_labels_keep_peak_weights_and_negative_states():
-    _,data=prepared_two_ce();spectrum_batch=data.spectrum_batch
-    assert spectrum_batch.fragment_supervision_node_index.shape==spectrum_batch.fragment_is_positive.shape
-    for sample in range(data.num_samples):
-        rows=spectrum_batch.fragment_supervision_sample_index==sample
-        observed=spectrum_batch.fragment_positive_weight[rows][spectrum_batch.fragment_is_positive[rows]]
-        assert set(observed.tolist())=={.5,1.}
-    counts=spectrum_batch.physical_candidate_explanation_ptr[1:]-spectrum_batch.physical_candidate_explanation_ptr[:-1]
-    owners=torch.repeat_interleave(torch.arange(counts.numel()),counts)
-    negative_fragment_nodes=set(spectrum_batch.fragment_supervision_node_index[~spectrum_batch.fragment_is_positive].tolist())
-    negative_state_nodes=spectrum_batch.physical_candidate_node_index[owners[~spectrum_batch.explanation_is_positive]]
-    assert negative_fragment_nodes.intersection(negative_state_nodes.tolist())
-    assert spectrum_batch.explanation_positive_weight[spectrum_batch.explanation_is_positive].max().item()==1.
-
-
-def test_repeated_peak_matches_use_maximum_relative_intensity_weight():
-    from fredis.libs.mmkit.mmkit import Formula
-    generator=create_spectrum_generator(config());source=Compound.from_smiles('CCO');adduct=Adduct.parse('[M+H]+')
-    mz=Formula.parse('C2H7O+').exact_mass
-    data,_=ReactionStructureBuilder(generator).build(source,[adduct],[20.],[[mz,mz]],[[.2,1.]])
-    state_weights=data.spectrum_batch.explanation_positive_weight[data.spectrum_batch.explanation_is_positive]
-    fragment_weights=data.spectrum_batch.fragment_positive_weight[data.spectrum_batch.fragment_is_positive]
-    assert state_weights.numel() and fragment_weights.numel()
-    assert torch.all(state_weights==1.) and torch.all(fragment_weights==1.)
-
-
-def test_physical_probability_is_fragment_times_state_and_all_heads_receive_gradients():
-    generator,data=prepared_two_ce()
-    trainer=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
-    captured={}
-    fragment_hook=generator.spectrum_model.fragment_score.register_forward_hook(lambda _m,_i,value:captured.setdefault('fragment',value))
-    output=trainer(data);fragment_hook.remove();spectrum_batch=output.spectrum_output
-    torch.testing.assert_close(spectrum_batch.log_physical_probability,
-        spectrum_batch.fragment_probability.log()+spectrum_batch.state_probability.log())
-    torch.testing.assert_close(spectrum_batch.ion_probability,
-        spectrum_batch.fragment_probability*spectrum_batch.state_probability)
-    counts=data.spectrum_batch.physical_candidate_explanation_ptr[1:]-data.spectrum_batch.physical_candidate_explanation_ptr[:-1]
-    owners=torch.repeat_interleave(torch.arange(counts.numel()),counts)
-    per_state_fragment_log_probability=spectrum_batch.fragment_probability[owners].log()
-    torch.testing.assert_close(spectrum_batch.state_log_physical_probability,
-        per_state_fragment_log_probability+torch.nn.functional.logsigmoid(spectrum_batch.state_logit))
-    torch.testing.assert_close(spectrum_batch.state_log_physical_probability.exp(),
-        spectrum_batch.fragment_probability[owners]*spectrum_batch.state_logit.sigmoid())
-    expected=(SpectrumLossSettings().fragment_loss_weight*spectrum_batch.metrics['fragment_classification_loss']+
-              SpectrumLossSettings().state_loss_weight*spectrum_batch.metrics['state_classification_loss']+
-              SpectrumLossSettings().intensity_loss_weight*spectrum_batch.metrics['intensity_loss'])
-    torch.testing.assert_close(spectrum_batch.loss,expected)
-    powered_fragment=balanced_binary_loss(captured['fragment'].squeeze(-1)[data.spectrum_batch.fragment_supervision_node_index],
-        data.spectrum_batch.fragment_is_positive,data.spectrum_batch.fragment_positive_weight.pow(SpectrumLossSettings().intensity_power))[0]
-    powered_state=balanced_binary_loss(spectrum_batch.state_logit,data.spectrum_batch.explanation_is_positive,
-        data.spectrum_batch.explanation_positive_weight.pow(SpectrumLossSettings().intensity_power))[0]
-    torch.testing.assert_close(spectrum_batch.metrics['fragment_classification_loss'],powered_fragment)
-    torch.testing.assert_close(spectrum_batch.metrics['state_classification_loss'],powered_state)
-    output.loss.backward()
-    for head in (generator.spectrum_model.fragment_score,generator.spectrum_model.adduct_score,
-                 generator.spectrum_model.hydrogen_shift_score,generator.spectrum_model.intensity_head[-1]):
-        assert head.weight.grad is not None and torch.isfinite(head.weight.grad).all() and torch.any(head.weight.grad!=0)
-    required={'fragment_classification_loss','fragment_positive_loss','fragment_negative_loss',
-              'fragment_positive_count','fragment_negative_count','fragment_positive_probability_mean',
-              'fragment_negative_probability_mean','state_classification_loss','state_positive_loss',
-              'state_negative_loss','state_positive_count','state_negative_count',
-              'state_positive_probability_mean','state_negative_probability_mean','fragment_precision',
-              'fragment_recall','fragment_f1','state_precision','state_recall','state_f1',
-              'mean_physical_probability','intensity_loss','intensity_mae','full_spectrum_cosine',
-              'precursor_free_cosine'}
-    assert required<=spectrum_batch.metrics.keys()
-
 
 def test_shared_hydrogen_shift_range_is_used_for_every_adduct():
     generator,_=prepared_two_ce()
@@ -244,6 +156,6 @@ def test_prepared_payload_has_explicit_fredis_schema_version(tmp_path):
     payload=torch.load(path,weights_only=False)
     assert set(payload)=={'schema','schema_version','structure'}
     assert payload['schema']=='fredis.fragment-tree-training'
-    assert payload['schema_version']==2
+    assert payload['schema_version']==1
     loaded=SourceReactionStructure.load(path)
     assert loaded.num_branch_groups==1

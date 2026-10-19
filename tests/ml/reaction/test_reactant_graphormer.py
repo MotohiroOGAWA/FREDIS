@@ -4,7 +4,7 @@ from torch_geometric.data import Data
 
 from fredis.ml.common.layers.graphormer import GraphormerEncoder
 from fredis.ml.mol.mol_graphormer import MolGraphormerEncoder
-from fredis.ml.reaction import ReactantGraphormerEncoder, ReactantEncoderRegistry
+from fredis.ml.reaction import ReactantGraphormerEncoder
 from fredis.ml.specgen.components.reaction.reaction_instance_encoder import ReactionInstanceEncoder
 
 
@@ -33,7 +33,7 @@ def test_molecule_graph_dim_need_not_be_a_multiple_of_node_dim():
 
 @pytest.mark.parametrize('smarts, atoms', [('[C:1]-[C:2]', 2), ('O=c1cc(-c2ccccc2)oc2ccccc12', 17), ('[C:1].[O:2]', 2)])
 def test_smarts_capacity_and_batched_match_gradients(smarts, atoms):
-    model = ReactantGraphormerEncoder(smarts, atom_dim=4, bond_dim=0, node_dim=8, graph_dim=11, num_layers=1, num_heads=2)
+    model = ReactantGraphormerEncoder(smarts, atom_dim=4, bond_dim=0, hidden_dim=8, graph_dim=11, num_layers=1, num_heads=2)
     assert model.start_cap == model.position_count == atoms
     x = torch.randn(3, atoms, 4, requires_grad=True)
     nodes, graphs = model.encode_matches(x)
@@ -49,34 +49,21 @@ def test_smarts_capacity_and_batched_match_gradients(smarts, atoms):
         model(Data(x=torch.randn(atoms + 1, 4), edge_index=torch.empty((2, 0), dtype=torch.long)))
 
 
-def test_registry_preserves_bond_features_and_smarts_positions():
-    registry = ReactantEncoderRegistry({1: 'CC', 2: 'CCC'}, 4, 2, 3, 8, 11, num_layers=2, num_heads=2)
-    encoder = registry.encoders['1']
-    graph = Data(x=torch.randn(2, 4), edge_index=torch.tensor([[0, 1], [1, 0]]), edge_attr=torch.randn(2, 2))
-    context = torch.randn(2, 3)
-    _, first = encoder.encode_with_nodes(graph, context)
-    zero = graph.clone(); zero.edge_attr = torch.zeros_like(graph.edge_attr)
-    _, second = encoder.encode_with_nodes(zero, context)
-    assert not torch.equal(first, second)
-    nodes, permuted = encoder.encode_with_nodes(graph, context, torch.tensor([1, 0]))
-    assert nodes.shape == (2, 8) and not torch.equal(first, permuted)
-    with pytest.raises(ValueError, match='position'):
-        encoder(graph, context, torch.tensor([0, 2]))
 
 
 @pytest.mark.parametrize('node_dim, graph_dim', [(8, 8), (4, 11)])
 def test_training_encoder_routes_mixed_patterns_and_restores_reaction_order(node_dim, graph_dim):
     torch.manual_seed(5)
     model = ReactionInstanceEncoder(4, 6, 8, (2, 1, 1), num_heads=2,
-                                    reaction_neighborhood_mode='none', pattern_smarts={0: 'CC', 1: 'CCC'},
+                                    pattern_smarts={0: 'CC', 1: 'CCC'},
                                     reactant_node_dim=node_dim, reactant_graph_dim=graph_dim)
     atoms = torch.randn(7, 4, requires_grad=True)
-    kwargs = dict(source_atom_h=atoms, source_mol_h=torch.randn(1, 6),
+    kwargs = dict(source_mol_h=torch.randn(1, 6),
                   reaction_type=torch.tensor([[1, 0, 0], [0, 0, 0], [1, 0, 0]]),
                   reaction_tree_index=torch.zeros(3, dtype=torch.long),
                   reaction_source_atom_ptr=torch.tensor([0, 3, 5, 8]),
                   reaction_source_atom_index=torch.tensor([0, 1, 2, 3, 4, 4, 5, 6]),
-                  reaction_static_features=torch.randn(3, 6), reaction_source_atom_hops=[])
+                  reaction_static_features=torch.randn(3, 6), source_atom_features=atoms, source_edge_index=torch.empty((2,0),dtype=torch.long), source_edge_attr=torch.empty((0,0)))
     output = model(**kwargs)
     assert output.shape == (3, 8)
     # Each match is equivalent to processing it alone, even in a mixed-pattern batch.
@@ -119,7 +106,7 @@ def test_fine_tuning_remaps_existing_pattern_encoder_and_trains_new_pattern(tmp_
     checkpoint = tmp_path / 'base.pt'
     torch.save({'model_state_dict': old.state_dict()}, checkpoint)
     new = Generator({0: 'CCC', 1: 'CC'})
-    config = {'version': 2, 'frozen_pattern_ids': [1], 'pattern_mapping': [[0, 1]], 'source_checkpoint': str(checkpoint),
+    config = {'version': 1, 'frozen_pattern_ids': [1], 'pattern_mapping': [[0, 1]], 'source_checkpoint': str(checkpoint),
               }
     configure_pattern_training(new, config)
     initialize_from_base(new, {'fine_tuning': config})
@@ -127,9 +114,8 @@ def test_fine_tuning_remaps_existing_pattern_encoder_and_trains_new_pattern(tmp_
     inherited = new.feature_model.reaction_instance_encoder.reactant_encoders['1']
     added = new.feature_model.reaction_instance_encoder.reactant_encoders['0']
     torch.testing.assert_close(before.graph_tokens, inherited.graph_tokens)
-    torch.testing.assert_close(before.positions.weight, inherited.positions.weight)
     assert not inherited.graph_tokens.requires_grad
     assert all(parameter.requires_grad for parameter in added.parameters())
     # These encoders receive hidden-width source features in the training path.
-    x = torch.randn(1, 2, 8)
+    x = torch.randn(1, 2, before.atom_dim)
     torch.testing.assert_close(before.encode_matches(x)[1], inherited.encode_matches(x)[1])

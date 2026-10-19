@@ -63,9 +63,9 @@ class _FragmentTreeDepths:
 
         _, in_indptr = adjacency.in_edge_csr
 
-        roots = np.flatnonzero(
-            (in_indptr[1:] - in_indptr[:-1]) == 0
-        ).astype(np.int64, copy=False)
+        roots = np.flatnonzero((in_indptr[1:] - in_indptr[:-1]) == 0).astype(
+            np.int64, copy=False
+        )
 
         if roots.size == 0:
             roots = np.asarray([0], dtype=np.int64)
@@ -101,9 +101,9 @@ class _FragmentTreeDepths:
         out: Dict[int, np.ndarray] = {}
 
         for depth in sorted(set(int(d) for d in self.node_depths if d >= 0)):
-            out[depth] = np.flatnonzero(
-                self.node_depths == depth
-            ).astype(np.int64, copy=False)
+            out[depth] = np.flatnonzero(self.node_depths == depth).astype(
+                np.int64, copy=False
+            )
 
         return out
 

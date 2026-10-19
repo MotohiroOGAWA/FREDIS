@@ -174,6 +174,7 @@ class PpmTolerance(MassTolerance):
             theoretical + delta,
         )
 
+
 @dataclass(frozen=True, slots=True)
 class DaOrPpmTolerance(MassTolerance):
     """
@@ -224,9 +225,8 @@ class DaOrPpmTolerance(MassTolerance):
         return self._da.error(observed, theoretical)
 
     def within(self, observed: float, theoretical: float) -> bool:
-        return (
-            self._da.within(observed, theoretical)
-            or self._ppm.within(observed, theoretical)
+        return self._da.within(observed, theoretical) or self._ppm.within(
+            observed, theoretical
         )
 
     def to_da_range(self, theoretical: float) -> tuple[float, float]:
@@ -369,10 +369,7 @@ def parse_mass_tolerance(value: str) -> MassTolerance:
 def format_mass_tolerance(tolerance: MassTolerance) -> str:
     """Convert a MassTolerance object to a string representation."""
     if isinstance(tolerance, DaOrPpmTolerance):
-        return (
-            f"{tolerance.da_tolerance:g}Da,"
-            f"{tolerance.ppm_tolerance:g}ppm"
-        )
+        return f"{tolerance.da_tolerance:g}Da," f"{tolerance.ppm_tolerance:g}ppm"
 
     if isinstance(tolerance, DaTolerance):
         return f"{tolerance.tolerance:g}Da"
@@ -380,6 +377,4 @@ def format_mass_tolerance(tolerance: MassTolerance) -> str:
     if isinstance(tolerance, PpmTolerance):
         return f"{tolerance.tolerance:g}ppm"
 
-    raise TypeError(
-        f"Unsupported tolerance type: {type(tolerance).__name__}"
-    )
+    raise TypeError(f"Unsupported tolerance type: {type(tolerance).__name__}")

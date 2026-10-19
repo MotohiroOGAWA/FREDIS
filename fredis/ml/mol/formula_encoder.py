@@ -51,8 +51,7 @@ class FormulaTensorizer:
             )
 
         values = [
-            int(formula.elements.get(element, 0))
-            for element in self.element_order
+            int(formula.elements.get(element, 0)) for element in self.element_order
         ]
 
         if self.include_charge:
@@ -91,14 +90,10 @@ class FormulaTensorizer:
 
         if tensor.numel() != self.dim:
             raise ValueError(
-                f"Formula tensor has width {tensor.numel()}, "
-                f"expected {self.dim}."
+                f"Formula tensor has width {tensor.numel()}, " f"expected {self.dim}."
             )
 
-        values = [
-            int(round(float(value)))
-            for value in tensor.detach().cpu().tolist()
-        ]
+        values = [int(round(float(value))) for value in tensor.detach().cpu().tolist()]
         elements = {
             element: values[index]
             for index, element in enumerate(self.element_order)
@@ -136,8 +131,7 @@ class FormulaTensorizer:
             )
 
         values = [
-            int(adduct.element_diff.get(element, 0))
-            for element in self.element_order
+            int(adduct.element_diff.get(element, 0)) for element in self.element_order
         ]
 
         if self.include_charge:

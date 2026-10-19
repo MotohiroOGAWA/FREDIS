@@ -341,7 +341,8 @@
     "check:reaction-pattern-analysis": "node --check src/features/reaction-pattern-analysis/editor.js && node --check src/features/reaction-pattern-analysis/results-view.js && node scripts/check-reaction-pattern-analysis.js",
     "check:projects": "node scripts/check-projects.js",
     "check:workbench": "node scripts/check-projects.js && node scripts/check-workbench.js && node scripts/check-workbench-jobs.js && node scripts/check-parameter-editor.js && node scripts/check-defaults.js",
-    "check:tuning": "node scripts/check-tuning.js && node scripts/check-tuning-result.js && cd .. && python -m unittest discover -s tests/ml/tuning -p \"test_*.py\""
+    "check:tuning": "node scripts/check-tuning.js && node scripts/check-tuning-result.js && cd .. && python -m unittest discover -s tests/ml/tuning -p \"test_*.py\"",
+    "check:competitive": "node scripts/check-competitive-mlps.js && python scripts/check-fragment-training-cli.py && cd .. && python -m pytest tests/ml/reaction/test_competitive_spectrum.py -q"
   },
   "devDependencies": {
     "@vscode/vsce": "2.15.0",

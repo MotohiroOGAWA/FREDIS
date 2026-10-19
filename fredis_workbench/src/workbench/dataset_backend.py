@@ -136,10 +136,10 @@ def validate(payload: dict, *, check_datasets: bool = True) -> dict:
 def model(payload: dict) -> dict:
     import torch
     checkpoint=torch.load(payload['path'],map_location='cpu')
-    if checkpoint.get('architecture')!='fragment-tree-physical-ion': raise ValueError('Choose a compatible physical-ion fragment-tree checkpoint.')
+    if checkpoint.get('architecture')!='fragment-tree-competitive-ion': raise ValueError('Choose a compatible physical-ion fragment-tree checkpoint.')
     config=checkpoint.get('model_config')
     if not isinstance(config,dict): raise ValueError('Checkpoint does not contain a model configuration.')
-    return {'modelConfig':config.get('params',config),'path':payload['path']}
+    return {'modelConfig':config,'path':payload['path']}
 
 def structure_manifest(payload):
     import torch
@@ -158,7 +158,7 @@ def structure_manifest(payload):
 def training_checkpoint(payload):
     import torch
     checkpoint = torch.load(payload['path'], map_location='cpu', weights_only=False)
-    if checkpoint.get('architecture') != 'fragment-tree-physical-ion':
+    if checkpoint.get('architecture') != 'fragment-tree-competitive-ion':
         raise ValueError('Checkpoint architecture is incompatible with training.')
     config = checkpoint.get('model_config')
     if not config:
@@ -166,11 +166,11 @@ def training_checkpoint(payload):
     if 'optimizer_state_dict' not in checkpoint:
         raise ValueError('This checkpoint cannot resume training. Import its reaction models in New model instead.')
     group = checkpoint.get('optimizer_state_dict',{}).get('param_groups',[{'lr':1e-4,'weight_decay':0.01}])[0]
-    fields={'branch_weight':'branchWeight','negative_weight':'negativeWeight','branch_mil_temperature':'branchMilTemperature','validation_interval_steps':'validationIntervalSteps','validation_fraction':'validationFraction','fragment_loss_weight':'fragmentLossWeight','state_loss_weight':'stateLossWeight','intensity_loss_weight':'intensityLossWeight','cosine_loss_weight':'cosineLossWeight','precursor_free_loss_weight':'precursorFreeLossWeight','intensity_power':'intensityPower'}
+    fields={'branch_weight':'branchWeight','negative_weight':'negativeWeight','branch_mil_temperature':'branchMilTemperature','validation_interval_steps':'validationIntervalSteps','validation_fraction':'validationFraction','intensity_loss_weight':'intensityLossWeight','cosine_loss_weight':'cosineLossWeight'}
     restored={field:checkpoint.get('training_settings',{})[key] for key,field in fields.items() if key in checkpoint.get('training_settings',{})}
-    params=config.get('params',config)
-    restored['dropout']=params.get('reaction_model_params',{}).get('state_dropout',params.get('spectrum_model_params',{}).get('dropout',0))
-    return {'modelConfig': config.get('params', config), 'patternModels': describe_patterns(config.get('params', config)), 'lr': group['lr'], 'weightDecay': group.get('weight_decay', 0), 'trainingSettings':restored}
+    params=config
+    restored['dropout']=params.get('reaction_model_params',{}).get('state_dropout',0)
+    return {'modelConfig': config, 'patternModels': describe_patterns(config), 'lr': group['lr'], 'weightDecay': group.get('weight_decay', 0), 'trainingSettings':restored}
 
 def training_sources(payload):
     import torch
@@ -181,14 +181,14 @@ def training_sources(payload):
         saved = torch.load(path, map_location='cpu', weights_only=False)['model_config']
         if not payload.get('resume'):
             inherited = dataset_sources(payload['trainDir'], payload['valDir'])
-            saved = {**saved.get('params', saved), 'fragmenter_params': inherited['fragmenter_params'],
+            saved = {**saved, 'fragmenter_params': inherited['fragmenter_params'],
                      'adduct_type_strs': inherited['adduct_type_strs']}
     config = inherit_model_config(saved or payload.get('modelConfig') or {}, payload['trainDir'], payload['valDir'],
-        saved_model=saved, prepared_max_roles=None)
+        saved_model=saved)
     if not payload.get('resume') and payload.get('pretrainedPatterns'):
         from fredis.ml.training.fragment_tree_training.pattern_models import assemble_config
         config=assemble_config(config,payload['pretrainedPatterns'])
-        config=inherit_model_config(config,payload['trainDir'],payload['valDir'],saved_model=config,prepared_max_roles=None)
+        config=inherit_model_config(config,payload['trainDir'],payload['valDir'],saved_model=config)
     return {'modelConfig': config, 'patternModels': describe_patterns(config)}
 
 def training_assignment_score_counts(payload):

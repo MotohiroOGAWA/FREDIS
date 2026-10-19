@@ -9,7 +9,6 @@ from typing import Iterable, TypeVar
 
 from .base import CLICommand, CLIGroup
 
-
 TCommand = TypeVar("TCommand", bound=CLICommand)
 TGroup = TypeVar("TGroup", bound=CLIGroup)
 

@@ -71,7 +71,6 @@ for label,pattern in [('flavonoid',flav_pattern),('lipid',lipid_pattern)]:
     fragmenter=Fragmenter.from_dict(meta['chemistry_config']['fragmenter_params'])
     pid=next(p.pattern_id for p in fragmenter.reaction_pattern_set.patterns if p.name==pattern['name'])
     arch=deepcopy(saved['model_config']);arch.pop('fine_tuning',None)
-    arch['reaction_model_params']['pattern_input_version']=2
     arch['reaction_model_params']['pattern_model_params']={str(pid):dict(hidden_dim=8,graph_dim=13,num_layers=2,num_heads=2,dropout=0,neighborhood_hops=3,neighborhood_hidden_dim=8,global_num_layers=3 if label=='lipid' else 0,global_hidden_dim=8,global_num_heads=2)}
     train(label,arch)
 train('lipid',resume=True)

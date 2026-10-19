@@ -13,8 +13,12 @@ from ..reaction.ReactionInstance import ReactionInstance, mapped_source
 from ..reaction.ReactionInstanceGenerator import create_reaction_instances
 from ..reaction.ReactionSequence import ReactionSequence
 from ..reaction.ReactionSequenceResult import ReactionSequenceResult
-from ..reaction.ReactionSequenceSearch import (ReactionSequenceSearch, FragmentTreeLimitExceeded,
-                                              _ReactionSequenceCandidate, validate_search_limits)
+from ..reaction.ReactionSequenceSearch import (
+    ReactionSequenceSearch,
+    FragmentTreeLimitExceeded,
+    _ReactionSequenceCandidate,
+    validate_search_limits,
+)
 from .ReactionSequenceTransition import ReactionSequenceTransition
 from .FragmentEdge import FragmentEdge
 from .FragmentNode import FragmentNode
@@ -34,6 +38,7 @@ class FragmentTreeBuilder:
     Primitive matching happens once per pattern on Source. Edges record reaction
     state transitions; generated fragments are never used as reaction inputs.
     """
+
     max_reaction_count: int
     reaction_pattern_set: ReactionPatternSet
 
@@ -51,21 +56,30 @@ class FragmentTreeBuilder:
     def name(self) -> str:
         return self.reaction_pattern_set.name
 
-    def create_reaction_instances(self, source_compound: Compound, *,
-                                pattern_ids: frozenset[int] | None = None) -> tuple[ReactionInstance, ...]:
+    def create_reaction_instances(
+        self, source_compound: Compound, *, pattern_ids: frozenset[int] | None = None
+    ) -> tuple[ReactionInstance, ...]:
         if not isinstance(source_compound, Compound):
             raise TypeError("source_compound must be a Compound.")
         pattern_set = self.reaction_pattern_set
         if pattern_ids is not None:
-            pattern_set = ReactionPatternSet(pattern_set.name, tuple(
-                pattern for pattern in pattern_set if pattern.pattern_id in pattern_ids))
+            pattern_set = ReactionPatternSet(
+                pattern_set.name,
+                tuple(
+                    pattern
+                    for pattern in pattern_set
+                    if pattern.pattern_id in pattern_ids
+                ),
+            )
         return create_reaction_instances(source_compound, pattern_set)
 
     def _reaction_limit(self, max_reaction_count: int | None) -> int:
         if max_reaction_count is None:
             return self.max_reaction_count
         if type(max_reaction_count) is not int or max_reaction_count < 0:
-            raise ValueError("max_reaction_count must be None or a non-negative integer.")
+            raise ValueError(
+                "max_reaction_count must be None or a non-negative integer."
+            )
         return max_reaction_count
 
     def _search(
@@ -84,32 +98,52 @@ class FragmentTreeBuilder:
         limit = self._reaction_limit(max_reaction_count)
         seeds = tuple(seed_reaction_sequences or ())
         if any(not isinstance(seed, ReactionSequence) for seed in seeds):
-            raise TypeError("seed_reaction_sequences must contain ReactionSequence instances")
+            raise TypeError(
+                "seed_reaction_sequences must contain ReactionSequence instances"
+            )
         if any(len(seed.reactions) > limit for seed in seeds):
             raise ValueError("Seed exceeds max_reaction_count")
-        universe = frozenset(a.GetAtomMapNum() for a in mapped_source(source_compound).GetAtoms())
+        universe = frozenset(
+            a.GetAtomMapNum() for a in mapped_source(source_compound).GetAtoms()
+        )
         for seed in seeds:
-            if any(a.retained_atom_maps | a.discarded_atom_maps != universe for a in seed.reactions):
+            if any(
+                a.retained_atom_maps | a.discarded_atom_maps != universe
+                for a in seed.reactions
+            ):
                 raise ValueError("Seed reaction universe differs from Original Source")
         # Callers that already enumerated Source reactions (for example once per
         # pattern and compound) pass them here instead of matching again.
         if precomputed_reactions is not None:
-            reactions = tuple(sorted(set(precomputed_reactions), key=lambda reaction: reaction.key))
+            reactions = tuple(
+                sorted(set(precomputed_reactions), key=lambda reaction: reaction.key)
+            )
         else:
-            reactions = (self.create_reaction_instances(source_compound)
-                       if addable_pattern_ids is None else
-                       self.create_reaction_instances(source_compound, pattern_ids=addable_pattern_ids))
+            reactions = (
+                self.create_reaction_instances(source_compound)
+                if addable_pattern_ids is None
+                else self.create_reaction_instances(
+                    source_compound, pattern_ids=addable_pattern_ids
+                )
+            )
         addable_reactions = None if addable_pattern_ids is None else reactions
-        search = ReactionSequenceSearch(reactions, max_reaction_count=limit,
-                                      seed_reaction_sequences=seeds,
-                                      addable_reactions=addable_reactions,
-                                      include_source=include_source_seed,
-                                      max_reaction_combinations=max_reaction_combinations)
+        search = ReactionSequenceSearch(
+            reactions,
+            max_reaction_count=limit,
+            seed_reaction_sequences=seeds,
+            addable_reactions=addable_reactions,
+            include_source=include_source_seed,
+            max_reaction_combinations=max_reaction_combinations,
+        )
         return search, search.iter_candidates()
 
     def _materialize(self, source_compound, search, candidates):
-        return {candidate.reaction_sequence: result for candidate, result in
-                self._materialize_iter(source_compound, search, candidates)}
+        return {
+            candidate.reaction_sequence: result
+            for candidate, result in self._materialize_iter(
+                source_compound, search, candidates
+            )
+        }
 
     def _materialize_iter(
         self,
@@ -154,15 +188,25 @@ class FragmentTreeBuilder:
                     search.stats.num_rdkit_run_reactants += 1
                     products = reaction.run(source_compound)
                     if len(products) != 1:
-                        raise ValueError("Source-specific reaction must generate exactly one target")
+                        raise ValueError(
+                            "Source-specific reaction must generate exactly one target"
+                        )
                     cached = (Compound(products[0]), reaction.smirks)
                     search.stats.num_generated_fragments += 1
                     smiles = cached[0].smiles
                     if smiles != source_smiles and smiles not in unique_fragment_smiles:
                         unique_fragment_smiles.add(smiles)
-                        search.stats.num_unique_fragment_smiles = len(unique_fragment_smiles)
-                        if 0 <= max_unique_fragment_smiles < len(unique_fragment_smiles):
-                            raise FragmentTreeLimitExceeded("max_unique_fragment_smiles", max_unique_fragment_smiles)
+                        search.stats.num_unique_fragment_smiles = len(
+                            unique_fragment_smiles
+                        )
+                        if (
+                            0
+                            <= max_unique_fragment_smiles
+                            < len(unique_fragment_smiles)
+                        ):
+                            raise FragmentTreeLimitExceeded(
+                                "max_unique_fragment_smiles", max_unique_fragment_smiles
+                            )
                 except Chem.rdchem.MolSanitizeException:
                     # A graph-valid collection can still violate chemical valence.
                     if candidate.is_seed:
@@ -182,11 +226,21 @@ class FragmentTreeBuilder:
         max_reaction_count: int | None = None,
     ) -> tuple[ReactionSequenceResult, ...]:
         """Iterate normalized unordered histories and react once per unique Source effect."""
-        search, candidates = self._search(source_compound,
-            seed_reaction_sequences=seed_reaction_sequences, max_reaction_count=max_reaction_count)
+        search, candidates = self._search(
+            source_compound,
+            seed_reaction_sequences=seed_reaction_sequences,
+            max_reaction_count=max_reaction_count,
+        )
         results = self._materialize(source_compound, search, candidates)
-        return tuple(sorted(results.values(), key=lambda r: (len(r.reaction_sequence.reactions),
-                                                            r.reaction_sequence.key)))
+        return tuple(
+            sorted(
+                results.values(),
+                key=lambda r: (
+                    len(r.reaction_sequence.reactions),
+                    r.reaction_sequence.key,
+                ),
+            )
+        )
 
     def build(
         self,
@@ -201,12 +255,17 @@ class FragmentTreeBuilder:
         print_info: bool = False,
         precomputed_reactions: Sequence[ReactionInstance] | None = None,
     ) -> FragmentTree:
-        return self._build_result(compound, seed_reaction_sequences=seed_reaction_sequences,
-            seed_compounds=seed_compounds, addable_pattern_ids=addable_pattern_ids,
+        return self._build_result(
+            compound,
+            seed_reaction_sequences=seed_reaction_sequences,
+            seed_compounds=seed_compounds,
+            addable_pattern_ids=addable_pattern_ids,
             precomputed_reactions=precomputed_reactions,
             max_unique_fragment_smiles=max_unique_fragment_smiles,
-            max_reaction_combinations=max_reaction_combinations, max_reaction_count=max_reaction_count,
-            print_info=print_info)["fragment_tree"]
+            max_reaction_combinations=max_reaction_combinations,
+            max_reaction_count=max_reaction_count,
+            print_info=print_info,
+        )["fragment_tree"]
 
     def _build_result(
         self,
@@ -233,32 +292,56 @@ class FragmentTreeBuilder:
         validate_search_limits(max_unique_fragment_smiles, max_reaction_combinations)
         started = time.monotonic()
         source_compound = compound
-        search, candidates = self._search(source_compound,
-            seed_reaction_sequences=seed_reaction_sequences, max_reaction_count=max_reaction_count,
+        search, candidates = self._search(
+            source_compound,
+            seed_reaction_sequences=seed_reaction_sequences,
+            max_reaction_count=max_reaction_count,
             addable_pattern_ids=addable_pattern_ids,
             include_source_seed=seed_compounds is not None,
             max_reaction_combinations=max_reaction_combinations,
-            precomputed_reactions=precomputed_reactions)
+            precomputed_reactions=precomputed_reactions,
+        )
         try:
-            return self._build_from_candidates(source_compound, search, candidates,
+            return self._build_from_candidates(
+                source_compound,
+                search,
+                candidates,
                 seed_reaction_sequences=seed_reaction_sequences,
                 seed_compounds=seed_compounds,
                 max_unique_fragment_smiles=max_unique_fragment_smiles,
-                print_info=print_info, started=started)
+                print_info=print_info,
+                started=started,
+            )
         except FragmentTreeLimitExceeded as error:
             error.stats = search.stats.to_dict()
             raise
 
-    def _build_from_candidates(self, source_compound, search, candidates, *, seed_reaction_sequences, seed_compounds,
-                               max_unique_fragment_smiles, print_info, started) -> dict[str, Any]:
+    def _build_from_candidates(
+        self,
+        source_compound,
+        search,
+        candidates,
+        *,
+        seed_reaction_sequences,
+        seed_compounds,
+        max_unique_fragment_smiles,
+        print_info,
+        started,
+    ) -> dict[str, Any]:
         state = _FragmentTreeBuildState(source_compound.smiles)
         compounds = {0: source_compound.copy()}
-        expansion_by_sequence: dict[ReactionSequence | None, _FragmentExpansionState] = {
-            None: _FragmentExpansionState(0, None)}
+        expansion_by_sequence: dict[
+            ReactionSequence | None, _FragmentExpansionState
+        ] = {None: _FragmentExpansionState(0, None)}
         processed_states: set[tuple[int, tuple[tuple[object, ...], ...] | None]] = set()
         pending_predecessors = {}
-        for candidate, result in self._materialize_iter(source_compound, search, candidates,
-                max_unique_fragment_smiles=max_unique_fragment_smiles, seed_compounds=seed_compounds):
+        for candidate, result in self._materialize_iter(
+            source_compound,
+            search,
+            candidates,
+            max_unique_fragment_smiles=max_unique_fragment_smiles,
+            seed_compounds=seed_compounds,
+        ):
             sequence = candidate.reaction_sequence
             parent_sequence = candidate.parent_reaction_sequence
             added_reaction = candidate.added_reaction
@@ -271,7 +354,9 @@ class FragmentTreeBuilder:
                 # the augmented tree while its chemistry stays cached.
                 parent = None
                 for added in sequence.reactions:
-                    remaining = tuple(reaction for reaction in sequence.reactions if reaction != added)
+                    remaining = tuple(
+                        reaction for reaction in sequence.reactions if reaction != added
+                    )
                     predecessor = ReactionSequence(remaining) if remaining else None
                     alternate = expansion_by_sequence.get(predecessor)
                     if alternate is not None:
@@ -288,8 +373,12 @@ class FragmentTreeBuilder:
                     remaining = tuple(a for a in sequence.reactions if a != added)
                     predecessor = ReactionSequence(remaining) if remaining else None
                     alternate = expansion_by_sequence.get(predecessor)
-                    if alternate is not None and (predecessor is not None or not seed_reaction_sequences):
-                        normalized = ReactionSequence((*(predecessor.reactions if predecessor else ()), added))
+                    if alternate is not None and (
+                        predecessor is not None or not seed_reaction_sequences
+                    ):
+                        normalized = ReactionSequence(
+                            (*(predecessor.reactions if predecessor else ()), added)
+                        )
                         if normalized == sequence:
                             parent = alternate
                             parent_sequence = predecessor
@@ -302,52 +391,80 @@ class FragmentTreeBuilder:
             expansion_by_sequence[sequence] = child
             compounds.setdefault(target_index, result.compound)
             processed_states.add((target_index, sequence.key))
-            transition = ReactionSequenceTransition(added_reaction, sequence,
-                                                   parent_sequence,
-                                                   candidate.is_seed and not incremental_seed)
+            transition = ReactionSequenceTransition(
+                added_reaction,
+                sequence,
+                parent_sequence,
+                candidate.is_seed and not incremental_seed,
+            )
             state.add_fragment_edge(parent.node_index, target_index, transition)
             # Add alternative routes immediately, including routes whose predecessor
             # arrives later. Count distinct transitions rather than node pairs.
             for target_sequence, added in pending_predecessors.pop(sequence, []):
                 destination = expansion_by_sequence[target_sequence]
-                state.add_fragment_edge(child.node_index, destination.node_index,
-                    ReactionSequenceTransition(added, target_sequence, sequence))
+                state.add_fragment_edge(
+                    child.node_index,
+                    destination.node_index,
+                    ReactionSequenceTransition(added, target_sequence, sequence),
+                )
             for added in sequence.reactions:
                 remaining = tuple(a for a in sequence.reactions if a != added)
                 predecessor = ReactionSequence(remaining) if remaining else None
                 if predecessor is None and seed_reaction_sequences:
                     continue
-                if ReactionSequence((*(predecessor.reactions if predecessor else ()), added)) != sequence:
+                if (
+                    ReactionSequence(
+                        (*(predecessor.reactions if predecessor else ()), added)
+                    )
+                    != sequence
+                ):
                     continue
                 alternate = expansion_by_sequence.get(predecessor)
                 if alternate is None:
-                    pending_predecessors.setdefault(predecessor, []).append((sequence, added))
+                    pending_predecessors.setdefault(predecessor, []).append(
+                        (sequence, added)
+                    )
                 else:
-                    state.add_fragment_edge(alternate.node_index, child.node_index,
-                        ReactionSequenceTransition(added, sequence, predecessor))
+                    state.add_fragment_edge(
+                        alternate.node_index,
+                        child.node_index,
+                        ReactionSequenceTransition(added, sequence, predecessor),
+                    )
         if not seed_reaction_sequences:
             processed_states.add((0, None))
         stats = search.stats.to_dict()
         if print_info:
-            print(f"Source reaction search: {stats}; nodes={len(state.nodes)}, "
-                  f"edges={len(state.edges)}, elapsed={time.monotonic() - started:.2f}s")
-        return {"fragment_tree": state.to_fragment_tree(),
-                "fragment_compound_by_index": compounds,
-                "expansion_states": tuple(expansion_by_sequence.values()),
-                "processed_expansion_states": frozenset(processed_states),
-                "search_stats": stats}
+            print(
+                f"Source reaction search: {stats}; nodes={len(state.nodes)}, "
+                f"edges={len(state.edges)}, elapsed={time.monotonic() - started:.2f}s"
+            )
+        return {
+            "fragment_tree": state.to_fragment_tree(),
+            "fragment_compound_by_index": compounds,
+            "expansion_states": tuple(expansion_by_sequence.values()),
+            "processed_expansion_states": frozenset(processed_states),
+            "search_stats": stats,
+        }
 
     def to_dict(self) -> dict[str, Any]:
-        return {"max_reaction_count": self.max_reaction_count,
-                "reaction_pattern_set": self.reaction_pattern_set.to_dict()}
+        return {
+            "max_reaction_count": self.max_reaction_count,
+            "reaction_pattern_set": self.reaction_pattern_set.to_dict(),
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FragmentTreeBuilder:
-        return cls(max_reaction_count=data["max_reaction_count"],
-                   reaction_pattern_set=ReactionPatternSet.from_dict(data["reaction_pattern_set"]))
+        return cls(
+            max_reaction_count=data["max_reaction_count"],
+            reaction_pattern_set=ReactionPatternSet.from_dict(
+                data["reaction_pattern_set"]
+            ),
+        )
 
     def copy(self) -> FragmentTreeBuilder:
-        return FragmentTreeBuilder(self.max_reaction_count, self.reaction_pattern_set.copy())
+        return FragmentTreeBuilder(
+            self.max_reaction_count, self.reaction_pattern_set.copy()
+        )
 
 
 class _FragmentTreeBuildState:
@@ -382,9 +499,13 @@ class _FragmentTreeBuildState:
         if key in self.edges:
             self.edges[key] = self.edges[key].with_transition(transition)
             return
-        self.edges[key] = FragmentEdge(len(self.edges), source_index, target_index,
-                                       transitions=(transition,))
+        self.edges[key] = FragmentEdge(
+            len(self.edges), source_index, target_index, transitions=(transition,)
+        )
 
     def to_fragment_tree(self) -> FragmentTree:
-        return FragmentTree.from_nodes_and_edges(smiles=self.root_smiles,
-            nodes=tuple(self.nodes.values()), edges=tuple(self.edges.values()))
+        return FragmentTree.from_nodes_and_edges(
+            smiles=self.root_smiles,
+            nodes=tuple(self.nodes.values()),
+            edges=tuple(self.edges.values()),
+        )

@@ -30,14 +30,14 @@ const dimension=form.querySelector('[data-parameter-path="reaction_model_params.
 assert(!form.querySelector('[id$=SaveDefaults]'));
 assert(d.querySelector('#trainingStart').closest('.training-bottom'));
 assert(!d.querySelector('#trainingLossFields').hidden);
-for(const name of ['weightDecay','gradientClip','branchWeight','negativeWeight','branchMilTemperature','fragmentLossWeight','stateLossWeight','intensityLossWeight','cosineLossWeight','precursorFreeLossWeight','intensityPower'])assert(form.elements[name]);
+for(const name of ['weightDecay','gradientClip','branchWeight','negativeWeight','branchMilTemperature','intensityLossWeight','cosineLossWeight'])assert(form.elements[name]);
 assert(!form.querySelector('[data-parameter-path$="loss_weight"]'));
-for(const key of ['branch_path_threshold','max_fragment_nodes','ion_prediction_threshold','peak_intensity_threshold'])assert(form.querySelector('[data-parameter-path="generation_params.'+key+'"]'));
+for(const key of ['branch_path_threshold','max_fragment_nodes','peak_intensity_threshold'])assert(form.querySelector('[data-parameter-path="generation_params.'+key+'"]'));
 assert.equal(form.elements.branchMilTemperature.value,'0.1');
 assert.equal(form.elements.negativeWeight.value,'0.2');
 assert(d.querySelector('#trainingLossSummary').textContent.includes('Branch MIL + Weak Negatives'));
-assert(d.querySelector('#trainingLossSummary').textContent.includes('Fragment BCE'));
-assert(d.querySelector('#trainingLossSummary').textContent.includes('Ion-State BCE'));
+assert(d.querySelector('#trainingLossSummary').textContent.includes('Spectrum Intensity'));
+assert(d.querySelector('#trainingLossSummary').textContent.includes('Branch MIL'));
 assert.equal(form.elements.validationIntervalSteps.value,'0');
 assert.equal(form.elements.validationFraction.value,'0.1');
 assert.equal(form.elements.trainLogIntervalSteps.value,'100');
@@ -87,7 +87,7 @@ post({type:'picked',form:'training',field:'valDir',value:'/fixtures/validation_s
 assert(!form.elements.fineTunePatternSet);
 function mode(value){const radio=form.querySelector('input[name=trainingMode][value='+value+']');radio.checked=true;radio.dispatchEvent(event());}
 mode('resume');form.elements.resume.value='/model/resume.pt';form.elements.resume.dispatchEvent(event());assert(messages.some(m=>m.type==='training/checkpoint'&&m.path==='/model/resume.pt'));
-const fine={source_checkpoint:'/model/base.pt',version:2,head_only:true};
+const fine={source_checkpoint:'/model/base.pt',version:1,head_only:true};
 post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});assert.equal(form.elements.lr.value,'0.0003');assert(form.elements.lr.disabled);assert(form.elements.dropout.disabled);assert(!form.querySelector('input[name=trainingMode][value=patterns]'));assert(!d.querySelector('#navigationRail [data-page=jobs]'));
 const resumeArgs=ext.buildTrainingArgs(w.eval('getTrainingConfig()'));assert(!resumeArgs.includes('--fragment-tree-dropout'));assert(!resumeArgs.includes('--model-architecture-json'));assert(resumeArgs.includes('--resume'));
 const resumeSourceCount=messages.filter(m=>m.type==='training/sources').length,resumeCheckpointCount=messages.filter(m=>m.type==='training/checkpoint').length;post({type:'picked',form:'training',field:'resume',value:'/model/resume.pt'});assert(!inherited.textContent.includes('Reaction Pattern Set'));assert(d.getElementById('trainingStart').disabled);form.elements.resume.dispatchEvent(event());assert.equal(messages.filter(m=>m.type==='training/sources').length,resumeSourceCount+1);assert.equal(messages.filter(m=>m.type==='training/checkpoint').length,resumeCheckpointCount+1);const refreshedResumeSource=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:refreshedResumeSource.requestId,modelConfig:{fragmenter_params:preset.fragmenter_params,mol_encoder_params:preset.mol_encoder_params,adduct_type_strs:preset.adduct_type_strs}});post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});
@@ -169,7 +169,7 @@ assert.equal(d.getElementById('modelDetails').querySelector('.pattern-model-deta
 filter.value='';filter.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(d.getElementById('modelDetails').querySelector('.pattern-model-detail').hidden,false);
 const exportPattern=d.getElementById('modelDetails').querySelector('.pattern-model-detail>button');exportPattern.click();assert.equal(messages.at(-1).type,'models/export');
 d.getElementById('modelsPath').value='/models/lipid.reaction-model.pt';d.getElementById('modelInspect').click();assert.equal(messages.at(-1).type,'models/inspect');
-post({type:'models/inspected',target:'models',architecture:'fredis-reaction-model-v1',path:'/models/lipid.reaction-model.pt',modelConfig:preset,patterns:[inspected]});
+post({type:'models/inspected',target:'models',architecture:'fredis-reaction-model-v2',path:'/models/lipid.reaction-model.pt',modelConfig:preset,patterns:[inspected]});
 assert(d.getElementById('modelDetails').textContent.includes('Reaction feature model'));
 assert(!d.getElementById('modelDetails').querySelector('.model-component-grid').textContent.includes('Spectrum prediction'));
 d.querySelector('#navigationRail [data-page=training]').click();assert.equal(d.getElementById('modelsPage').hidden,true);assert.equal(form.hidden,false);

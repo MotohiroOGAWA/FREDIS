@@ -21,16 +21,24 @@ class FragmentIonAdductRuleSet:
     def __post_init__(self) -> None:
         if not isinstance(self.name, str):
             raise TypeError("name must be a string")
-        if isinstance(self.hydrogen_shift_min, bool) or not isinstance(self.hydrogen_shift_min, int):
+        if isinstance(self.hydrogen_shift_min, bool) or not isinstance(
+            self.hydrogen_shift_min, int
+        ):
             raise TypeError("hydrogen_shift_min must be an int")
-        if isinstance(self.hydrogen_shift_max, bool) or not isinstance(self.hydrogen_shift_max, int):
+        if isinstance(self.hydrogen_shift_max, bool) or not isinstance(
+            self.hydrogen_shift_max, int
+        ):
             raise TypeError("hydrogen_shift_max must be an int")
         if self.hydrogen_shift_min > self.hydrogen_shift_max:
             raise ValueError("hydrogen_shift_min must not exceed hydrogen_shift_max")
         if not isinstance(self.adduct_rules, tuple):
             raise TypeError("adduct_rules must be a tuple")
-        if not all(isinstance(rule, FragmentIonAdductRule) for rule in self.adduct_rules):
-            raise TypeError("adduct_rules must contain only FragmentIonAdductRule values")
+        if not all(
+            isinstance(rule, FragmentIonAdductRule) for rule in self.adduct_rules
+        ):
+            raise TypeError(
+                "adduct_rules must contain only FragmentIonAdductRule values"
+            )
         keys = [str(rule.adduct_type) for rule in self.adduct_rules]
         if len(keys) != len(set(keys)):
             raise ValueError("adduct_rules contains duplicated adduct_type values")
@@ -93,7 +101,9 @@ class FragmentIonAdductRuleSet:
     def index_to_adduct_type(self) -> Dict[int, Adduct]:
         return {index: rule.adduct_type for index, rule in enumerate(self.adduct_rules)}
 
-    def get_rule_by_adduct_type(self, adduct_type: Adduct | str) -> FragmentIonAdductRule:
+    def get_rule_by_adduct_type(
+        self, adduct_type: Adduct | str
+    ) -> FragmentIonAdductRule:
         return self.get_rule_by_index(self.encode_adduct_type(adduct_type))
 
     def get_rule_by_index(self, index: int) -> FragmentIonAdductRule:
@@ -103,14 +113,20 @@ class FragmentIonAdductRuleSet:
             raise IndexError(f"index must be in [0, {self.num_classes}); got {index}")
         return self.adduct_rules[index]
 
-    def get_fragment_ion_adducts_by_adduct_type(self, adduct_type: Adduct | str) -> Tuple[Adduct, ...]:
+    def get_fragment_ion_adducts_by_adduct_type(
+        self, adduct_type: Adduct | str
+    ) -> Tuple[Adduct, ...]:
         return self.get_rule_by_adduct_type(adduct_type).fragment_ion_adducts
 
     def get_fragment_ion_adducts_by_index(self, index: int) -> Tuple[Adduct, ...]:
         return self.get_rule_by_index(index).fragment_ion_adducts
 
     def encode_adduct_type(self, adduct_type: Adduct | str) -> int:
-        key = adduct_type if isinstance(adduct_type, Adduct) else Adduct.parse(adduct_type)
+        key = (
+            adduct_type
+            if isinstance(adduct_type, Adduct)
+            else Adduct.parse(adduct_type)
+        )
         try:
             return self.adduct_type_to_index[key]
         except KeyError as exc:

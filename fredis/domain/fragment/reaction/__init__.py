@@ -6,7 +6,10 @@ from ._ReactionPattern import ReactionRule
 from .ReactionSequenceResult import ReactionSequenceResult
 from .ReactionInstanceGenerator import create_reaction_instances
 from .ReactionSequenceSearch import (
-    ReactionSequenceSearch, ReactionSequenceSearchStats, FragmentTreeLimitExceeded, validate_search_limits,
+    ReactionSequenceSearch,
+    ReactionSequenceSearchStats,
+    FragmentTreeLimitExceeded,
+    validate_search_limits,
 )
 from .ReactionRelations import ReactionRelations
 

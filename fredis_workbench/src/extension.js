@@ -111,11 +111,11 @@ function defaultConfig(context) {
 function defaultTrainingConfig(context) {
   const root = projectRoot(context);
   // Architecture defaults not listed here are filled in by the parameter editor.
-  const modelConfig = { mol_encoder_params: { node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 } };
+  const modelConfig = { mol_encoder_params: { node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 }, reaction_model_params:{hidden_dim:128}, spectrum_model_params:{} };
   return workbenchDefaults.workflowDefaults('training',{
     application: 'fragment-tree-training', modelConfig, trainDir: '', valDir: '',
     outputDir: '',
-    experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.2, branchMilTemperature:0.1, fragmentLossWeight:0.5, stateLossWeight:0.5, intensityLossWeight:1, cosineLossWeight:0.5, precursorFreeLossWeight:0.5, intensityPower:0.5, gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
+    experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.2, branchMilTemperature:0.1,   intensityLossWeight:1, cosineLossWeight:0.5,   gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
     fineTuneCheckpoint: '', headOnly: false
   },root);
 }
@@ -369,7 +369,7 @@ function normalizeConfig(config, baseDirectory) {
 
 function normalizeTrainingConfig(config) {
   const result=JSON.parse(JSON.stringify(config||{}));
-  const model=result.modelConfig?.params||result.modelConfig;
+  const model=result.modelConfig;
   if(model&&typeof model==='object'&&!Array.isArray(model)){
     result.modelConfig={};
     for(const key of ['mol_encoder_params','reaction_model_params','spectrum_model_params','generation_params'])if(model[key]&&typeof model[key]==='object'&&!Array.isArray(model[key]))result.modelConfig[key]=model[key];
@@ -459,10 +459,10 @@ function buildTrainingArgs(c) {
     '--epochs', String(c.epochs || 1), '--batch-size', String(c.batchSize || 4),
     '--device', c.device || 'cuda', '--lr', String(c.lr ?? 0.0001)];
   if(!c.resume&&!c.fineTuneCheckpoint){
-    if(c.pretrainedPatterns?.length||c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.reaction_model_params.state_dropout=c.dropout??0;model.spectrum_model_params??={};model.spectrum_model_params.dropout=c.dropout??0;a.push('--model-architecture-json',JSON.stringify({model_config:model,pretrained_patterns:c.pretrainedPatterns||[]}));}
+    if(c.pretrainedPatterns?.length||c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.reaction_model_params.state_dropout=c.dropout??0;model.spectrum_model_params??={};a.push('--model-architecture-json',JSON.stringify({model_config:model,pretrained_patterns:c.pretrainedPatterns||[]}));}
 
-    const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',state_num_layers:'reaction-state-layers',reaction_neighborhood_mode:'reaction-neighborhood-mode',reaction_neighborhood_max_hop:'reaction-neighborhood-max-hop'},spectrum_model_params:{hidden_dim:'spectrum-hidden-dim',num_layers:'spectrum-num-layers',num_heads:'spectrum-num-heads',ion_embedding_dim:'ion-embedding-dim',hydrogen_shift_embedding_dim:'hydrogen-shift-embedding-dim',state_hidden_dim:'ion-state-hidden-dim',main_adduct_dim:'main-adduct-embedding-dim',collision_energy_dim:'collision-energy-feature-dim'},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',ion_prediction_threshold:'ion-prediction-threshold',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist',dropout:'dropout'}};
-    for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,String(value));}
+    const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',state_num_layers:'reaction-state-layers'},spectrum_model_params:{"ion_embedding_dim": "ion-embedding-dim", "hydrogen_shift_embedding_dim": "hydrogen-shift-embedding-dim", "state_hidden_dim": "ion-state-hidden-dim", "main_adduct_dim": "main-adduct-embedding-dim", "collision_energy_dim": "collision-energy-feature-dim", "ce_fc_dims": "ce-fc-dims", "ce_dropout": "ce-dropout", "ce_center": "ce-center", "ce_scale": "ce-scale", "state_fc_dims": "ion-state-fc-dims", "state_dropout": "ion-state-dropout", "transition_fc_dims": "transition-fc-dims", "transition_dropout": "transition-dropout", "propagation_steps": "propagation-steps"},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist',dropout:'dropout'}};
+    for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,Array.isArray(value)?value.join(','):String(value));}
     const descriptors=c.modelConfig?.spectrum_model_params?.descriptors;if(Array.isArray(descriptors))a.push('--intensity-descriptors',...descriptors);
   }
   for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (!(c.resume&&key==='dropout')&&c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));

@@ -5,51 +5,55 @@ from rdkit import Chem
 
 # Disable RDKit logging
 from rdkit import RDLogger
+
 lg = RDLogger.logger()
-lg.setLevel(RDLogger.CRITICAL)  # Only show critical errors, suppress warnings and other messages
+lg.setLevel(
+    RDLogger.CRITICAL
+)  # Only show critical errors, suppress warnings and other messages
 
 
 class AtomFeatureLayer(nn.Module):
     def __init__(
-            self, 
-            symbols:Tuple[str],
-            ):
+        self,
+        symbols: Tuple[str],
+    ):
         super(AtomFeatureLayer, self).__init__()
         self.symbols = tuple(sorted(set(symbols)))
 
         self.feature_sets = {
-            'symbol': tuple(self.symbols),
-            'charge': (-1, 0, 1),
-            'ring_type': ('no-ring', 'small-ring', '5-cycle', '6-cycle', 'large-ring'),
-            'hybridization': ('sp', 'sp2', 'sp3', 'sp3d', 'sp3d2'),
-            'num_hydrogens': (0, 1, 2, 3, 4),
-            'valence_electrons': (1, 2, 3, 4, 5, 6, 7, 8),
+            "symbol": tuple(self.symbols),
+            "charge": (-1, 0, 1),
+            "ring_type": ("no-ring", "small-ring", "5-cycle", "6-cycle", "large-ring"),
+            "hybridization": ("sp", "sp2", "sp3", "sp3d", "sp3d2"),
+            "num_hydrogens": (0, 1, 2, 3, 4),
+            "valence_electrons": (1, 2, 3, 4, 5, 6, 7, 8),
             # 'oxidation_number': (1, 2, 3, 4, 5, 6, 7, 8, 9),
         }
-        
+
         self.base_symbol_vector = nn.Parameter(
-            torch.zeros(len(self.symbols), dtype=torch.float32),
-            requires_grad=False
+            torch.zeros(len(self.symbols), dtype=torch.float32), requires_grad=False
         )
         self.base_charge_vector = nn.Parameter(
-            torch.zeros(len(self.feature_sets['charge']), dtype=torch.float32),
-            requires_grad=False
+            torch.zeros(len(self.feature_sets["charge"]), dtype=torch.float32),
+            requires_grad=False,
         )
         self.base_ring_type_vector = nn.Parameter(
-            torch.zeros(len(self.feature_sets['ring_type']), dtype=torch.float32),
-            requires_grad=False
+            torch.zeros(len(self.feature_sets["ring_type"]), dtype=torch.float32),
+            requires_grad=False,
         )
         self.base_hybridization_vector = nn.Parameter(
-            torch.zeros(len(self.feature_sets['hybridization']), dtype=torch.float32),
-            requires_grad=False
+            torch.zeros(len(self.feature_sets["hybridization"]), dtype=torch.float32),
+            requires_grad=False,
         )
         self.base_num_hydrogens_vector = nn.Parameter(
-            torch.zeros(len(self.feature_sets['num_hydrogens']), dtype=torch.float32),
-            requires_grad=False
+            torch.zeros(len(self.feature_sets["num_hydrogens"]), dtype=torch.float32),
+            requires_grad=False,
         )
         self.base_valence_electrons_vector = nn.Parameter(
-            torch.zeros(len(self.feature_sets['valence_electrons']), dtype=torch.float32),
-            requires_grad=False
+            torch.zeros(
+                len(self.feature_sets["valence_electrons"]), dtype=torch.float32
+            ),
+            requires_grad=False,
         )
         # self.base_oxidation_number_vector = nn.Parameter(
         #     torch.zeros(len(self.feature_sets['oxidation_number']), dtype=torch.float32),
@@ -72,8 +76,17 @@ class AtomFeatureLayer(nn.Module):
         valence_electrons_tensor = self.encode_valence_electrons(atom)
         # oxidation_number_tensor = self.encode_oxidation_number(atom)
 
-        return torch.cat([symbol_tensor, charge_tensor, ring_type_tensor, hybridization_tensor, num_hydrogens_tensor, valence_electrons_tensor], dim=0)
-
+        return torch.cat(
+            [
+                symbol_tensor,
+                charge_tensor,
+                ring_type_tensor,
+                hybridization_tensor,
+                num_hydrogens_tensor,
+                valence_electrons_tensor,
+            ],
+            dim=0,
+        )
 
     def encode_symbol(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
         one_hot = self.base_symbol_vector.clone()
@@ -91,52 +104,50 @@ class AtomFeatureLayer(nn.Module):
     def encode_charge(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
         charge = atom.GetFormalCharge()
         one_hot = self.base_charge_vector.clone()
-        if charge in self.feature_sets['charge']:
-            one_hot[self.feature_sets['charge'].index(charge)] = 1.0
+        if charge in self.feature_sets["charge"]:
+            one_hot[self.feature_sets["charge"].index(charge)] = 1.0
         return one_hot
 
     def encode_ring_type(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
         one_hot = self.base_ring_type_vector.clone()
-        ring_types = self.feature_sets['ring_type']
+        ring_types = self.feature_sets["ring_type"]
         if not atom.IsInRing():
-            one_hot[ring_types.index('no-ring')] = 1.0
+            one_hot[ring_types.index("no-ring")] = 1.0
         elif atom.IsInRingSize(3) or atom.IsInRingSize(4):
-            one_hot[ring_types.index('small-ring')] = 1.0
+            one_hot[ring_types.index("small-ring")] = 1.0
         elif atom.IsInRingSize(5):
-            one_hot[ring_types.index('5-cycle')] = 1.0
+            one_hot[ring_types.index("5-cycle")] = 1.0
         elif atom.IsInRingSize(6):
-            one_hot[ring_types.index('6-cycle')] = 1.0
+            one_hot[ring_types.index("6-cycle")] = 1.0
         else:
-            one_hot[ring_types.index('large-ring')] = 1.0
+            one_hot[ring_types.index("large-ring")] = 1.0
         return one_hot
-    
+
     def encode_hybridization(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
         one_hot = self.base_hybridization_vector.clone()
-        hybridizations = self.feature_sets['hybridization']
+        hybridizations = self.feature_sets["hybridization"]
         hyb = atom.GetHybridization().name.lower()
         if hyb in hybridizations:
             one_hot[hybridizations.index(hyb)] = 1.0
         return one_hot
-    
+
     def encode_num_hydrogens(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
         num_h = atom.GetTotalNumHs(includeNeighbors=True)
         one_hot = self.base_num_hydrogens_vector.clone()
-        if num_h in self.feature_sets['num_hydrogens']:
-            one_hot[self.feature_sets['num_hydrogens'].index(num_h)] = 1.0
+        if num_h in self.feature_sets["num_hydrogens"]:
+            one_hot[self.feature_sets["num_hydrogens"].index(num_h)] = 1.0
         return one_hot
-    
+
     def encode_valence_electrons(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
         num_valence = atom.GetExplicitValence()
         one_hot = self.base_valence_electrons_vector.clone()
-        if num_valence in self.feature_sets['valence_electrons']:
-            one_hot[self.feature_sets['valence_electrons'].index(num_valence)] = 1.0
+        if num_valence in self.feature_sets["valence_electrons"]:
+            one_hot[self.feature_sets["valence_electrons"].index(num_valence)] = 1.0
         return one_hot
-    
+
     # def encode_oxidation_number(self, atom: Chem.rdchem.Atom) -> torch.Tensor:
     #     ox_num = Chem.rdMolDescriptors.CalcOxidationNumbers(atom)
     #     one_hot = self.base_oxidation_number_vector.clone()
     #     if ox_num in self.feature_sets['oxidation_number']:
     #         one_hot[self.feature_sets['oxidation_number'].index(ox_num)] = 1.0
     #     return one_hot
-
-    

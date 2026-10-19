@@ -29,7 +29,13 @@ class PhysicalIonCandidate:
     explanations: Tuple[IonExplanation, ...]
 
     def __post_init__(self) -> None:
-        if self.fragment_index < 0:raise ValueError("fragment_index must be non-negative")
-        if not self.explanations:raise ValueError("a physical ion needs at least one explanation")
-        if any(value.fragment_index!=self.fragment_index for value in self.explanations):
-            raise ValueError("all explanations must belong to the physical ion fragment")
+        if self.fragment_index < 0:
+            raise ValueError("fragment_index must be non-negative")
+        if not self.explanations:
+            raise ValueError("a physical ion needs at least one explanation")
+        if any(
+            value.fragment_index != self.fragment_index for value in self.explanations
+        ):
+            raise ValueError(
+                "all explanations must belong to the physical ion fragment"
+            )

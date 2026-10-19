@@ -40,11 +40,10 @@ def test_individual_sizes_and_chemical_inputs(checkpoints):
     patterns = Fragmenter.from_dict(params['fragmenter_params']).reaction_pattern_set.patterns
     pid = str(patterns[0].pattern_id)
     params.setdefault('reaction_model_params', {})['pattern_model_params'] = {
-        pid: dict(node_dim=12, graph_dim=19, num_layers=3, num_heads=3, dropout=0, descriptors=['MolLogP','TPSA'])}
+        pid: dict(hidden_dim=12, graph_dim=19, num_layers=3, num_heads=3, dropout=0)}
     generator = create_spectrum_generator(params)
     reaction = generator.feature_model.reaction_instance_encoder
     assert reaction.reactant_encoders[pid].graph_dim == 19
-    assert reaction.pattern_heads[pid].descriptor_indices
     for other, config in reaction.pattern_model_params.items():
         if other != pid:
             assert config['descriptors'] == []
@@ -54,7 +53,7 @@ def test_individual_sizes_and_chemical_inputs(checkpoints):
 def test_conflicting_shared_inputs_rejected(checkpoints):
     source, other, _ = checkpoints
     saved = torch.load(other, weights_only=False)
-    key = 'feature_model.reaction_instance_encoder.atom_projection.weight'
+    key = next(k for k in saved['model_state_dict'] if k.startswith('feature_model.mol_encoder.') and saved['model_state_dict'][k].is_floating_point())
     saved['model_state_dict'][key] += 1
     torch.save(saved, other)
     with pytest.raises(ValueError, match='conflicting shared'):
@@ -76,12 +75,12 @@ def test_preparation_owns_definitions_and_pretrained_selections(checkpoints, tmp
     for name in ('train_structures','validation_structures'):
         directory=tmp_path/name;directory.mkdir();directories.append(directory)
         (directory/'preparation_config.json').write_text(json.dumps({'chemistry_config':chemistry}))
-    inherited=inherit_model_config(params,*directories,prepared_max_roles=None)
+    inherited=inherit_model_config(params,*directories)
     assert inherited['fine_tuning']['frozen_pattern_ids']==[item['pattern']['pattern_id']]
     assert inherited['reaction_model_params']['pattern_model_params'][str(item['pattern']['pattern_id'])]==item['architecture']
     # Resume consumes its saved architecture without reopening original imports.
     source.unlink()
-    resumed=inherit_model_config(inherited,*directories,saved_model=inherited,prepared_max_roles=None)
+    resumed=inherit_model_config(inherited,*directories,saved_model=inherited)
     assert resumed==inherited
 
 
@@ -92,14 +91,14 @@ def test_raw_pattern_position_capacity_is_independent_of_legacy_roles(checkpoint
     large=dict(name='large',reactant_smarts='-'.join(f'[#6:{i}]' for i in range(1,71)),products=[dict(name='left',smarts='[*:1]')])
     chemistry=prepare_pattern_models(dict(fragmenter_params=params['fragmenter_params'],symbols=params['mol_encoder_params']['symbols']),[
         dict(pattern=first['pattern'],source=str(source),source_pattern_id=first['pattern']['pattern_id']),dict(pattern=large)])
-    config={**params,'fragmenter_params':chemistry['fragmenter_params'],'reaction_model_params':{**params.get('reaction_model_params',{}),'pattern_input_version':2}}
+    config={**params,'fragmenter_params':chemistry['fragmenter_params'],'reaction_model_params':{**params.get('reaction_model_params',{})}}
     config=apply_dataset_pattern_models(config,chemistry['reaction_models'])
     generator=create_spectrum_generator(config)
     model=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
     initialize_imports(model,config)
     reaction=generator.feature_model.reaction_instance_encoder
-    assert reaction.roles.num_embeddings==64
-    assert any(encoder.position_count==70 and encoder.position_encoding=='one_hot' for encoder in reaction.reactant_encoders.values())
+    assert not hasattr(reaction,'roles')
+    assert any(encoder.position_count==70 and encoder.node_proj.in_features==encoder.atom_dim+70 for encoder in reaction.reactant_encoders.values())
 
 
 def test_global_memory_is_exported_imported_and_frozen(checkpoints):
@@ -108,7 +107,6 @@ def test_global_memory_is_exported_imported_and_frozen(checkpoints):
     params=deepcopy(saved['model_config'])
     pid=str(Fragmenter.from_dict(params['fragmenter_params']).reaction_pattern_set.patterns[0].pattern_id)
     reaction_params=params.setdefault('reaction_model_params',{})
-    reaction_params['pattern_input_version']=2
     reaction_params['pattern_model_params']={pid:dict(global_num_layers=3,global_hidden_dim=8,global_num_heads=2)}
     generator=create_spectrum_generator(params)
     model=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
@@ -126,18 +124,3 @@ def test_global_memory_is_exported_imported_and_frozen(checkpoints):
     assert all(not p.requires_grad for p in imported.parameters())
     for key,tensor in original.state_dict().items():
         assert torch.equal(tensor,imported.state_dict()[key])
-
-
-def test_v3_import_preserves_implicit_legacy_source_descriptors(checkpoints):
-    source,_,_=checkpoints
-    saved=torch.load(source,weights_only=False)
-    saved['model_config']['mol_encoder_params'].pop('descriptors',None)
-    torch.save(saved,source)
-    target=deepcopy(saved['model_config']);target['reaction_model_params']['pattern_input_version']=3
-    target['mol_encoder_params']['descriptors']=[]
-    config=assemble_config(target,[dict(path=str(source))])
-    assert config['mol_encoder_params']['descriptors']==['FormalCharge']
-    generator=create_spectrum_generator(config)
-    model=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
-    initialize_imports(model,config)
-    assert generator.mol_encoder.descriptors==('FormalCharge',)

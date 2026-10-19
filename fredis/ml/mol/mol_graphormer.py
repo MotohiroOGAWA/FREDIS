@@ -39,9 +39,7 @@ class MolGraphormerEncoder(GraphormerEncoder):
         node_dim = int(node_dim)
         graph_dim = int(graph_dim)
         if node_dim <= 0 or graph_dim <= 0:
-            raise ValueError(
-                "node_dim and graph_dim must be positive."
-            )
+            raise ValueError("node_dim and graph_dim must be positive.")
 
         atom_feature_dim = int(atom_dim)
         bond_feature_dim = int(bond_dim)

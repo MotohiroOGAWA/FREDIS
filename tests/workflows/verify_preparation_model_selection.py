@@ -31,7 +31,6 @@ shutil.rmtree(originals)
 # Data fixes definitions/imports. New pattern architecture is chosen only here.
 architecture=json.loads(json.dumps(saved['model_config']))
 architecture.pop('fine_tuning',None)
-architecture['reaction_model_params']['pattern_input_version']=2
 architecture['reaction_model_params']['pattern_model_params']={str(p.pattern_id):dict(hidden_dim=12,graph_dim=19,num_layers=3,num_heads=3,dropout=0,descriptors=['TPSA','MolLogP'],neighborhood_hops=3,neighborhood_hidden_dim=7) for p in fragmenter.reaction_pattern_set.patterns if p.key not in base_keys}
 architecture_path=out/'architecture.json';architecture_path.write_text(json.dumps({'model_config':architecture},indent=2))
 metadata=json.loads((out/'relocated_dataset/preparation_config.json').read_text())

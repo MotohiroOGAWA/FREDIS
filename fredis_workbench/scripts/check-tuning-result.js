@@ -1,6 +1,6 @@
 const assert=require('assert/strict'),{JSDOM,VirtualConsole}=require('jsdom'),{html}=require('../src/features/tuning-result/view');
 const messages=[],errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));
-const report={version:2,status:'completed',totalTrials:3,trials:[
+const report={version:1,status:'completed',totalTrials:3,trials:[
  {trial:1,status:'completed',exitCode:0,outputDir:'trial-001',config:{name:'<script>unsafe</script>'},validationHistory:[
   {epoch:1,validation_loss:0.1,validation_cosine_similarity_mean:0.4,validation_cosine_similarity_q25:0.8,validation_cosine_similarity_q75:0.9,validation_cosine_similarity_median:0.85},
   {epoch:2,validation_loss:0.8,validation_cosine_similarity_mean:0.5,validation_cosine_similarity_q25:0.2,validation_cosine_similarity_q75:0.7,validation_cosine_similarity_median:0.5}]},

@@ -172,7 +172,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         self.assertEqual(data.source_graph.num_nodes,2)
         self.assertEqual(data.source_atom_capacity,2)
         self.assertTrue(torch.all(data.reaction_source_atom_index<2))
-        self.assertEqual(data.reaction_source_atom_features.shape[0],data.reaction_source_atom_index.numel())
+        self.assertEqual(int(data.reaction_source_atom_ptr[-1]),data.reaction_source_atom_index.numel())
         batch,indices=generator.mol_encoder.encode_batch([source,Compound.from_smiles('[H]')])
         self.assertEqual(indices.tolist(),[0,1])
         self.assertEqual(batch.shape[0],2)
@@ -193,7 +193,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             output=root/'out';(output/'train_structures/stale').mkdir(parents=True)
             (output/'train_structures/stale/old.bin').write_text('stale')
             (output/'orphan.txt').write_text('old')
-            (output/'fragment-tree.pft').write_text(json.dumps({'validationRatio':0.25}))
+            (output/'fragment-tree.training-data.pft').write_text(json.dumps({'validationRatio':0.25}))
             model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
                 main(['--input',str(input_file),'--validation-input',str(validation_file),'--output-dir',str(output),
@@ -236,7 +236,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         shifted=collated.sample_annotations[2]['peaks'][0]['matches'][0]['nodeIndices']
         self.assertEqual(shifted,[node+offset for node in original])
 
-    def test_result_inspection_uses_unique_fragment_nodes_and_reaction_references(self):
+    def test_result_inspection_preserves_reaction_states_and_reaction_references(self):
         from fredis.libs.mmkit.mmkit import Formula
         from fredis.ml.data_preparation.fragment_tree.create_training_data import create_reaction_training_data
         result_spec=importlib.util.spec_from_file_location('result_backend','fredis_workbench/src/features/fragment-tree-result/backend.py')
@@ -250,18 +250,19 @@ class TestPreparationWorkflow(unittest.TestCase):
             scores=pd.read_csv(Path(directory)/'assignment_scores.tsv',sep='\t')
             self.assertEqual(len(scores),1)
             manifest=pd.read_csv(Path(directory)/'manifest.tsv',sep='\t').iloc[0]
-            self.assertEqual(manifest.num_nodes,4)
-            self.assertEqual(manifest.num_edges,3)
+            self.assertEqual(manifest.num_nodes,5)
+            self.assertEqual(manifest.num_edges,4)
             self.assertEqual(manifest.rejected_sample_count,0)
             self.assertAlmostEqual(manifest.assignment_score,13/15)
             self.assertAlmostEqual(manifest.assignment_score_without_precursor,3/5)
             recovered=backend.structure_manifest({'directory':directory})[0]
-            self.assertEqual(recovered['num_nodes'],4)
-            self.assertEqual(recovered['num_edges'],3)
+            self.assertEqual(recovered['num_nodes'],5)
+            self.assertEqual(recovered['num_edges'],4)
             self.assertAlmostEqual(recovered['assignment_score'],13/15)
             self.assertAlmostEqual(scores.assignment_score.iloc[0],13/15)
             self.assertAlmostEqual(scores.assignment_score_without_precursor.iloc[0],3/5)
         sample=result['samples'][0]
+        self.assertEqual(sample['nodeCount'],5)
         self.assertEqual(sample['adduct'],'[M+H]+')
         self.assertEqual(sample['mainAdduct'],'[M+H]+')
         self.assertEqual(sample['collisionEnergyDisplay'],'20.3')

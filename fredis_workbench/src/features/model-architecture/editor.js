@@ -6,7 +6,7 @@ const FILE_SUFFIX='.architecture.pft',VIEW_TYPE='fredis.modelArchitectureEditor'
 const KEYS=['mol_encoder_params','reaction_model_params','spectrum_model_params'];
 function normalizeDocument(value){
  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected a model architecture object.');
- const source=value.model_config||value,params=source.params||source;
+ const source=value.model_config||value,params=source;
  const model_config={};
  for(const key of KEYS)if(key in params){if(!params[key]||typeof params[key]!=='object'||Array.isArray(params[key]))throw new Error('Invalid '+key);model_config[key]=JSON.parse(JSON.stringify(params[key]));}
  if(!Object.keys(model_config).length)throw new Error('No model architecture components found.');

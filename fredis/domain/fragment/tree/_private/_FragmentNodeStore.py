@@ -39,7 +39,7 @@ class _FragmentNodeStore:
             index=int(index),
             smiles=str(self.node_smiles[index]),
         )
-    
+
     def get_node_by_smiles(self, smiles: str) -> FragmentNode | None:
         try:
             index = np.where(self.node_smiles == smiles)[0][0]

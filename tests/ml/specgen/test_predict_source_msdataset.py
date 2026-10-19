@@ -8,9 +8,8 @@ from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from tests.ml.reaction.TestReactionPipeline import config
 
 
-def _generator(ion_prediction_threshold=0.5):
+def _generator():
     value = config()
-    value['generation_params']['ion_prediction_threshold'] = ion_prediction_threshold
     return create_spectrum_generator(value).eval()
 
 
@@ -298,31 +297,3 @@ def test_build_prediction_cache_keep_temp_controls_whether_task_files_survive(tm
     kept = list(kept_root.iterdir())
     assert len(kept) == 1
     assert any(p.suffix == '.pkl' for p in kept[0].iterdir())
-
-
-def test_predict_source_msdataset_ion_prediction_threshold_filters_low_confidence_peaks():
-    dataset = direct_input_dataset(
-        smiles_values=['CCCO'],
-        collision_energy='20 eV',
-        adduct_type='[M+H]+',
-    )
-    # An untrained model's ion confidence is effectively arbitrary, but it is
-    # always within (0, 1); a threshold above every possible value must drop
-    # every peak without crashing (an all-peaks-filtered spectrum used to
-    # break MSDataset construction), and a threshold below every possible
-    # value must keep peaks flowing through unfiltered.
-    strict, _ = predict_source_msdataset(
-        dataset, _generator(ion_prediction_threshold=0.999999),
-        smiles_column='SMILES', adduct_type_column='AdductType',
-        collision_energy_column='CollisionEnergy', precursor_mz_column='PrecursorMZ',
-        instrument_column=None,
-    )
-    assert strict.n_peaks_total == 0
-
-    lenient, _ = predict_source_msdataset(
-        dataset, _generator(ion_prediction_threshold=0.000001),
-        smiles_column='SMILES', adduct_type_column='AdductType',
-        collision_energy_column='CollisionEnergy', precursor_mz_column='PrecursorMZ',
-        instrument_column=None,
-    )
-    assert lenient.n_peaks_total > 0

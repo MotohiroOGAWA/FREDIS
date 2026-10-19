@@ -23,7 +23,9 @@ from fredis.domain.mass.parse_ce import parse_ce_to_ev
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from fredis.ml.specgen.generation import GenerationSettings
 from fredis.cli.base import output_directory
-from fredis.ml.specgen.source_anchored_spectrum_predictor import SourceAnchoredFragmentSpectrumGenerator
+from fredis.ml.specgen.source_anchored_spectrum_predictor import (
+    SourceAnchoredFragmentSpectrumGenerator,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,11 +65,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--instrument-column", default=None)
     parser.add_argument("--spec-id-column", default="SpecID")
     parser.add_argument(
-        "--db", default="unspecified",
+        "--db",
+        default="unspecified",
         help="Database label written to DB and generated SpecID values.",
     )
     parser.add_argument(
-        "--overwrite", action="store_true",
+        "--overwrite",
+        action="store_true",
         help="Allow replacement of an existing output MSDataset.",
     )
     parser.add_argument(
@@ -105,20 +109,55 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use strict state_dict loading.",
     )
-    parser.add_argument('--max-samples',type=int,default=128,help='Maximum simultaneous prediction samples; larger inputs are split.')
-    parser.add_argument('--num-workers',type=int,default=1,help='Parallel worker processes for RDKit fragmentation precompute; 1 runs serially.')
-    parser.add_argument('--chunk-size',type=int,default=1,help='Compounds dispatched per worker chunk.')
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=128,
+        help="Maximum simultaneous prediction samples; larger inputs are split.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Parallel worker processes for RDKit fragmentation precompute; 1 runs serially.",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=1,
+        help="Compounds dispatched per worker chunk.",
+    )
     # Generation settings default to the values saved with the model.
-    parser.add_argument('--branch-path-threshold',type=float,default=None,help='Override the saved branch path probability threshold.')
-    parser.add_argument('--max-fragment-nodes',type=int,default=None,help='Override the saved fragment node budget per (compound, main adduct) branch group.')
-    parser.add_argument('--ion-prediction-threshold',type=float,default=None,help='Override the saved ion probability threshold.')
-    parser.add_argument('--peak-intensity-threshold',type=float,default=None,help='Override the saved relative peak intensity threshold.')
-    parser.add_argument('--keep-temp',action='store_true',
-        help='Keep the temporary task/result files exchanged with --num-workers subprocesses (for inspection), instead of deleting them once every chunk completes.')
+    parser.add_argument(
+        "--branch-path-threshold",
+        type=float,
+        default=None,
+        help="Override the saved branch path probability threshold.",
+    )
+    parser.add_argument(
+        "--max-fragment-nodes",
+        type=int,
+        default=None,
+        help="Override the saved fragment node budget per (compound, main adduct) branch group.",
+    )
+    parser.add_argument(
+        "--peak-intensity-threshold",
+        type=float,
+        default=None,
+        help="Override the saved relative peak intensity threshold.",
+    )
+    parser.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help="Keep the temporary task/result files exchanged with --num-workers subprocesses (for inspection), instead of deleting them once every chunk completes.",
+    )
     args = parser.parse_args()
-    if args.max_samples<1:parser.error('--max-samples must be positive')
-    if args.num_workers<1:parser.error('--num-workers must be positive')
-    if args.chunk_size<1:parser.error('--chunk-size must be positive')
+    if args.max_samples < 1:
+        parser.error("--max-samples must be positive")
+    if args.num_workers < 1:
+        parser.error("--num-workers must be positive")
+    if args.chunk_size < 1:
+        parser.error("--chunk-size must be positive")
     if args.input is None:
         missing = [
             name
@@ -152,7 +191,7 @@ def model_params_from_checkpoint(
     if isinstance(checkpoint, dict):
         model_config = checkpoint.get("model_config")
         if isinstance(model_config, dict):
-            params = model_config.get("params", model_config)
+            params = model_config
             if isinstance(params, dict):
                 return params
 
@@ -169,7 +208,9 @@ def extract_state_dict(checkpoint: object) -> Dict[str, Tensor]:
             if isinstance(value, dict):
                 return value
 
-        if checkpoint and all(isinstance(value, Tensor) for value in checkpoint.values()):
+        if checkpoint and all(
+            isinstance(value, Tensor) for value in checkpoint.values()
+        ):
             return checkpoint
 
     raise ValueError(
@@ -195,8 +236,13 @@ def load_generator(
     # through that wrapper so a checkpoint emitted by training is immediately
     # usable for inference.
     if any(key.startswith("spectrum_model.") for key in state_dict):
-        from ..training.fragment_tree_training.model import ReactionFragmentTreeTrainingModel
-        wrapper = ReactionFragmentTreeTrainingModel(generator.feature_model, spectrum_model=generator.spectrum_model)
+        from ..training.fragment_tree_training.model import (
+            ReactionFragmentTreeTrainingModel,
+        )
+
+        wrapper = ReactionFragmentTreeTrainingModel(
+            generator.feature_model, spectrum_model=generator.spectrum_model
+        )
         wrapper.load_state_dict(state_dict, strict=strict)
     else:
         generator.load_state_dict(state_dict, strict=strict)
@@ -257,8 +303,11 @@ def validate_prediction_input(
     instrument_column: Optional[str],
 ) -> None:
     required = [
-        smiles_column, precursor_mz_column, adduct_type_column,
-        collision_energy_column, spec_id_column,
+        smiles_column,
+        precursor_mz_column,
+        adduct_type_column,
+        collision_energy_column,
+        spec_id_column,
     ]
     if instrument_column:
         required.append(instrument_column)
@@ -271,7 +320,9 @@ def validate_prediction_input(
     duplicated = spec_ids.astype(str).duplicated(keep=False)
     if duplicated.any():
         examples = spec_ids.astype(str)[duplicated].drop_duplicates().head(5).tolist()
-        raise ValueError(f"{spec_id_column} must be unique; duplicates include: {examples}")
+        raise ValueError(
+            f"{spec_id_column} must be unique; duplicates include: {examples}"
+        )
 
 
 def _tool_version() -> str:
@@ -330,13 +381,19 @@ def prediction_metadata(
     for _, row in result.iterrows():
         try:
             exact_mass = Compound.from_smiles(str(row[smiles_column])).exact_mass
-            predicted_mz = float(Adduct.parse(str(row[adduct_type_column])).apply_to_mz(exact_mass))
+            predicted_mz = float(
+                Adduct.parse(str(row[adduct_type_column])).apply_to_mz(exact_mass)
+            )
         except Exception:
             predicted_mz = float("nan")
         predicted_precursors.append(predicted_mz)
         instrument = row.get(instrument_column) if instrument_column else None
-        parsed_ce = parse_ce_to_ev(row.get(collision_energy_column), row.get(precursor_mz_column), instrument)
-        collision_energy_ev.append(float(parsed_ce) if parsed_ce is not None else float("nan"))
+        parsed_ce = parse_ce_to_ev(
+            row.get(collision_energy_column), row.get(precursor_mz_column), instrument
+        )
+        collision_energy_ev.append(
+            float(parsed_ce) if parsed_ce is not None else float("nan")
+        )
     result["PredictedPrecursorMZ"] = predicted_precursors
     result["PredictionCollisionEnergy"] = collision_energy_ev
     result["PredictionCollisionEnergyUnit"] = "eV"
@@ -347,10 +404,17 @@ def prediction_metadata(
 
 def validate_prediction_output(dataset: MSDataset) -> None:
     required = [
-        "SpecID", "SourceSpecID", "DB", "PredictionTool",
-        "PredictionToolVersion", "PredictionModel", "PredictionTimestamp",
-        "PredictedPrecursorMZ", "PredictionCollisionEnergy",
-        "PredictionCollisionEnergyUnit", "PredictionAdductType",
+        "SpecID",
+        "SourceSpecID",
+        "DB",
+        "PredictionTool",
+        "PredictionToolVersion",
+        "PredictionModel",
+        "PredictionTimestamp",
+        "PredictedPrecursorMZ",
+        "PredictionCollisionEnergy",
+        "PredictionCollisionEnergyUnit",
+        "PredictionAdductType",
     ]
     missing = [column for column in required if column not in dataset.columns]
     if missing:
@@ -358,7 +422,10 @@ def validate_prediction_output(dataset: MSDataset) -> None:
     spec_ids = dataset["SpecID"].astype(str)
     if spec_ids.str.strip().eq("").any() or spec_ids.duplicated().any():
         raise ValueError("Predicted SpecID values must be non-empty and unique.")
-    if dataset["SourceSpecID"].isna().any() or dataset["SourceSpecID"].astype(str).str.strip().eq("").any():
+    if (
+        dataset["SourceSpecID"].isna().any()
+        or dataset["SourceSpecID"].astype(str).str.strip().eq("").any()
+    ):
         raise ValueError("Predicted SourceSpecID values must be non-empty.")
 
 
@@ -379,25 +446,44 @@ def predict_msdataset(
     chunk_size: int = 1,
     keep_temp: bool = False,
     temp_dir: Optional[str] = None,
-    validate_desc: str = 'Validating records',
-    prepare_desc: str = 'Preparing molecules',
-    predict_desc: str = 'Predicting spectra',
+    validate_desc: str = "Validating records",
+    prepare_desc: str = "Preparing molecules",
+    predict_desc: str = "Predicting spectra",
 ) -> tuple[MSDataset, pd.DataFrame]:
     """Predict every selected compound in one batched forward, then apply the
     shared provenance contract (SpecID/PredictionTool/... columns)."""
     from .source_reaction_msdataset import predict_source_msdataset
+
     predicted, failures = predict_source_msdataset(
-        dataset, generator, smiles_column=smiles_column, adduct_type_column=adduct_type_column,
-        collision_energy_column=collision_energy_column, precursor_mz_column=precursor_mz_column,
-        instrument_column=instrument_column, include_formula_annotation=include_formula_annotation,
-        num_workers=num_workers, chunk_size=chunk_size, keep_temp=keep_temp, temp_dir=temp_dir,
-        validate_desc=validate_desc, prepare_desc=prepare_desc, predict_desc=predict_desc)
+        dataset,
+        generator,
+        smiles_column=smiles_column,
+        adduct_type_column=adduct_type_column,
+        collision_energy_column=collision_energy_column,
+        precursor_mz_column=precursor_mz_column,
+        instrument_column=instrument_column,
+        include_formula_annotation=include_formula_annotation,
+        num_workers=num_workers,
+        chunk_size=chunk_size,
+        keep_temp=keep_temp,
+        temp_dir=temp_dir,
+        validate_desc=validate_desc,
+        prepare_desc=prepare_desc,
+        predict_desc=predict_desc,
+    )
     timestamp = datetime.now(timezone.utc).isoformat()
     enriched_metadata = prediction_metadata(
-        predicted.metadata, db=db, model_path=model_path, spec_id_column=spec_id_column,
-        smiles_column=smiles_column, adduct_type_column=adduct_type_column,
-        collision_energy_column=collision_energy_column, precursor_mz_column=precursor_mz_column,
-        instrument_column=instrument_column, timestamp=timestamp)
+        predicted.metadata,
+        db=db,
+        model_path=model_path,
+        spec_id_column=spec_id_column,
+        smiles_column=smiles_column,
+        adduct_type_column=adduct_type_column,
+        collision_energy_column=collision_energy_column,
+        precursor_mz_column=precursor_mz_column,
+        instrument_column=instrument_column,
+        timestamp=timestamp,
+    )
     tags = list(dict.fromkeys([*predicted.tags, "predicted", "FREDIS"]))
     attributes = {
         **predicted.attributes,
@@ -408,9 +494,11 @@ def predict_msdataset(
         "prediction_timestamp": timestamp,
     }
     enriched = MSDataset(
-        spectrum_metadata=enriched_metadata, peak_series=predicted.peaks,
+        spectrum_metadata=enriched_metadata,
+        peak_series=predicted.peaks,
         description="In silico MS/MS spectra generated by FREDIS",
-        attributes=attributes, tags=tags,
+        attributes=attributes,
+        tags=tags,
     )
     validate_prediction_output(enriched)
     return enriched, failures
@@ -442,7 +530,6 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "instrumentColumn": args.instrument_column or "",
         "branchPathThreshold": args.branch_path_threshold,
         "maxFragmentNodes": args.max_fragment_nodes,
-        "ionPredictionThreshold": args.ion_prediction_threshold,
         "peakIntensityThreshold": args.peak_intensity_threshold,
     }
 
@@ -468,8 +555,13 @@ def main() -> None:
         existing = [path for path in (output_path, similarity_path) if path.exists()]
         if existing:
             raise FileExistsError(f"Output already exists; use --overwrite: {existing}")
-    if args.input is not None and Path(args.input).resolve() in (output_path, similarity_path):
-        raise ValueError("The input and final output MSDataset must be different paths.")
+    if args.input is not None and Path(args.input).resolve() in (
+        output_path,
+        similarity_path,
+    ):
+        raise ValueError(
+            "The input and final output MSDataset must be different paths."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     # Written immediately, not only on success: settings should be visible
@@ -477,7 +569,8 @@ def main() -> None:
     # or is interrupted, just like training/data-prep's own .pft.
     pft_path = output_dir / "prediction.pft"
     pft_path.write_text(
-        json.dumps(prediction_run_settings(args), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(prediction_run_settings(args), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
     print(f"saved configuration: {pft_path}")
 
@@ -493,7 +586,9 @@ def main() -> None:
     )
     print("[2/6] Validating input and selecting SMILES")
     if args.input is None and args.spec_id_column not in dataset.columns:
-        dataset[args.spec_id_column] = [f"direct-{index + 1:09d}" for index in range(len(dataset))]
+        dataset[args.spec_id_column] = [
+            f"direct-{index + 1:09d}" for index in range(len(dataset))
+        ]
     validate_prediction_input(
         dataset,
         smiles_column=args.smiles_column,
@@ -528,10 +623,18 @@ def main() -> None:
         strict=args.strict,
     )
 
-    generator.max_samples=args.max_samples
-    overrides={key:getattr(args,key) for key in GenerationSettings.__dataclass_fields__ if getattr(args,key) is not None}
+    generator.max_samples = args.max_samples
+    overrides = {
+        key: getattr(args, key)
+        for key in GenerationSettings.__dataclass_fields__
+        if getattr(args, key) is not None
+    }
     if overrides:
-        generator.set_generation(GenerationSettings.from_dict({**generator.generation.to_dict(),**overrides}))
+        generator.set_generation(
+            GenerationSettings.from_dict(
+                {**generator.generation.to_dict(), **overrides}
+            )
+        )
     print(f"generation: {generator.generation.to_dict()}")
     # Under --output-dir, not the system temp directory, so it's easy to
     # find while a run is in progress and (with --keep-temp) afterward too.
@@ -553,9 +656,9 @@ def main() -> None:
         chunk_size=args.chunk_size,
         keep_temp=args.keep_temp,
         temp_dir=str(prepare_temp_dir),
-        validate_desc='[4/6] Validating records',
-        prepare_desc='[5/6] Preparing molecules',
-        predict_desc='[6/6] Predicting spectra',
+        validate_desc="[4/6] Validating records",
+        prepare_desc="[5/6] Preparing molecules",
+        predict_desc="[6/6] Predicting spectra",
     )
     if not args.keep_temp:
         try:
@@ -569,10 +672,12 @@ def main() -> None:
     # its own copy of the matched peak data, so it stands on its own without
     # needing the .msds files it was built from kept alongside it.
     similarity = calculate_similarity(
-        predicted, dataset,
+        predicted,
+        dataset,
         source1=str(output_path),
         source2=str(Path(args.input).resolve()) if args.input else "direct arguments",
-        key1="SourceSpecID", key2=args.spec_id_column,
+        key1="SourceSpecID",
+        key2=args.spec_id_column,
         include_matched_data=True,
     )
     # SimilarityDataset.save() already writes via a same-directory tempfile

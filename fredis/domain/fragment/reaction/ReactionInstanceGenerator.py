@@ -1,4 +1,5 @@
 """Inspect primitive reaction templates and match only the original Source."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,12 +32,22 @@ def _reaction_templates(pattern: ReactionPattern) -> tuple[_ReactionTemplate, ..
     """
     query = pattern.reactant_query
     role_by_map = {atom.GetAtomMapNum(): atom.GetIdx() for atom in query.GetAtoms()}
-    query_edges = tuple(sorted(tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
-                               for b in query.GetBonds()))
+    query_edges = tuple(
+        sorted(
+            tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
+            for b in query.GetBonds()
+        )
+    )
     templates: list[_ReactionTemplate] = []
     for rule in pattern.reaction_rules:
-        product_data: list[tuple[frozenset[int], tuple[tuple[int, int, Chem.BondType], ...],
-                                 tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]] = []
+        product_data: list[
+            tuple[
+                frozenset[int],
+                tuple[tuple[int, int, Chem.BondType], ...],
+                tuple[tuple[int, int], ...],
+                tuple[tuple[int, int], ...],
+            ]
+        ] = []
         all_edges: set[tuple[int, int]] = set()
         all_roles: set[int] = set()
         unsupported = False
@@ -69,15 +80,32 @@ def _reaction_templates(pattern: ReactionPattern) -> tuple[_ReactionTemplate, ..
                     break
                 bonds.append((*edge, bond.GetBondType()))
                 all_edges.add(edge)
-            product_data.append((frozenset(roles), tuple(sorted(bonds)), tuple(sorted(charges)),
-                                 tuple(sorted(elements))))
+            product_data.append(
+                (
+                    frozenset(roles),
+                    tuple(sorted(bonds)),
+                    tuple(sorted(charges)),
+                    tuple(sorted(elements)),
+                )
+            )
         if unsupported:
             continue
         cuts = tuple(edge for edge in query_edges if edge not in all_edges)
         for product_id, (anchors, bonds, charges, elements) in enumerate(product_data):
             if anchors:
-                templates.append(_ReactionTemplate(pattern.pattern_id, rule.id, product_id,
-                                                 query_edges, cuts, anchors, bonds, charges, elements))
+                templates.append(
+                    _ReactionTemplate(
+                        pattern.pattern_id,
+                        rule.id,
+                        product_id,
+                        query_edges,
+                        cuts,
+                        anchors,
+                        bonds,
+                        charges,
+                        elements,
+                    )
+                )
     return tuple(templates)
 
 
@@ -93,8 +121,11 @@ def _retained_component(
         if atom in reached:
             continue
         reached.add(atom)
-        pending.extend(other for other in adjacency[atom]
-                       if other not in reached and bond_key(atom, other) not in cuts)
+        pending.extend(
+            other
+            for other in adjacency[atom]
+            if other not in reached and bond_key(atom, other) not in cuts
+        )
     return frozenset(reached) if anchors <= reached else None
 
 
@@ -112,21 +143,31 @@ def create_reaction_instances(
     mol = mapped_source(source_compound)
     maps = tuple(atom.GetAtomMapNum() for atom in mol.GetAtoms())
     universe = frozenset(maps)
-    source_orders = {bond_key(b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum()):
-                     b.GetBondType() for b in mol.GetBonds()}
-    adjacency = {atom.GetAtomMapNum(): frozenset(n.GetAtomMapNum() for n in atom.GetNeighbors())
-                 for atom in mol.GetAtoms()}
+    source_orders = {
+        bond_key(
+            b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum()
+        ): b.GetBondType()
+        for b in mol.GetBonds()
+    }
+    adjacency = {
+        atom.GetAtomMapNum(): frozenset(n.GetAtomMapNum() for n in atom.GetNeighbors())
+        for atom in mol.GetAtoms()
+    }
     charges = {atom.GetAtomMapNum(): atom.GetFormalCharge() for atom in mol.GetAtoms()}
     elements = {atom.GetAtomMapNum(): atom.GetAtomicNum() for atom in mol.GetAtoms()}
     reactions: set[ReactionInstance] = set()
     for pattern in reaction_pattern_set:
         templates = _reaction_templates(pattern)
-        matches = mol.GetSubstructMatches(pattern.reactant_query, uniquify=False, maxMatches=0)
+        matches = mol.GetSubstructMatches(
+            pattern.reactant_query, uniquify=False, maxMatches=0
+        )
         for match in matches:
             roles = tuple(maps[index] for index in match)
             components: dict[frozenset[tuple[int, int]], dict[int, frozenset[int]]] = {}
             for template in templates:
-                cuts = frozenset(bond_key(roles[u], roles[v]) for u, v in template.cut_bond_roles)
+                cuts = frozenset(
+                    bond_key(roles[u], roles[v]) for u, v in template.cut_bond_roles
+                )
                 anchors = frozenset(roles[role] for role in template.product_atom_roles)
                 # Reuse connected components for all products in this reaction/match.
                 cached = components.setdefault(cuts, {})
@@ -139,17 +180,30 @@ def create_reaction_instances(
                         cached[atom] = retained
                 if not anchors <= retained:
                     continue
-                if any(charges[roles[role]] != charge for role, charge in template.product_charges):
+                if any(
+                    charges[roles[role]] != charge
+                    for role, charge in template.product_charges
+                ):
                     continue
-                if any(elements[roles[role]] != number for role, number in template.product_elements):
+                if any(
+                    elements[roles[role]] != number
+                    for role, number in template.product_elements
+                ):
                     continue
                 updates: set[tuple[int, int, Chem.BondType]] = set()
                 unsupported = False
                 for u, v, order in template.product_bond_roles:
                     edge = bond_key(roles[u], roles[v])
-                    if order == Chem.BondType.UNSPECIFIED or source_orders[edge] == order:
+                    if (
+                        order == Chem.BondType.UNSPECIFIED
+                        or source_orders[edge] == order
+                    ):
                         continue
-                    if order not in (Chem.BondType.SINGLE, Chem.BondType.DOUBLE, Chem.BondType.TRIPLE):
+                    if order not in (
+                        Chem.BondType.SINGLE,
+                        Chem.BondType.DOUBLE,
+                        Chem.BondType.TRIPLE,
+                    ):
                         unsupported = True
                         break
                     if source_orders[edge] == Chem.BondType.AROMATIC:
@@ -159,11 +213,25 @@ def create_reaction_instances(
                 if unsupported:
                     continue
                 if not retained or (retained == universe and not cuts and not updates):
-                    continue # Deterministic empty/true-no-op hard pruning.
-                matched = frozenset(bond_key(roles[u], roles[v]) for u, v in template.query_bond_roles)
-                changed = frozenset(edge for edge in source_orders if not set(edge) <= retained)
-                reactions.add(ReactionInstance(template.reaction_pattern_id, template.reaction_rule_id,
-                                           roles, retained, universe - retained, matched, cuts,
-                                           frozenset(updates), changed,
-                                           product_molecule_id=template.product_molecule_id))
+                    continue  # Deterministic empty/true-no-op hard pruning.
+                matched = frozenset(
+                    bond_key(roles[u], roles[v]) for u, v in template.query_bond_roles
+                )
+                changed = frozenset(
+                    edge for edge in source_orders if not set(edge) <= retained
+                )
+                reactions.add(
+                    ReactionInstance(
+                        template.reaction_pattern_id,
+                        template.reaction_rule_id,
+                        roles,
+                        retained,
+                        universe - retained,
+                        matched,
+                        cuts,
+                        frozenset(updates),
+                        changed,
+                        product_molecule_id=template.product_molecule_id,
+                    )
+                )
     return tuple(sorted(reactions, key=lambda reaction: reaction.key))

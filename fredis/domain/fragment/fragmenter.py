@@ -24,17 +24,22 @@ class Fragmenter:
     precursor_candidate_max_reaction_count: int = 0
 
     def __post_init__(self) -> None:
-        if type(self.precursor_candidate_max_reaction_count) is not int or self.precursor_candidate_max_reaction_count < 0:
-            raise ValueError("precursor_candidate_max_reaction_count must be a non-negative integer")
+        if (
+            type(self.precursor_candidate_max_reaction_count) is not int
+            or self.precursor_candidate_max_reaction_count < 0
+        ):
+            raise ValueError(
+                "precursor_candidate_max_reaction_count must be a non-negative integer"
+            )
 
     @property
     def adduct_types(self) -> Tuple[Adduct, ...]:
         return self.adduct_rule_set.adduct_types
-    
+
     @property
     def adduct_rule_set(self) -> FragmentIonAdductRuleSet:
         return self.fragment_ion_tree_builder.fragment_ion_adduct_rule_set
-    
+
     @property
     def tree_max_reaction_count(self) -> int:
         return self.fragment_ion_tree_builder.max_reaction_count
@@ -42,7 +47,7 @@ class Fragmenter:
     @property
     def reaction_pattern_set(self) -> ReactionPatternSet:
         return self.fragment_ion_tree_builder.reaction_pattern_set
-    
+
     @property
     def name(self) -> str:
         return self.fragment_ion_tree_builder.name
@@ -78,7 +83,7 @@ class Fragmenter:
             addable_pattern_ids=addable_pattern_ids,
             print_info=print_info,
         )
-    
+
     def build_fragment_ion_tree(
         self,
         compound: Compound,
@@ -117,7 +122,10 @@ class Fragmenter:
         reactions is returned. An empty result means no precursor is reachable.
         """
         return self._resolve_precursor_reactions(
-            fragment_ion_tree, precursor_type, self._reaction_sequences_by_node(fragment_ion_tree))
+            fragment_ion_tree,
+            precursor_type,
+            self._reaction_sequences_by_node(fragment_ion_tree),
+        )
 
     def annotate_peaks(
         self,
@@ -126,7 +134,9 @@ class Fragmenter:
         peaks_mz: Iterable[float],
     ) -> Tuple[Tuple[ReactionAnnotation, ...], ...]:
         """Annotate each peak of one spectrum with reaction combinations."""
-        return self.annotate_peak_sets(fragment_ion_tree, ((precursor_type, peaks_mz),))[0]
+        return self.annotate_peak_sets(
+            fragment_ion_tree, ((precursor_type, peaks_mz),)
+        )[0]
 
     def annotate_peak_sets(
         self,
@@ -140,26 +150,40 @@ class Fragmenter:
         reaches that node and contains a precursor reaction combination. Only
         the explanations with the fewest reactions are kept for each peak.
         """
-        peak_sets_tuple = tuple((precursor_type, tuple(peaks_mz)) for precursor_type, peaks_mz in peak_sets)
+        peak_sets_tuple = tuple(
+            (precursor_type, tuple(peaks_mz)) for precursor_type, peaks_mz in peak_sets
+        )
         sequences_by_node = self._reaction_sequences_by_node(fragment_ion_tree)
         precursors_by_type: Dict[Adduct, frozenset[PrecursorReaction]] = {}
         records_by_main_adduct: Dict[Adduct, List[int]] = defaultdict(list)
         for record_index, (precursor_type, _) in enumerate(peak_sets_tuple):
             if precursor_type not in precursors_by_type:
                 precursors_by_type[precursor_type] = self._resolve_precursor_reactions(
-                    fragment_ion_tree, precursor_type, sequences_by_node)
-            records_by_main_adduct[self._resolve_main_adduct_type(precursor_type)].append(record_index)
+                    fragment_ion_tree, precursor_type, sequences_by_node
+                )
+            records_by_main_adduct[
+                self._resolve_main_adduct_type(precursor_type)
+            ].append(record_index)
 
-        candidates: List[List[List[ReactionAnnotation]]] = [[[] for _ in peaks_mz] for _, peaks_mz in peak_sets_tuple]
-        combinations_cache: Dict[Tuple[Adduct, int], Tuple[Tuple[ReactionSequence | None, PrecursorReaction], ...]] = {}
+        candidates: List[List[List[ReactionAnnotation]]] = [
+            [[] for _ in peaks_mz] for _, peaks_mz in peak_sets_tuple
+        ]
+        combinations_cache: Dict[
+            Tuple[Adduct, int],
+            Tuple[Tuple[ReactionSequence | None, PrecursorReaction], ...],
+        ] = {}
 
         for main_adduct_type, record_indices in records_by_main_adduct.items():
             group = fragment_ion_tree.get_formula_candidate_group(main_adduct_type)
-            peak_refs = [(record_index, peak_index)
-                         for record_index in record_indices
-                         for peak_index in range(len(peak_sets_tuple[record_index][1]))]
+            peak_refs = [
+                (record_index, peak_index)
+                for record_index in record_indices
+                for peak_index in range(len(peak_sets_tuple[record_index][1]))
+            ]
             assigned_peaks = formula_utils.assign_formulas_to_peaks(
-                peaks_mz=[peak_sets_tuple[record][1][peak] for record, peak in peak_refs],
+                peaks_mz=[
+                    peak_sets_tuple[record][1][peak] for record, peak in peak_refs
+                ],
                 formula_candidates=group.formulas,
                 mass_tolerance=self.mass_tolerance,
             )
@@ -167,26 +191,44 @@ class Fragmenter:
                 precursor_type = peak_sets_tuple[record_index][0]
                 for formula_index in info["matched_formula_indices"]:
                     formula = group.formulas[formula_index]
-                    for entry in range(int(group.indptr[formula_index]), int(group.indptr[formula_index + 1])):
+                    for entry in range(
+                        int(group.indptr[formula_index]),
+                        int(group.indptr[formula_index + 1]),
+                    ):
                         node_index = int(group.node_indices[entry])
                         key = (precursor_type, node_index)
                         if key not in combinations_cache:
-                            combinations_cache[key] = self._reaction_combinations_for_node(
-                                sequences_by_node.get(node_index, ()), precursors_by_type[precursor_type])
+                            combinations_cache[key] = (
+                                self._reaction_combinations_for_node(
+                                    sequences_by_node.get(node_index, ()),
+                                    precursors_by_type[precursor_type],
+                                )
+                            )
                         for sequence, precursor in combinations_cache[key]:
-                            candidates[record_index][peak_index].append(ReactionAnnotation(
-                                node_index=node_index,
-                                smiles=fragment_ion_tree.get_node(node_index).smiles,
-                                reaction_sequence=sequence,
-                                precursor=precursor,
-                                adduct=group.candidate_adducts[int(group.candidate_adduct_indices[entry])],
-                                fragment_ion_adduct=group.fragment_ion_adducts[int(group.fragment_ion_adduct_positions[entry])],
-                                hydrogen_shift=int(group.hydrogen_shifts[entry]),
-                                formula=formula,
-                            ))
+                            candidates[record_index][peak_index].append(
+                                ReactionAnnotation(
+                                    node_index=node_index,
+                                    smiles=fragment_ion_tree.get_node(
+                                        node_index
+                                    ).smiles,
+                                    reaction_sequence=sequence,
+                                    precursor=precursor,
+                                    adduct=group.candidate_adducts[
+                                        int(group.candidate_adduct_indices[entry])
+                                    ],
+                                    fragment_ion_adduct=group.fragment_ion_adducts[
+                                        int(group.fragment_ion_adduct_positions[entry])
+                                    ],
+                                    hydrogen_shift=int(group.hydrogen_shifts[entry]),
+                                    formula=formula,
+                                )
+                            )
 
         return tuple(
-            tuple(self._fewest_reactions(peak_candidates) for peak_candidates in record_candidates)
+            tuple(
+                self._fewest_reactions(peak_candidates)
+                for peak_candidates in record_candidates
+            )
             for record_candidates in candidates
         )
 
@@ -247,7 +289,9 @@ class Fragmenter:
             edge = fragment_ion_tree.get_edge(edge_index)
             for transition in edge.transitions:
                 sequences[edge.target_index].add(transition.reaction_sequence)
-        return {node_index: frozenset(values) for node_index, values in sequences.items()}
+        return {
+            node_index: frozenset(values) for node_index, values in sequences.items()
+        }
 
     def _resolve_precursor_reactions(
         self,
@@ -257,11 +301,14 @@ class Fragmenter:
     ) -> frozenset[PrecursorReaction]:
         main_adduct_type = self._resolve_main_adduct_type(precursor_type)
         precursor_formula = precursor_type.apply_to_formula(
-            fragment_ion_tree.fragment_compounds[0].formula).normalized
+            fragment_ion_tree.fragment_compounds[0].formula
+        ).normalized
         precursors: Set[PrecursorReaction] = set()
         for node_index, compound in enumerate(fragment_ion_tree.fragment_compounds):
             if not any(
-                main_adduct_type.apply_to_formula(shift.apply_to_formula(compound.formula).normalized).normalized
+                main_adduct_type.apply_to_formula(
+                    shift.apply_to_formula(compound.formula).normalized
+                ).normalized
                 == precursor_formula
                 for shift in fragment_ion_tree.hydrogen_shift_adducts
             ):
@@ -269,8 +316,15 @@ class Fragmenter:
             for sequence in sequences_by_node.get(node_index, ()):
                 if (node_index == 0) != (sequence is None):
                     continue
-                if reaction_count(sequence) <= self.precursor_candidate_max_reaction_count:
-                    precursors.add(PrecursorReaction(node_index=node_index, reaction_sequence=sequence))
+                if (
+                    reaction_count(sequence)
+                    <= self.precursor_candidate_max_reaction_count
+                ):
+                    precursors.add(
+                        PrecursorReaction(
+                            node_index=node_index, reaction_sequence=sequence
+                        )
+                    )
         return frozenset(precursors)
 
     def _reaction_combinations_for_node(
@@ -289,18 +343,39 @@ class Fragmenter:
         )
 
     @staticmethod
-    def _fewest_reactions(annotations: List[ReactionAnnotation]) -> Tuple[ReactionAnnotation, ...]:
+    def _fewest_reactions(
+        annotations: List[ReactionAnnotation],
+    ) -> Tuple[ReactionAnnotation, ...]:
         if not annotations:
             return ()
         fewest = min(annotation.reaction_count for annotation in annotations)
-        kept = dict.fromkeys(annotation for annotation in annotations if annotation.reaction_count == fewest)
-        return tuple(sorted(kept, key=lambda annotation: (
-            annotation.node_index,
-            annotation.reaction_sequence.key if annotation.reaction_sequence is not None else (),
-            annotation.precursor.node_index,
-            annotation.precursor.reaction_sequence.key if annotation.precursor.reaction_sequence is not None else (),
-            str(annotation.adduct), str(annotation.fragment_ion_adduct), annotation.hydrogen_shift,
-        )))
+        kept = dict.fromkeys(
+            annotation
+            for annotation in annotations
+            if annotation.reaction_count == fewest
+        )
+        return tuple(
+            sorted(
+                kept,
+                key=lambda annotation: (
+                    annotation.node_index,
+                    (
+                        annotation.reaction_sequence.key
+                        if annotation.reaction_sequence is not None
+                        else ()
+                    ),
+                    annotation.precursor.node_index,
+                    (
+                        annotation.precursor.reaction_sequence.key
+                        if annotation.precursor.reaction_sequence is not None
+                        else ()
+                    ),
+                    str(annotation.adduct),
+                    str(annotation.fragment_ion_adduct),
+                    annotation.hydrogen_shift,
+                ),
+            )
+        )
 
     def to_dict(self) -> dict[str, Any]:
         builder_dict = self.fragment_ion_tree_builder.to_dict()
@@ -319,11 +394,11 @@ class Fragmenter:
         builder_dict = dict(data["fragment_ion_tree_builder"])
 
         return cls(
-            fragment_ion_tree_builder=FragmentIonTreeBuilder.from_dict(
-                builder_dict
-            ),
+            fragment_ion_tree_builder=FragmentIonTreeBuilder.from_dict(builder_dict),
             mass_tolerance=parse_mass_tolerance(data["mass_tolerance"]),
-            precursor_candidate_max_reaction_count=data.get("precursor_candidate_max_reaction_count", 0),
+            precursor_candidate_max_reaction_count=data.get(
+                "precursor_candidate_max_reaction_count", 0
+            ),
         )
 
     def to_json(self, path: str | Path) -> None:

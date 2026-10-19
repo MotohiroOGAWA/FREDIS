@@ -25,4 +25,6 @@ class CreateFragmentTreeDataCommand(CLICommand):
             parser._add_action(action)
 
     def run(self, args: argparse.Namespace) -> None:
-        run_create_training_data(namespace_argv(build_create_training_data_arg_parser(), args))
+        run_create_training_data(
+            namespace_argv(build_create_training_data_arg_parser(), args)
+        )

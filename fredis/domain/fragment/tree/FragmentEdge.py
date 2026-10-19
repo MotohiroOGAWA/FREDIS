@@ -38,7 +38,9 @@ class FragmentEdge:
     def __post_init__(self) -> None:
         object.__setattr__(self, "transitions", tuple(self.transitions))
         if not all(isinstance(t, ReactionSequenceTransition) for t in self.transitions):
-            raise TypeError("transitions must contain ReactionSequenceTransition instances")
+            raise TypeError(
+                "transitions must contain ReactionSequenceTransition instances"
+            )
 
     def with_transition(self, transition: ReactionSequenceTransition) -> FragmentEdge:
         if not isinstance(transition, ReactionSequenceTransition):

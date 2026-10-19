@@ -251,7 +251,7 @@ def test_distribution_helper_handles_empty_and_count_metrics():
 # -- A/B/C layout -------------------------------------------------------------------------------
 def test_result_a_is_hdf5_with_tree_tables_and_indexes(analysis):
     with h5py.File(analysis["path"], "r") as handle:
-        assert handle.attrs["schema_version"] == 3 and handle.attrs["analysis_status"] == "completed"
+        assert handle.attrs["schema_version"] == 1 and handle.attrs["analysis_status"] == "completed"
         for name in ("pattern_sets", "patterns", "conditions", "nodes", "compound_node_summary", "node_summary",
                      "node_distribution", "sample_node_summary", "compound_condition"):
             assert name in handle

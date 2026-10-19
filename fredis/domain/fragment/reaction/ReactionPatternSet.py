@@ -7,6 +7,7 @@ from fredis.libs.mmkit.mmkit import Compound
 
 from ._ReactionPattern import _ReactionPattern, _ReactionResult, ProductRule
 
+
 @dataclass(frozen=True)
 class ReactionPattern(_ReactionPattern):
     """Public reaction pattern with stable ID."""
@@ -46,18 +47,15 @@ class ReactionPattern(_ReactionPattern):
             pattern=self,
             base=result,
         )
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "pattern_id": self.pattern_id,
             "name": self.name,
             "reactant_smarts": self.reactant_smarts,
-            "products": [
-                rule.source_rule.to_dict()
-                for rule in self.reaction_rules
-            ],
+            "products": [rule.source_rule.to_dict() for rule in self.reaction_rules],
         }
-    
+
     @classmethod
     def from_dict(
         cls,
@@ -71,11 +69,9 @@ class ReactionPattern(_ReactionPattern):
                 products=tuple(
                     ProductRule.from_dict(product_data)
                     for product_data in data["products"]
-                )
-
-            )
+                ),
+            ),
         )
-    
 
     def copy(self) -> ReactionPattern:
         """Return a copy of this pattern."""
@@ -83,6 +79,7 @@ class ReactionPattern(_ReactionPattern):
             pattern_id=self.pattern_id,
             base=super().copy(),
         )
+
 
 @dataclass(frozen=True)
 class ReactionResult(_ReactionResult):
@@ -96,7 +93,7 @@ class ReactionResult(_ReactionResult):
 
         if self.pattern_id < 0:
             raise ValueError("pattern_id must be non-negative")
-        
+
         if not isinstance(self.pattern, ReactionPattern):
             raise TypeError(
                 "pattern must be a ReactionPattern. "
@@ -116,7 +113,7 @@ class ReactionResult(_ReactionResult):
             reactant_compound=base.reactant_compound,
             products=base.products,
         )
-    
+
     def copy(self) -> ReactionResult:
         """Return a copy of this result."""
         return ReactionResult.from_base(
@@ -124,6 +121,7 @@ class ReactionResult(_ReactionResult):
             pattern=self.pattern,
             base=super().copy(),
         )
+
 
 @dataclass(frozen=True)
 class ReactionPatternSet:
@@ -177,10 +175,7 @@ class ReactionPatternSet:
                 pattern,
             )
 
-        sorted_patterns = tuple(
-            unique_patterns[key]
-            for key in sorted(unique_patterns)
-        )
+        sorted_patterns = tuple(unique_patterns[key] for key in sorted(unique_patterns))
 
         public_patterns = tuple(
             ReactionPattern.from_base(
@@ -214,27 +209,18 @@ class ReactionPatternSet:
 
     @property
     def _pattern_by_id(self) -> dict[int, ReactionPattern]:
-        return {
-            pattern.pattern_id: pattern
-            for pattern in self.patterns
-        }
+        return {pattern.pattern_id: pattern for pattern in self.patterns}
 
     @property
     def _pattern_id_by_identity(self) -> dict[tuple[str, tuple[str, ...]], int]:
-        return {
-            pattern.key: pattern.pattern_id
-            for pattern in self.patterns
-        }
+        return {pattern.key: pattern.pattern_id for pattern in self.patterns}
 
     def identity(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Return the identity of this pattern set.
 
         The set name is intentionally not included.
         """
-        return tuple(
-            pattern.key
-            for pattern in self.patterns
-        )
+        return tuple(pattern.key for pattern in self.patterns)
 
     def get_pattern(
         self,
@@ -293,10 +279,7 @@ class ReactionPatternSet:
         """
         return {
             "name": self.name,
-            "patterns": [
-                pattern.to_dict()
-                for pattern in self.patterns
-            ],
+            "patterns": [pattern.to_dict() for pattern in self.patterns],
         }
 
     @classmethod
@@ -306,7 +289,11 @@ class ReactionPatternSet:
     ) -> ReactionPatternSet:
         """Deserialize a pattern set from a dictionary."""
         patterns = tuple(
-            ReactionPattern.from_dict(pattern_data) if ("pattern_id" in pattern_data) else _ReactionPattern.from_dict(pattern_data)
+            (
+                ReactionPattern.from_dict(pattern_data)
+                if ("pattern_id" in pattern_data)
+                else _ReactionPattern.from_dict(pattern_data)
+            )
             for pattern_data in data["patterns"]
         )
 
@@ -320,7 +307,7 @@ class ReactionPatternSet:
                 name=data.get("name", ""),
                 patterns=patterns,
             )
-    
+
     def copy(self) -> ReactionPatternSet:
         """Return a copy of this pattern set."""
         return ReactionPatternSet(

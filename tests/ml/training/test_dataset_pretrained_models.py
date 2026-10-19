@@ -45,7 +45,7 @@ def test_dataset_moves_and_trains_without_original_models(checkpoints,tmp_path,s
         (directory/'reaction_statistics.json').write_text(json.dumps({'chemistry_config':split}))
     moved=tmp_path/'relocated';root.rename(moved)
     source.unlink();single.unlink()
-    inherited=inherit_model_config(params,moved/'train_structures',moved/'validation_structures',prepared_max_roles=None)
+    inherited=inherit_model_config(params,moved/'train_structures',moved/'validation_structures')
     for item in inherited['fine_tuning']['pattern_imports']:
         assert Path(item['path']).is_relative_to(moved)
     generator=create_spectrum_generator(inherited)
