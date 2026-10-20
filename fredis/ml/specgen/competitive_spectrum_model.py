@@ -7,12 +7,31 @@ No tree-wide attention or independently regressed intensity is used.
 
 from __future__ import annotations
 from dataclasses import replace
+from functools import lru_cache
 import torch
 from torch import nn
 from .components.condition.condition_linear import ConditionTransitionHead
 from ..common.torch_utils.segment_ops import segment_softmax
 from .fragment_spectrum_model import SpectrumModelOutput, SpectrumLossSettings
 from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
+from fredis.libs.mmkit.mmkit import Adduct
+
+
+@lru_cache(maxsize=256)
+def _adduct_without_hydrogen(adduct_type):
+    """Match hydrogen-shift variants while preserving charge and other elements."""
+    adduct = Adduct.parse(adduct_type)
+    return (
+        adduct.n_molecules,
+        adduct.charge,
+        tuple(
+            sorted(
+                (element, count)
+                for element, count in adduct.element_diff.items()
+                if element != "H" and count
+            )
+        ),
+    )
 
 
 def propagate_probability(initial, source, target, probability, steps):
@@ -189,7 +208,7 @@ class CompetitiveSpectrumModel(nn.Module):
 
             data = annotate_ion_conditions(data, self.formula_tensorizer)
         formulas = data.physical_candidate_formula_tensor
-        normalized, loss, cross_entropy, cosine = self._spectrum_loss(
+        normalized, loss, loss_metrics = self._spectrum_loss(
             data,
             final_probability,
             candidate_sample_index,
@@ -199,8 +218,7 @@ class CompetitiveSpectrumModel(nn.Module):
         )
         metrics = {
             "intensity_loss": loss,
-            "transition_cross_entropy": cross_entropy,
-            "full_spectrum_cosine": cosine,
+            **loss_metrics,
             "num_ion_transitions": final_probability.new_tensor(
                 float(reaction_source_index.numel())
             ),
@@ -479,47 +497,92 @@ class CompetitiveSpectrumModel(nn.Module):
             include_self=True,
         )
         normalized = final_probability / maxima[candidate_sample_index].clamp_min(1e-12)
-        loss = final_probability.sum() * 0
-        cross_entropy = loss
-        cosine = loss
-        if data.target_intensity is not None:
-            target_peak = final_probability.new_zeros(peak_count).scatter_reduce_(
-                0,
-                peak_group_index,
-                data.target_intensity.clamp_min(0),
-                reduce="amax",
-                include_self=True,
+        zero = final_probability.sum() * 0
+        metrics = {
+            "spectrum_loss_with_precursor": zero,
+            "spectrum_loss_without_precursor": zero,
+            "transition_cross_entropy": zero,
+            "full_spectrum_cosine": zero,
+            "transition_cross_entropy_without_precursor": zero,
+            "spectrum_cosine_without_precursor": zero,
+        }
+        if data.target_intensity is None:
+            return normalized, zero, metrics
+        target_peak = final_probability.new_zeros(peak_count).scatter_reduce_(
+            0, peak_group_index, data.target_intensity.clamp_min(0),
+            reduce="amax", include_self=True,
+        )
+        precursor_peak = torch.zeros_like(valid_peak)
+        # Identify Source conditions differing from the declared precursor only
+        # by hydrogen count, then exclude their entire formula groups.
+        roots = {}
+        groups = data.decoded.node_sample_index.tolist()
+        for node, group in enumerate(groups):
+            roots.setdefault(group, node)
+        candidate_nodes = data.physical_candidate_node_index.tolist()
+        candidate_samples = candidate_sample_index.tolist()
+        precursor_signatures = [
+            _adduct_without_hydrogen(adduct) for adduct in data.precursor_adducts
+        ]
+        precursor_candidate = torch.tensor(
+            [
+                node == roots[groups[node]]
+                and _adduct_without_hydrogen(adduct) == precursor_signatures[sample]
+                for node, sample, adduct in zip(
+                    candidate_nodes, candidate_samples, data.physical_candidate_adduct
+                )
+            ],
+            dtype=torch.bool,
+            device=formulas.device,
+        )
+        precursor_peak.scatter_reduce_(
+            0, peak_group_index, precursor_candidate, reduce="amax", include_self=True
+        )
+
+        def objective(probability, target):
+            target_total = probability.new_zeros(sample_count).scatter_add_(
+                0, peak_sample, target
             )
-            target_total = final_probability.new_zeros(sample_count).scatter_add_(
-                0, peak_sample, target_peak
+            observed = target_total > 0
+            if not bool(observed.any()):
+                return zero, zero, zero
+            weights = target / target_total[peak_sample].clamp_min(1e-12)
+            cross_entropy = -(weights * probability.clamp_min(1e-12).log()).sum()
+            cross_entropy = cross_entropy / observed.sum()
+            dot = probability.new_zeros(sample_count).scatter_add_(
+                0, peak_sample, probability * target
             )
-            has_observed_peaks = target_total > 0
-            weights = target_peak / target_total[peak_sample].clamp_min(1e-12)
-            cross_entropy = -(
-                weights * peak_probability.clamp_min(1e-12).log()
-            ).sum() / has_observed_peaks.sum().clamp_min(1)
-            dot = final_probability.new_zeros(sample_count).scatter_add_(
-                0, peak_sample, peak_probability * target_peak
+            pred_norm = probability.new_zeros(sample_count).scatter_add_(
+                0, peak_sample, probability.square()
             )
-            prediction_squared_norm = final_probability.new_zeros(
-                sample_count
-            ).scatter_add_(0, peak_sample, peak_probability.square())
-            target_squared_norm = final_probability.new_zeros(
-                sample_count
-            ).scatter_add_(0, peak_sample, target_peak.square())
+            target_norm = probability.new_zeros(sample_count).scatter_add_(
+                0, peak_sample, target.square()
+            )
             cosine = (
-                (
-                    dot
-                    / (prediction_squared_norm * target_squared_norm)
-                    .sqrt()
-                    .clamp_min(1e-12)
-                )[has_observed_peaks].mean()
-                if bool(has_observed_peaks.any())
-                else loss
-            )
+                dot / (pred_norm * target_norm).clamp_min(1e-24).sqrt()
+            )[observed].mean()
             loss = settings.intensity_loss_weight * (
-                cross_entropy
-                + settings.cosine_loss_weight
-                * ((1 - cosine) if bool(has_observed_peaks.any()) else cosine)
+                cross_entropy + settings.cosine_loss_weight * (1 - cosine)
             )
-        return normalized, loss, cross_entropy, cosine
+            return loss, cross_entropy, cosine
+
+        full_loss, cross_entropy, cosine = objective(peak_probability, target_peak)
+        fragment_probability = peak_probability.masked_fill(precursor_peak, 0)
+        fragment_total = fragment_probability.new_zeros(sample_count).scatter_add_(
+            0, peak_sample, fragment_probability
+        )
+        fragment_probability = (
+            fragment_probability / fragment_total[peak_sample].clamp_min(1e-12)
+        )
+        fragment_loss, fragment_cross_entropy, fragment_cosine = objective(
+            fragment_probability, target_peak.masked_fill(precursor_peak, 0)
+        )
+        metrics.update(
+            spectrum_loss_with_precursor=full_loss,
+            spectrum_loss_without_precursor=fragment_loss,
+            transition_cross_entropy=cross_entropy,
+            full_spectrum_cosine=cosine,
+            transition_cross_entropy_without_precursor=fragment_cross_entropy,
+            spectrum_cosine_without_precursor=fragment_cosine,
+        )
+        return normalized, full_loss + fragment_loss, metrics

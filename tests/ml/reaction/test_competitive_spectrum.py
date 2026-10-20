@@ -257,3 +257,82 @@ def test_annotation_mz_uses_adduct_charge(adduct_type):
     ion = Adduct.parse(adduct_type)
     formula = ion.apply_to_formula(compound.formula).normalized
     assert annotated.physical_candidate_mz.item() == pytest.approx(formula.exact_mass / abs(ion.charge))
+
+
+@pytest.mark.parametrize('precursor_adduct', ['[M+H]+', '[M+H-H2O]+'])
+def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct):
+    from types import SimpleNamespace
+    from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
+    model = create_spectrum_generator(competitive_config()).spectrum_model
+    adduct = str(Adduct.parse(precursor_adduct))
+    data = SimpleNamespace(
+        decoded=SimpleNamespace(node_sample_index=torch.tensor([0, 0, 0, 0])),
+        physical_candidate_node_index=torch.tensor([0, 1, 2, 3]),
+        physical_candidate_mz=torch.tensor([100., 50., 40., 100.]),
+        physical_candidate_adduct=(adduct,) * 4,
+        precursor_adducts=(adduct,),
+        target_intensity=torch.tensor([100., 1., 1., 100.]),
+    )
+    # The last candidate has the precursor formula at a different structural node.
+    formulas = torch.tensor([[10., 1.], [5., 1.], [4., 1.], [10., 1.]])
+    probability = torch.tensor([.45, .09, .01, .45], requires_grad=True)
+    sample = torch.zeros(4, dtype=torch.long)
+    _, loss, metrics = model._spectrum_loss(
+        data, probability, sample, formulas, 1, SpectrumLossSettings(cosine_loss_weight=0)
+    )
+    full_expected = -(100 * torch.log(torch.tensor(.9)) + torch.log(torch.tensor(.09))
+                      + torch.log(torch.tensor(.01))) / 102
+    fragment_expected = -(torch.log(torch.tensor(.9)) + torch.log(torch.tensor(.1))) / 2
+    torch.testing.assert_close(metrics['spectrum_loss_with_precursor'], full_expected)
+    torch.testing.assert_close(metrics['spectrum_loss_without_precursor'], fragment_expected)
+    torch.testing.assert_close(loss, full_expected + fragment_expected)
+    gradient, = torch.autograd.grad(metrics['spectrum_loss_without_precursor'], probability)
+    assert gradient[0] == 0 and gradient[3] == 0
+    assert gradient[1] > 0 and gradient[2] < 0
+    # Precursor amplitude cannot change the conditional fragment objective.
+    changed = torch.tensor([.05, .81, .09, .05])
+    _, _, changed_metrics = model._spectrum_loss(
+        data, changed, sample, formulas, 1, SpectrumLossSettings(cosine_loss_weight=0)
+    )
+    torch.testing.assert_close(changed_metrics['spectrum_loss_without_precursor'], fragment_expected)
+    data.target_intensity = torch.tensor([100., 0., 0., 100.])
+    _, only_precursor_loss, metrics = model._spectrum_loss(
+        data, probability, sample, formulas, 1, SpectrumLossSettings()
+    )
+    assert metrics['spectrum_loss_without_precursor'] == 0
+    only_precursor_loss.backward()
+    assert torch.isfinite(probability.grad).all()
+
+
+@pytest.mark.parametrize('precursor_adduct', ['[M+H]+', '[M+H-H2O]+'])
+def test_precursor_loss_excludes_hydrogen_shifts_but_keeps_other_ions(precursor_adduct):
+    from types import SimpleNamespace
+    from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
+    model = create_spectrum_generator(competitive_config()).spectrum_model
+    precursor = Adduct.parse(precursor_adduct)
+    plus = str(precursor.add_prefer_self(Adduct.from_dict({'H': 1})))
+    minus = str(precursor.add_prefer_self(Adduct.from_dict({'H': -1})))
+    # Na addition and water loss must not count as hydrogen-only changes.
+    sodium = str(precursor.add_prefer_self(Adduct.from_dict({'Na': 1})))
+    water_loss = str(precursor.add_prefer_self(Adduct.parse('[M-H2O]')))
+    data = SimpleNamespace(
+        decoded=SimpleNamespace(node_sample_index=torch.zeros(4, dtype=torch.long)),
+        physical_candidate_node_index=torch.tensor([0, 0, 0, 1, 2, 3, 0, 0]),
+        physical_candidate_mz=torch.ones(8),
+        physical_candidate_adduct=(str(precursor), plus, minus, plus, minus, plus, sodium, water_loss),
+        precursor_adducts=(str(precursor),),
+        target_intensity=torch.tensor([100., 50., 50., 1., 1., 50., 1., 1.]),
+    )
+    formulas = torch.tensor([[20., 1.], [21., 1.], [19., 1.], [5., 1.],
+                             [4., 1.], [21., 1.], [30., 1.], [18., 1.]])
+    probability = torch.tensor([.2, .1, .1, .1, .1, .1, .1, .2], requires_grad=True)
+    _, loss, metrics = model._spectrum_loss(
+        data, probability, torch.zeros(8, dtype=torch.long), formulas, 1,
+        SpectrumLossSettings(cosine_loss_weight=0),
+    )
+    expected = -torch.tensor([.2, .2, .2, .4]).log().mean()
+    torch.testing.assert_close(metrics['spectrum_loss_without_precursor'], expected)
+    gradient, = torch.autograd.grad(metrics['spectrum_loss_without_precursor'], probability)
+    assert (gradient[[0, 1, 2, 5]] == 0).all()
+    assert (gradient[[3, 4, 6, 7]] != 0).all()
+    assert torch.isfinite(loss)

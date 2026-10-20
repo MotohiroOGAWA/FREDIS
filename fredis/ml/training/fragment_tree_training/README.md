@@ -50,8 +50,15 @@ MIL with `negative_weight * mean(softplus(negative_logit))`.
 Every valid child `(fragment_ion_adduct, hydrogen_shift)` explanation and self
 transition competes in a parent-wise softmax. Fixed-step probability propagation
 sums all incoming paths. Final ion probabilities are grouped by output formula.
-The objective is `intensity_loss_weight * (cross_entropy + cosine_loss_weight *
-(1 - cosine))`; total loss adds `branch_weight * branch_loss`.
+Two equally weighted objectives are added: one includes the precursor peak,
+and one excludes its entire formula group and those of its hydrogen-shift
+variants. Each uses
+`intensity_loss_weight * (cross_entropy + cosine_loss_weight * (1 - cosine))`.
+The excluded term normalizes both predictions and targets by their remaining
+sample sums; samples with no positive fragment targets are omitted from its
+average. The precursor is Source with the declared precursor adduct.
+Total loss adds `branch_weight * branch_loss`. Metrics report both spectrum
+terms and their cross entropy and cosine separately.
 
 There are no independent fragment/state classification heads or classification
 loss controls. The model uses configurable CE, ion-combination and transition

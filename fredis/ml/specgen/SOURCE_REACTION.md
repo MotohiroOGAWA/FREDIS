@@ -91,7 +91,12 @@ propagation. Display normalization uses valid formula peaks only.
 Branch supervision is positive path MIL plus weighted weak-negative softplus.
 The spectrum objective sums probabilities by sample/formula, compares them with
 sum-normalized observed intensities by cross entropy, and adds a weighted cosine
-loss. Teacher intensities for equivalent candidates use maximum, not sum.
+loss. The spectrum objective sums equally weighted precursor-inclusive and
+precursor-excluded terms. The excluded term removes the formula-level peak of
+Source with the declared precursor adduct and its hydrogen-shift variants,
+then separately sum-normalizes the
+remaining prediction and target. Samples with no remaining positive targets
+contribute only the inclusive term. Teacher intensities for equivalent candidates use maximum, not sum.
 The complete probability distribution, including invalid/unobserved states,
 competes for mass; there is no independent intensity or confidence classifier.
 Confidence is one in the viewer interface.

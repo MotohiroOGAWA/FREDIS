@@ -627,7 +627,8 @@ w_bF = max(y_bF,0) / sum_F max(y_bF,0)
 L_cross_entropy = -(1/|B+|) * sum_b_in_B+ sum_F w_bF * log(max(P_bF,1e-12))
 cos_b = dot(P_b,y_b) / max(norm(P_b)*norm(y_b),1e-12)
 L_cos = 1 - mean_b_in_B+ cos_b
-L_spectrum = intensity_loss_weight * (L_cross_entropy + cosine_loss_weight * L_cos)
+L_with_precursor = intensity_loss_weight * (L_cross_entropy + cosine_loss_weight * L_cos)
+L_spectrum = L_with_precursor + L_without_precursor
 ```
 
 The loss uses final probabilities, not maximum-normalized display intensities.
@@ -642,9 +643,19 @@ state probabilities [0.2,0.3,0.1,0.4] -> P = [0.2,0.4,0.4]
 state targets       [20,100,100,0]     -> y = [20,100,0]
 w = [1/6,5/6,0]
 L_cross_entropy ~ 1.032; cosine ~ 0.719
-L_spectrum ~ 1.032 + 0.5*(1-0.719) ~ 1.172
+L_with_precursor ~ 1.032 + 0.5*(1-0.719) ~ 1.172
 valid display intensities = [0.5,1,1]
 ```
+
+
+`L_without_precursor` uses the same cross entropy and cosine objective after
+removing all formula-level peaks of the Source with the declared precursor
+adduct and its hydrogen-shift variants. Both predictions and targets are separately normalized by their remaining
+sample sums. Samples without remaining positive targets are omitted from this
+term's average. Both terms have equal weight and share the existing intensity
+and cosine weights. Hydrogen-only changes preserve the adduct charge, molecule
+count, and all non-hydrogen element differences. Other Source ion conditions
+remain unless their formula matches one of these excluded peaks. Precursor exclusion affects supervision only.
 
 Code: [spectrum objective](specgen/competitive_spectrum_model.py),
 [loss settings](specgen/fragment_spectrum_model.py).
@@ -653,11 +664,12 @@ Code: [spectrum objective](specgen/competitive_spectrum_model.py),
 
 ```text
 L_total = branch_weight * (L_positive + negative_weight * L_negative)
-        + intensity_loss_weight * (L_cross_entropy + cosine_loss_weight * L_cos)
+        + L_spectrum
 ```
 
 Defaults: branch 1, negative 0.2, intensity 1, cosine 0.5. The two numerical
-examples above would give total loss about `1.109+1.172=2.281`.
+examples above cover only the precursor-inclusive term; the total also adds
+the precursor-excluded term.
 
 | Module | Branch-loss gradient | Spectrum-loss gradient |
 |---|---|---|
