@@ -1,5 +1,5 @@
 """Precompute RDKit-heavy per-compound fragmentation data for spectrum
-prediction (reactions and candidate precursor sequences), in an
+prediction (reactions, pairwise relations and candidate precursor sequences), in an
 isolated process. RDKit does not parallelize well across Python threads, so
 real OS subprocess isolation is required for a speedup, not a thread pool.
 
@@ -17,11 +17,12 @@ import pickle
 from pathlib import Path
 
 from fredis.libs.mmkit.mmkit import Adduct, Compound
+from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
 from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
 
 
 def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
-    """Reactions and, per requested adduct, the candidate precursor
+    """Reactions, pairwise chemistry relations and, per adduct, candidate precursor
     reaction sequences -- both plain picklable dataclasses (no live RDKit Mol
     references), reused verbatim (no RDKit call) by
     SourceAnchoredFragmentSpectrumGenerator.prepare().
@@ -36,6 +37,7 @@ def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
     sample sharing this compound down with it."""
     source = Compound.from_smiles(smiles)
     reactions = fragmenter.fragment_ion_tree_builder.create_reaction_instances(source)
+    relations = ReactionRelations.from_reactions(reactions)
     precursor_tree = None
     precursor_sequences = {}
     for adduct_str in adduct_strs:
@@ -60,7 +62,7 @@ def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
             )
         except Exception:
             precursor_sequences[adduct_str] = ()
-    return {"reactions": reactions, "precursor_sequences": precursor_sequences}
+    return {"reactions": reactions, "relations": relations, "precursor_sequences": precursor_sequences}
 
 
 def prepare_chunk(groups: dict[str, list[str]], prep_config: dict) -> dict[str, dict]:

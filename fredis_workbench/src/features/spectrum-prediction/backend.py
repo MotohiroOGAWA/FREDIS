@@ -1,6 +1,7 @@
 """Backend for predicting a single MS/MS spectrum from SMILES + CE + adduct."""
 from __future__ import annotations
 
+
 import contextlib
 import json
 import sys
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, ".")
+
+from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
 
 import torch
 from rdkit import Chem
@@ -232,7 +235,10 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
     with torch.no_grad():
         result = generator.predict(
             [source], [adduct], [ce_ev],
-            precomputed={source.smiles: {"reactions": reactions}},
+            precomputed={source.smiles: {
+                "reactions": reactions,
+                "relations": ReactionRelations.from_reactions(reactions),
+            }},
         )
 
     if not result.spectra.mz.numel():

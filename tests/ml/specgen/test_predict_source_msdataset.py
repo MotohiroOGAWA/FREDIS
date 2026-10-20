@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from fredis.ml.specgen.predict_spectrum import direct_input_dataset
 from fredis.ml.specgen.source_reaction_msdataset import build_prediction_cache, predict_source_msdataset
@@ -274,6 +275,10 @@ def test_build_prediction_cache_serial_and_parallel_agree_on_keys_and_reactions(
     assert serial['not-a-smiles']['ok'] is False and parallel['not-a-smiles']['ok'] is False
     assert serial['CCCO']['ok'] is True and parallel['CCCO']['ok'] is True
     assert serial['CCCO']['reactions'] == parallel['CCCO']['reactions']
+    from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
+    for smiles in ('CCCO', 'CCN'):
+        assert serial[smiles]['relations'] == parallel[smiles]['relations']
+        assert serial[smiles]['relations'] == ReactionRelations.from_reactions(serial[smiles]['reactions'])
     assert serial['CCCO']['precursor_sequences'] == parallel['CCCO']['precursor_sequences']
 
 
@@ -297,3 +302,20 @@ def test_build_prediction_cache_keep_temp_controls_whether_task_files_survive(tm
     kept = list(kept_root.iterdir())
     assert len(kept) == 1
     assert any(p.suffix == '.pkl' for p in kept[0].iterdir())
+
+
+def test_prediction_prepare_reuses_worker_relations(monkeypatch):
+    from fredis.ml.specgen.prepare_worker import prepare_compound_cache
+    from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
+    from fredis.libs.mmkit.mmkit import Compound, Adduct
+    generator = _generator()
+    source = Compound.from_smiles('CCCO')
+    cached = prepare_compound_cache(source.smiles, ['[M+H]+'], generator.fragmenter)
+    expected = generator.prepare([source], [Adduct.parse('[M+H]+')], [20.])[0]
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Prediction must reuse relations computed by CPU preparation')
+    monkeypatch.setattr(ReactionRelations, 'from_reactions', unexpected)
+    actual = generator.prepare([source], [Adduct.parse('[M+H]+')], [20.],
+                               precomputed={source.smiles: cached})[0]
+    for name in ('reaction_conflict_index', 'reaction_invalidation_index', 'reaction_dominance_index'):
+        torch.testing.assert_close(getattr(actual, name), getattr(expected, name))

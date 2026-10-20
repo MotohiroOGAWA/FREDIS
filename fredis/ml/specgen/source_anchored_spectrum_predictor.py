@@ -220,7 +220,9 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 # Primitive reactions came from a prior, possibly subprocess-
                 # isolated preparation pass and are reused verbatim.
                 reactions = cached["reactions"]
+                relations = cached["relations"]
             else:
+                relations = None
                 reactions = (
                     self.fragmenter.fragment_ion_tree_builder.create_reaction_instances(
                         source
@@ -249,6 +251,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 prepare_source_reactions(
                     source=source,
                     reactions=reactions,
+                    relations=relations,
                     graph_builder=self.mol_encoder.graph_builder,
                     condition_features=conditions,
                     max_reaction_count=self.feature_model.max_reaction_count,

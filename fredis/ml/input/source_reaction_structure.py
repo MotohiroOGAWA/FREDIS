@@ -522,6 +522,7 @@ def prepare_source_reactions(
     sample_branch_group_index: Tensor | None = None,
     branch_group_adduct_index: Tensor | None = None,
     valid_reaction_sequences: frozenset[ReactionSequence] | None = None,
+    relations: ReactionRelations | None = None,
 ) -> SourceReactionStructure:
     """Pack source reactions, CE-aggregated teachers and all branch supervision.
 
@@ -530,7 +531,8 @@ def prepare_source_reactions(
     one union teacher DAG, so a reaction observed at any CE can never become a
     weak negative at another CE.
     """
-    relations = ReactionRelations.from_reactions(reactions)
+    if relations is None:
+        relations = ReactionRelations.from_reactions(reactions)
     reaction_index = {reaction: i for i, reaction in enumerate(reactions)}
     maps = {
         atom.GetAtomMapNum(): i

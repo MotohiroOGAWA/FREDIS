@@ -231,7 +231,7 @@ def predict_source_msdataset(
             continue
         compatible_candidates.append((i, smiles, adduct, ev))
 
-    # Phase 3: group by unique compound and precompute reactions plus
+    # Phase 3: group by unique compound and precompute reaction relations, reactions plus
     # candidate precursor sequences once per compound, optionally in
     # parallel. This is the RDKit-bound step generator.prepare() would
     # otherwise run synchronously, per compound, inside predict_batches().
@@ -285,6 +285,7 @@ def predict_source_msdataset(
         if smiles not in precomputed:
             precomputed[smiles] = {
                 "reactions": result["reactions"],
+                "relations": result["relations"],
                 "precursor_sequences": result["precursor_sequences"],
             }
         sources.append(compound_cache[smiles])
