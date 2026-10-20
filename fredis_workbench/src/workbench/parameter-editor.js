@@ -13,7 +13,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   let model=valueFor(initial);
   const descriptions={
     ce_fc_dims:'CE MLP hidden widths, e.g. 32, 16; empty means linear. Input is (CE - center) / scale.',
-    ce_center:'CE normalization center.',ce_scale:'Positive CE normalization scale. 100 maps CE 0..100 to 0..1 when center is zero.',ce_dropout:'Dropout after hidden CE MLP layers.',
+    ce_center:'CE normalization center.',ce_scale:'Positive CE normalization scale. 100 maps CE 0..100 to 0..1 when center is zero.',
     state_fc_dims:'Hidden widths of the fragment ion adduct × hydrogen shift combination MLP.',state_dropout:'Dropout in the ion combination MLP.',
     transition_fc_dims:'Hidden widths of the competing transition score MLP. Output is one logit per transition.',transition_dropout:'Dropout in the transition MLP.',propagation_steps:'Number of Markov probability propagation steps, including self transitions.',
     architecture:'Spectrum generator architecture. Source-anchored reaction models operate on primitive reactions.',
@@ -31,6 +31,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     max_unique_fragment_smiles:'Bound distinct canonical fragment SMILES. Training data retains the last exhaustively completed reaction count and discards the entire incomplete depth. The source molecule itself is not counted. -1 means unlimited.',
     max_reaction_combinations:'Stop the incomplete reaction depth as soon as its reaction search examines more than this many raw reaction combinations (every size from 1 to max_reaction_count), before RDKit runs them. -1 means unlimited.',
     hidden_dim:'Hidden representation dimension for this model component.',
+    adduct_embedding_dim:'Shared precursor-adduct identity embedding width before branch and spectrum projections.',
     branch_main_adduct_dim:'Main-adduct feature width used only by the Branch Scorer.',
     ...Object.fromEntries(molEncoderFields.map(field=>[field[5],field[6]])),
     external_feature_dim:'Width of caller-supplied graph-level features (0 disables fusion). Nonzero widths require features for every source and generated fragment.',
@@ -47,20 +48,22 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     freeze_mol_encoder:'Freeze the molecular encoder during training.',
   };
   const templates={patterns:{name:'new_pattern',reactant_smarts:'[!#1:1]-[!#1:2]',products:[{name:'product',smarts:'[!#1:1]'}]},products:{name:'product',smarts:'[!#1:1]'},adduct_rules:{name:'new_rule',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']},fragment_ion_adducts:'[M+H]+',symbols:'C'};
-  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{descriptors:[],ion_embedding_dim:32,hydrogen_shift_embedding_dim:16,state_hidden_dim:128,main_adduct_dim:128,collision_energy_dim:16,ce_fc_dims:[32],ce_dropout:0,ce_center:0,ce_scale:100,state_fc_dims:[128],state_dropout:0,transition_fc_dims:[128,64],transition_dropout:0,propagation_steps:6},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
+  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],ion_embedding_dim:32,hydrogen_shift_embedding_dim:16,state_hidden_dim:128,main_adduct_dim:128,collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,state_fc_dims:[128],state_dropout:0,transition_fc_dims:[128,64],transition_dropout:0,propagation_steps:6},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
   // Purely cosmetic sub-headings for the sections with the most fields; any
   // field not listed here (e.g. a newer option) still renders, just ungrouped.
   const fieldGroups={
     mol_encoder_params:{'Encoder Parameters':molEncoderFields.map(field=>field[5])},
     reaction_model_params:{
-      'Architecture':['hidden_dim','branch_main_adduct_dim','num_heads'],
+      'Architecture':['hidden_dim','num_heads'],
+      'Adduct Embedding':['branch_main_adduct_dim'],
       'Branch Scorer · Architecture':['state_num_layers'],
     },
     spectrum_model_params:{
       'Transition MLP':['transition_fc_dims','transition_dropout','propagation_steps'],
-      'Collision Energy MLP':['collision_energy_dim','ce_fc_dims','ce_dropout','ce_center','ce_scale'],
+      'Adduct Embedding':['adduct_embedding_dim','main_adduct_dim'],
+      'Collision Energy MLP':['collision_energy_dim','ce_fc_dims','ce_center','ce_scale'],
       'Ion combination MLP':['ion_embedding_dim','hydrogen_shift_embedding_dim','state_hidden_dim','state_fc_dims','state_dropout'],
-      'Intensity Head · Architecture':['main_adduct_dim','collision_energy_dim','descriptors'],
+      'Intensity Head · Architecture':['descriptors'],
     },
     generation_params:{
       'Fragment Tree Search':['branch_path_threshold','max_fragment_nodes'],
@@ -112,8 +115,12 @@ function createParameterEditor(container, initial, kind = "training", editReacti
           for(const [label,fields]of Object.entries(groups)){
             const present=fields.filter(field=>field in value);
             if(!present.length)continue;
-            const heading=node('div',label);heading.className='parameter-group-heading';group.append(heading);
-            for(const field of present){grouped.add(field);renderValue(value,field,group,full,excludeBasic);}
+            let target=group;
+            if(['Adduct Embedding','Collision Energy MLP'].includes(label)){
+              target=node('details');target.dataset.parameterGroup=label;
+              target.append(node('summary',label));group.append(target);
+            }else{const heading=node('div',label);heading.className='parameter-group-heading';group.append(heading);}
+            for(const field of present){grouped.add(field);renderValue(value,field,target,full,excludeBasic);}
           }
           for(const field of Object.keys(value))if(!grouped.has(field))renderValue(value,field,group,full,excludeBasic);
         }else{

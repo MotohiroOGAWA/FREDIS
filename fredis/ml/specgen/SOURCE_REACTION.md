@@ -88,7 +88,7 @@ normalization does not convert instrument units or fit dataset statistics.
 | `--ion-state-hidden-dim` | `state_hidden_dim` (output width) | `128` |
 | `--ion-state-dropout` | `state_dropout` | `0` |
 | `--ce-fc-dims` | `ce_fc_dims` | `32` |
-| `--ce-dropout` | `ce_dropout` | `0` |
+| `--adduct-embedding-dim` | `adduct_embedding_dim` | `32` |
 | `--collision-energy-feature-dim` | `collision_energy_dim` | `16` |
 | `--ce-center` | `ce_center` | `0` |
 | `--ce-scale` | `ce_scale` | `100` |
@@ -97,3 +97,7 @@ Workbench exposes these fields under Spectrum Model Params. Architecture and
 normalization are saved with the checkpoint. Candidate proposal pruning limits
 the states available to probability propagation, so coverage and predictive
 accuracy need evaluation on real datasets.
+
+Precursor adduct identity uses `adduct_embedding_dim` before separate branch and
+spectrum projections. The CE MLP has no dropout setting. In Workbench, adduct
+and CE settings are collapsed by default.

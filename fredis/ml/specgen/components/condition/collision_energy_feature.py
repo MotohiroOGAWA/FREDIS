@@ -12,7 +12,6 @@ class CollisionEnergyFeatureLayer(nn.Module):
         feature_dim: int,
         fc_dims: Tuple[int, ...] = (32,),
         *,
-        dropout: float = 0.0,
         center: float = 0.0,
         scale: float = 100.0,
     ):
@@ -28,9 +27,13 @@ class CollisionEnergyFeatureLayer(nn.Module):
             input_dim=1,
             fc_dims=fc_dims,
             output_dim=self._feature_dim,
-            dropout=dropout,
+            dropout=0.0,
         )
 
+        # CE uses a plain MLP without dropout.
+        self.proj = nn.Sequential(*(
+            layer for layer in self.proj if not isinstance(layer, nn.Dropout)
+        ))
         self._init_weights()
 
     def _init_weights(self):

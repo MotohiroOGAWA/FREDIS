@@ -20,4 +20,13 @@ assert 'reaction_neighborhood_mode' not in config['reaction_model_params']
 assert 'reaction_neighborhood_max_hop' not in config['reaction_model_params']
 for flag, (key, _, default) in MOL_ENCODER_OPTIONS.items():
     assert config['mol_encoder_params'][key] == default
+assert config['spectrum_model_params']['adduct_embedding_dim'] == 64
+assert 'ce_dropout' not in config['spectrum_model_params']
+with contextlib.redirect_stderr(io.StringIO()):
+    try:
+        parser.parse_args(base + ['--ce-dropout', '0.1'])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError('Removed CE dropout flag must be rejected')
 print('Explicit joint fragment CLI options passed.')

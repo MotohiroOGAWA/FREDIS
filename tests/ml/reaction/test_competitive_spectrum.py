@@ -12,7 +12,7 @@ from .TestReactionPipeline import config,chemistry
 
 def competitive_config():
     value=config()
-    value['spectrum_model_params'].update(ce_fc_dims=[12,8],collision_energy_dim=8,ce_scale=100.,ce_center=0.,ce_dropout=0.,
+    value['spectrum_model_params'].update(ce_fc_dims=[12,8],collision_energy_dim=8,ce_scale=100.,ce_center=0.,
         state_fc_dims=[12],state_hidden_dim=8,state_dropout=0.,transition_fc_dims=[16,8],transition_dropout=0.,propagation_steps=3)
     return value
 
@@ -117,3 +117,21 @@ def test_neutral_loss_precursor_initialization():
     generator=create_spectrum_generator(competitive_config()).eval()
     output=generator.predict([Compound.from_smiles('CCO')],[Adduct.parse('[M+H-H2O]+')],[20.])
     assert output.spectra.metrics['probability_mass_error']<1e-5
+
+
+def test_configurable_adduct_embedding_and_dropout_free_ce():
+    params = competitive_config()
+    params['spectrum_model_params']['adduct_embedding_dim'] = 7
+    generator = create_spectrum_generator(params)
+    features = generator.feature_model
+    assert features.adduct_encoder.embedding.embedding_dim == 7
+    assert features.main_adduct_projection[0].in_features == 7
+    assert features.intensity_main_adduct_projection[0].in_features == 7
+    ce = features.collision_energy_encoder
+    assert not any(isinstance(module, torch.nn.Dropout) for module in ce.modules())
+    energy = torch.tensor([10., 20.])
+    torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
+    for width in (0, -1, True):
+        params['spectrum_model_params']['adduct_embedding_dim'] = width
+        with pytest.raises(ValueError, match='adduct_embedding_dim'):
+            create_spectrum_generator(params)

@@ -92,11 +92,13 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 "New reaction patterns do not accept descriptors; select intensity descriptors instead"
             )
         self.mol_encoder = MolEncoder(**mol_params)
-        adduct_encoder = AdductEmbeddingLayer(self.adduct_type_strs, 32)
+        adduct_embedding_dim = spectrum_params.pop("adduct_embedding_dim", 32)
+        if type(adduct_embedding_dim) is not int or adduct_embedding_dim < 1:
+            raise ValueError("adduct_embedding_dim must be a positive integer")
+        adduct_encoder = AdductEmbeddingLayer(self.adduct_type_strs, adduct_embedding_dim)
         collision_energy_encoder = CollisionEnergyFeatureLayer(
             collision_energy_dim,
             fc_dims=spectrum_params.pop("ce_fc_dims", (32,)),
-            dropout=spectrum_params.pop("ce_dropout", 0.0),
             center=spectrum_params.pop("ce_center", 0.0),
             scale=spectrum_params.pop("ce_scale", 100.0),
         )
