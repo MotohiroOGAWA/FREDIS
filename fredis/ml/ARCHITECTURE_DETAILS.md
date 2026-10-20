@@ -624,10 +624,10 @@ Normalize teacher intensities by their sample sum:
 
 ```text
 w_bF = max(y_bF,0) / sum_F max(y_bF,0)
-L_CE = -(1/|B+|) * sum_b_in_B+ sum_F w_bF * log(max(P_bF,1e-12))
+L_cross_entropy = -(1/|B+|) * sum_b_in_B+ sum_F w_bF * log(max(P_bF,1e-12))
 cos_b = dot(P_b,y_b) / max(norm(P_b)*norm(y_b),1e-12)
 L_cos = 1 - mean_b_in_B+ cos_b
-L_spectrum = intensity_loss_weight * (L_CE + cosine_loss_weight * L_cos)
+L_spectrum = intensity_loss_weight * (L_cross_entropy + cosine_loss_weight * L_cos)
 ```
 
 The loss uses final probabilities, not maximum-normalized display intensities.
@@ -641,7 +641,7 @@ Example, four states with formulas `[F0,F1,F1,F2]`:
 state probabilities [0.2,0.3,0.1,0.4] -> P = [0.2,0.4,0.4]
 state targets       [20,100,100,0]     -> y = [20,100,0]
 w = [1/6,5/6,0]
-L_CE ~ 1.032; cosine ~ 0.719
+L_cross_entropy ~ 1.032; cosine ~ 0.719
 L_spectrum ~ 1.032 + 0.5*(1-0.719) ~ 1.172
 valid display intensities = [0.5,1,1]
 ```
@@ -653,7 +653,7 @@ Code: [spectrum objective](specgen/competitive_spectrum_model.py),
 
 ```text
 L_total = branch_weight * (L_positive + negative_weight * L_negative)
-        + intensity_loss_weight * (L_CE + cosine_loss_weight * L_cos)
+        + intensity_loss_weight * (L_cross_entropy + cosine_loss_weight * L_cos)
 ```
 
 Defaults: branch 1, negative 0.2, intensity 1, cosine 0.5. The two numerical
