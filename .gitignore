@@ -220,3 +220,6 @@ __marimo__/
 data/
 # Generated from the msentity submodule when packaging Workbench
 fredis_workbench/vendor/
+
+# Local personal files
+*.local.*

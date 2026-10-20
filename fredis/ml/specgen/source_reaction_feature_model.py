@@ -116,7 +116,6 @@ class SourceReactionFeatureModel(nn.Module):
                 "reaction_tree_index",
                 "reaction_source_atom_ptr",
                 "reaction_source_atom_index",
-                "reaction_static_features",
             )
         }
         kwargs["source_atom_features"] = data.source_graph.x.to(device)
@@ -142,7 +141,6 @@ class SourceReactionFeatureModel(nn.Module):
                 reaction_tree_index=data.reaction_tree_index,
                 reaction_source_atom_ptr=data.reaction_source_atom_ptr,
                 reaction_source_atom_index=data.reaction_source_atom_index,
-                reaction_static_features=data.reaction_static_features,
                 source_atom_features=data.source_graph.x,
                 source_edge_index=data.source_graph.edge_index,
                 source_edge_attr=data.source_graph.edge_attr,

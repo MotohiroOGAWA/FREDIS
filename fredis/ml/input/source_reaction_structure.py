@@ -52,7 +52,6 @@ class SourceReactionStructure:
     reaction_type: Tensor
     reaction_source_atom_ptr: Tensor
     reaction_source_atom_index: Tensor
-    reaction_static_features: Tensor
     reaction_conflict_index: Tensor
     reaction_invalidation_index: Tensor
     reaction_dominance_index: Tensor
@@ -232,8 +231,7 @@ class SourceReactionStructure:
                 "reaction_dominance_index",
             )
         }
-        state_samples, state_rows, next_rows, eos, static, tree_indices = (
-            [],
+        state_samples, state_rows, next_rows, eos, tree_indices = (
             [],
             [],
             [],
@@ -324,7 +322,6 @@ class SourceReactionStructure:
                 node_offset += len(item.spectrum_batch.decoded.compounds)
             graphs.extend(item.source_graph.to_data_list())
             reaction_types.append(item.reaction_type)
-            static.append(item.reaction_static_features)
             tree_indices.append(item.reaction_tree_index + tree_offset)
             for start, stop in zip(
                 item.reaction_source_atom_ptr[:-1], item.reaction_source_atom_ptr[1:]
@@ -456,7 +453,6 @@ class SourceReactionStructure:
             torch.cat(reaction_types),
             atom_ptr,
             atom_index,
-            torch.cat(static),
             *(torch.cat(relations[name], dim=1) for name in relations),
             torch.cat(retained, dim=1),
             torch.cat(sample_trees),
@@ -761,24 +757,6 @@ def prepare_source_reactions(
     )
 
     graph = Batch.from_data_list([raw_graph])
-    static = (
-        torch.tensor(
-            [
-                [
-                    len(a.matched_bond_maps),
-                    len(a.cut_bond_maps),
-                    len(a.changed_bond_maps),
-                    len(a.bond_updates),
-                    len(a.retained_atom_maps),
-                    len(a.discarded_atom_maps),
-                ]
-                for a in reactions
-            ],
-            dtype=torch.float32,
-        )
-        .reshape(-1, 6)
-        .log1p()
-    )
     return SourceReactionStructure(
         graph,
         graph.ptr,
@@ -792,7 +770,6 @@ def prepare_source_reactions(
         ).reshape(-1, 3),
         atom_ptr,
         atom_index,
-        static,
         coo(relations.conflict_pairs),
         coo(relations.invalidation_pairs),
         coo(relations.dominance_pairs),

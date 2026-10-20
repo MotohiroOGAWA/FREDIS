@@ -63,7 +63,7 @@ def test_training_encoder_routes_mixed_patterns_and_restores_reaction_order(node
                   reaction_tree_index=torch.zeros(3, dtype=torch.long),
                   reaction_source_atom_ptr=torch.tensor([0, 3, 5, 8]),
                   reaction_source_atom_index=torch.tensor([0, 1, 2, 3, 4, 4, 5, 6]),
-                  reaction_static_features=torch.randn(3, 6), source_atom_features=atoms, source_edge_index=torch.empty((2,0),dtype=torch.long), source_edge_attr=torch.empty((0,0)))
+                  source_atom_features=atoms, source_edge_index=torch.empty((2,0),dtype=torch.long), source_edge_attr=torch.empty((0,0)))
     output = model(**kwargs)
     assert output.shape == (3, 8)
     # Each match is equivalent to processing it alone, even in a mixed-pattern batch.
@@ -73,7 +73,7 @@ def test_training_encoder_routes_mixed_patterns_and_restores_reaction_order(node
                'reaction_tree_index': torch.zeros(1, dtype=torch.long),
                'reaction_source_atom_ptr': torch.tensor([0, end-start]),
                'reaction_source_atom_index': kwargs['reaction_source_atom_index'][start:end],
-               'reaction_static_features': kwargs['reaction_static_features'][row:row+1]}
+               }
         torch.testing.assert_close(output[row:row+1], model(**one))
     output.square().sum().backward()
     for encoder in model.reactant_encoders.values():

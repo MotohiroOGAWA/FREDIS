@@ -17,18 +17,18 @@ class PatternReactionReadout(nn.Module):
         super().__init__()
         self.rule_embedding = nn.Embedding(rule_count, hidden_dim)
         self.product_embedding = nn.Embedding(product_count, hidden_dim)
-        self.context = nn.Linear(mol_dim + hidden_dim + 6, hidden_dim)
+        self.context = nn.Linear(mol_dim + hidden_dim, hidden_dim)
         self.output = nn.Sequential(
             nn.Linear(graph_dim + hidden_dim, hidden_dim),
             nn.GELU(),
             nn.LayerNorm(hidden_dim),
         )
 
-    def forward(self, atoms, source, reaction_type, static):
+    def forward(self, atoms, source, reaction_type):
         category = self.rule_embedding(reaction_type[:, 1]) + self.product_embedding(
             reaction_type[:, 2]
         )
-        inputs = [source, category, static]
+        inputs = [source, category]
         context = self.context(torch.cat(inputs, dim=1))
         return self.output(torch.cat((atoms, context), dim=1))
 
@@ -186,7 +186,6 @@ class ReactionInstanceEncoder(nn.Module):
         reaction_tree_index: Tensor,
         reaction_source_atom_ptr: Tensor,
         reaction_source_atom_index: Tensor,
-        reaction_static_features: Tensor,
         source_atom_features: Tensor | None = None,
         source_edge_index: Tensor | None = None,
         source_edge_attr: Tensor | None = None,
@@ -238,7 +237,6 @@ class ReactionInstanceEncoder(nn.Module):
                 graph_h,
                 source_mol_h[reaction_tree_index[rows]],
                 reaction_type[rows],
-                reaction_static_features[rows],
             )
             known[rows] = True
         if not torch.all(known):
