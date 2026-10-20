@@ -25,25 +25,36 @@ def test_ion_rule_schema_and_shared_hydrogen_range():
 
 
 
-def test_mol_encoder_concatenates_selected_descriptors():
-    from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
-    default=MolEncoder(("C","H","O"),8,16,1,2)
-    assert default.descriptors==("FormalCharge",)
-    model=MolEncoder(("C","H","O"),8,16,1,2,descriptors=("ExactMolWt","TPSA"))
-    graph=model.encode_components(Compound.from_smiles("CCO"))
-    assert graph.descriptors.shape==(1,len(SUPPORTED_DESCRIPTOR_NAMES))
-    batch=Batch.from_data_list([graph,model.encode_components(Compound.from_smiles("CC"))])
-    embedded=model(batch)
-    assert embedded.shape==(2,16) and torch.isfinite(embedded).all()
-    embedded.square().mean().backward()
-    assert model.descriptor_projection[0].weight.grad is not None
-    assert MolEncoder(("C","H","O"),8,16,1,2,descriptors=()).descriptor_projection is None
-    with pytest.raises(ValueError,match="Unsupported descriptors"):
-        MolEncoder(("C","H","O"),8,16,1,2,descriptors=("NotADescriptor",))
-
-
-
-
+def test_mol_encoder_external_features():
+    model = MolEncoder(("C", "H", "O"), 8, 16, 1, 2, external_feature_dim=2).eval()
+    batch = Batch.from_data_list([
+        model.encode_components(Compound.from_smiles("CCO")),
+        model.encode_components(Compound.from_smiles("CC")),
+    ])
+    features = torch.tensor([[1., 2.], [3., 4.]], requires_grad=True)
+    output = model(batch, features)
+    assert output.shape == (2, 16)
+    changed = model(batch, features + 1)
+    assert not torch.equal(output, changed)
+    torch.testing.assert_close(model.encode_with_nodes(batch, features).x,
+                               model.encode_with_nodes(batch, features + 1).x)
+    output.square().mean().backward()
+    assert features.grad.abs().sum() > 0
+    assert model.external_feature_projection[0].weight.grad.abs().sum() > 0
+    batch.external_features = features.detach()
+    torch.testing.assert_close(model(batch), output)
+    del batch.external_features
+    for invalid in (None, torch.zeros(1, 2), torch.zeros(2, 3), torch.full((2, 2), float("nan"))):
+        with pytest.raises(ValueError, match="external_features"):
+            model(batch, invalid)
+    plain = MolEncoder(("C", "H", "O"), 8, 16, 1, 2)
+    assert plain.external_feature_projection is None
+    assert plain(batch).shape == (2, 16)
+    with pytest.raises(ValueError, match="external_feature_dim"):
+        plain(batch, features)
+    for width in (-1, True, 1.5):
+        with pytest.raises(ValueError, match="external_feature_dim"):
+            MolEncoder(("C", "H", "O"), 8, 16, 1, 2, external_feature_dim=width)
 
 
 def test_workbench_descriptor_choices_match_supported_descriptors():

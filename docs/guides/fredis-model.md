@@ -38,9 +38,18 @@ intensity head.
 
 ## Molecular and reaction encoding
 
-`MolEncoder.forward` returns graph embeddings only. Optional molecule-level
-features use late fusion and an explicit missing-value mask. Training-split
-statistics are stored as model buffers and in `feature_configuration`.
+`MolEncoder` accepts `external_feature_dim` (default 0), not descriptor names.
+Supply an aligned finite tensor `[num_graphs, external_feature_dim]` through
+`model(batch, external_features=features)` or `batch.external_features` (one
+`[1, external_feature_dim]` row per graph before batching). Features are projected
+with Linear → GELU → Linear and fused with the Graphormer graph embedding by a
+final Linear layer. Atom outputs remain structural. Selection, scaling and
+missing-value handling belong to the caller; descriptors are one possible source.
+Graph construction does not automatically populate external features. Existing
+SMILES-only prediction/preparation uses width 0; using a nonzero width requires
+supplying features for every source and generated fragment. Legacy MolEncoder
+`descriptors` configurations and descriptor-fusion weights require explicit
+conversion before loading; they are not silently reinterpreted.
 
 Reaction encoding uses raw atom/bond features, a shared edge-aware local
 context GCN, a SMARTS-sized Graphormer per Reaction Pattern, and explicit

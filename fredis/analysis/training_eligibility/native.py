@@ -211,9 +211,7 @@ def extract(
     model_config.setdefault("reaction_model_params", {})[
         "pattern_model_params"
     ] = generator.feature_model.reaction_instance_encoder.pattern_model_params
-    model_config["mol_encoder_params"]["descriptors"] = list(
-        generator.mol_encoder.descriptors
-    )
+    model_config["mol_encoder_params"]["external_feature_dim"] = generator.mol_encoder.external_feature_dim
     del generator, model
     dependencies = {
         item["path"]: sha256(item["path"])

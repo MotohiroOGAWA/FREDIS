@@ -82,11 +82,6 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         main_adduct_dim = spectrum_params.get("main_adduct_dim", 128)
         collision_energy_dim = spectrum_params.get("collision_energy_dim", 16)
         mol_params = dict(mol_encoder_params)
-        mol_params.setdefault("descriptors", [])
-        if mol_params["descriptors"] and not fine_tuning:
-            raise ValueError(
-                "New reaction features do not accept molecular descriptors; select spectrum_model_params.descriptors for intensity"
-            )
         frozen = {str(pid) for pid in (fine_tuning or {}).get("frozen_pattern_ids", [])}
         if any(
             value.get("descriptors")

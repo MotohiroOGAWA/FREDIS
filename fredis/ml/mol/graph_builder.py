@@ -56,7 +56,7 @@ class MolGraphBuilder:
               edge_index[2, E]
               edge_attr [E, bond_dim]
               descriptors [1, len(SUPPORTED_DESCRIPTOR_NAMES)] molecular descriptors;
-                the model selects its configured descriptors from these.
+                available to callers such as the spectrum predictor.
         """
         mol = compound.mol
 

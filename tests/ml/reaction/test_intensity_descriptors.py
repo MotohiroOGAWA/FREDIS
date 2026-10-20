@@ -9,10 +9,10 @@ from .TestReactionPipeline import config
 
 def test_descriptors_only_affect_post_branch_intensity():
     torch.manual_seed(23)
-    params=config();params['mol_encoder_params']['descriptors']=[]
+    params=config();params['mol_encoder_params']['external_feature_dim']=0
     params['spectrum_model_params']['descriptors']=['TPSA','MolLogP']
     generator=create_spectrum_generator(params).eval()
-    assert generator.mol_encoder.descriptor_projection is None
+    assert generator.mol_encoder.external_feature_projection is None
     reaction=generator.feature_model.reaction_instance_encoder
     assert all(encoder.bond_dim>0 for encoder in reaction.neighborhood_encoders.values())
     source=Compound.from_smiles('CC(O)N');adduct=Adduct.parse('[M+H]+')
@@ -39,9 +39,8 @@ def test_descriptors_only_affect_post_branch_intensity():
 
 
 def test_new_patterns_reject_descriptor_inputs():
-    params=config();params['mol_encoder_params']['descriptors']=['FormalCharge']
-    with pytest.raises(ValueError,match='intensity'):create_spectrum_generator(params)
-    params['mol_encoder_params']['descriptors']=[]
+    params=config()
+    params['mol_encoder_params']['external_feature_dim']=0
     pid=params['fragmenter_params']['fragment_ion_tree_builder']['reaction_pattern_set']['patterns'][0].get('pattern_id',0)
     params['reaction_model_params']['pattern_model_params']={str(pid):dict(descriptors=['TPSA'])}
     with pytest.raises(ValueError,match='intensity'):create_spectrum_generator(params)

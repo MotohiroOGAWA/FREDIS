@@ -1305,7 +1305,6 @@ def training_model_config(args):
         for flag, (key, _, _) in MOL_ENCODER_OPTIONS.items()
     }
     config["mol_encoder_params"]["dropout"] = args.dropout
-    config["mol_encoder_params"]["descriptors"] = []
     config["spectrum_model_params"]["descriptors"] = list(args.descriptors)
     for flag, (section, key, _, default) in MODEL_OPTIONS.items():
         value = getattr(args, flag.replace("-", "_"))
