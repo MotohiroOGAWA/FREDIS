@@ -154,7 +154,7 @@ def prepare(label,patterns=(),model=None):
         assert int(manifest.num_valid_samples.sum())==count,(label,split,manifest.num_valid_samples.sum(),count)
         preparation_checks.append(dict(stage=label,split=split,compounds=len(expected),all_spectra=count,prepared_samples=count,rejected=0))
 
-small=['--node-dim','8','--graph-dim','11','--num-heads','2','--num-layers','1','--reaction-hidden-dim','8','--reaction-num-heads','2','--reaction-main-adduct-dim','8','--reaction-state-layers','1','--spectrum-hidden-dim','8','--spectrum-num-heads','2','--spectrum-num-layers','1','--ion-state-hidden-dim','8','--main-adduct-embedding-dim','8','--collision-energy-feature-dim','16','--dropout','0','--intensity-descriptors','TPSA','MolLogP']
+small=['--node-dim','8','--graph-dim','11','--num-heads','2','--num-layers','1','--reaction-hidden-dim','8','--reaction-num-heads','2','--reaction-main-adduct-dim','8','--reaction-state-layers','1','--fragment-fc-dims','8','--state-fc-dims','8','--adduct-embedding-dim','8','--collision-energy-feature-dim','16','--dropout','0','--intensity-descriptors','TPSA','MolLogP']
 def train(label,architecture=None,resume=False):
     argv=['-m','fredis.cli','train','fragment-tree','--train-dir',str(out/('data_'+label)/'train_structures'),'--val-dir',str(out/('data_'+label)/'validation_structures'),'--output-dir',str(out/label),'--epochs','2' if resume else '1','--batch-size','1','--device','cuda','--lr','0.002','--warmup-steps','0','--max-samples','32',*small]
     if architecture:
@@ -220,7 +220,7 @@ predictions=[]
 for stage in ['flavonoid','lipid']:
     raw=MSDataset.load(str(out/'raw'/f'{stage}_train.msds'),load_peak_metadata=False)
     row=raw.metadata.iloc[0]
-    run('predict_'+stage,['-m','fredis.ml.specgen.predict_spectrum','--model',str(models/'integrated_final.pt'),'--smiles',str(row.SMILES),'--ce',str(row.VerificationCollisionEnergy),'--adduct-type',str(row.AdductType),'--output-dir',str(out/('prediction_'+stage)),'--strict','--device','cpu','--max-fragment-nodes','100','--ion-prediction-threshold','0'])
+    run('predict_'+stage,['-m','fredis.ml.specgen.predict_spectrum','--model',str(models/'integrated_final.pt'),'--smiles',str(row.SMILES),'--ce',str(row.VerificationCollisionEnergy),'--adduct-type',str(row.AdductType),'--output-dir',str(out/('prediction_'+stage)),'--strict','--device','cpu','--max-fragment-nodes','100','--peak-intensity-threshold','0'])
     predicted=MSDataset.load(str(out/('prediction_'+stage)/'predicted.msds'))
     assert predicted.n_peaks_total>0
     predictions.append(dict(stage=stage,compound=str(row.Name),adduct=str(row.AdductType),collision_energy=float(row.VerificationCollisionEnergy),peaks=predicted.n_peaks_total))

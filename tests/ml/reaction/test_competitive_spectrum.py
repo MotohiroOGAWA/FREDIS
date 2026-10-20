@@ -505,3 +505,32 @@ def test_fragment_diamond_then_state_softmax_has_known_joint_probabilities():
     torch.testing.assert_close(output.ion_probability, expected.repeat_interleave(2) * .5)
     torch.testing.assert_close(output.sink_probability, torch.tensor([.5]))
     torch.testing.assert_close(output.ion_probability.sum()+output.sink_probability.sum(), torch.tensor(1.))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is unavailable')
+def test_cuda_spectrum_loss_matches_cpu_and_backpropagates():
+    """Formula validity and precursor exclusion reductions work on CUDA too."""
+    from copy import deepcopy
+    torch.manual_seed(9)
+    cpu = create_spectrum_generator(competitive_config()).eval()
+    data, _ = ReactionStructureBuilder(cpu).build(
+        Compound.from_smiles('CC(O)N'), [Adduct.parse('[M+H]+')]*2,
+        [20., 40.], [[18.033826, 44.049476]]*2, [[.5, 1.]]*2,
+    )
+    def forward(model, batch):
+        features = model.feature_model(batch, training_pool=True)
+        return model.spectrum_model(
+            batch.spectrum_batch, reaction_h=features.reaction_h,
+            collision_energy_h=features.collision_energy_h,
+            source_embeddings=features.source_embeddings,
+        )
+    gpu = create_spectrum_generator(competitive_config()).eval().cuda()
+    gpu.load_state_dict(cpu.state_dict())
+    gpu_data = deepcopy(data).to('cuda')
+    expected = forward(cpu, data)
+    actual = forward(gpu, gpu_data)
+    torch.testing.assert_close(actual.loss.cpu(), expected.loss, rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(actual.intensity.cpu(), expected.intensity, rtol=1e-4, atol=1e-5)
+    actual.loss.backward()
+    assert any(p.grad is not None and torch.isfinite(p.grad).all() and p.grad.abs().sum()>0
+               for p in gpu.spectrum_model.state_heads.parameters())

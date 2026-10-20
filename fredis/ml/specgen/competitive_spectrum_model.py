@@ -440,10 +440,12 @@ class CompetitiveSpectrumModel(nn.Module):
         valid_candidate = (formulas[:, :-1] >= 0).all(1) & (
             data.state_mz > 0
         )
-        valid_peak = torch.zeros(peak_count, dtype=torch.bool, device=formulas.device)
+        # Some supported PyTorch CUDA builds cannot reduce bool tensors.
+        valid_peak = torch.zeros(peak_count, dtype=torch.long, device=formulas.device)
         valid_peak.scatter_reduce_(
-            0, peak_group_index, valid_candidate, reduce="amax", include_self=True
+            0, peak_group_index, valid_candidate.long(), reduce="amax", include_self=True
         )
+        valid_peak = valid_peak.bool()
         maxima = final_probability.new_zeros(sample_count).scatter_reduce_(
             0,
             peak_sample,
@@ -467,7 +469,7 @@ class CompetitiveSpectrumModel(nn.Module):
             0, peak_group_index, data.target_intensity.clamp_min(0),
             reduce="amax", include_self=True,
         )
-        precursor_peak = torch.zeros_like(valid_peak)
+        precursor_peak = torch.zeros_like(valid_peak, dtype=torch.long)
         # Identify Source conditions differing from the declared precursor only
         # by hydrogen count, then exclude their entire formula groups.
         roots = {}
@@ -492,8 +494,10 @@ class CompetitiveSpectrumModel(nn.Module):
             device=formulas.device,
         )
         precursor_peak.scatter_reduce_(
-            0, peak_group_index, precursor_candidate, reduce="amax", include_self=True
+            0, peak_group_index, precursor_candidate.long(), reduce="amax", include_self=True
         )
+
+        precursor_peak = precursor_peak.bool()
 
         def objective(probability, target):
             target_total = probability.new_zeros(sample_count).scatter_add_(
