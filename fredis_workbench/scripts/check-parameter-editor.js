@@ -40,9 +40,9 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  // spectrum_model_params.dropout (training_model_config writes both from the one
  // shared --dropout), but only that one shared field may ever be edited.
  const dropoutConfigRoot=new Element('div');
- createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{state_dropout:0.3}},'training');
+ createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{}},'training');
  assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.state_dropout'));
- assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
+ assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');

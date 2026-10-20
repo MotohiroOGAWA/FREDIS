@@ -1240,7 +1240,6 @@ MODEL_OPTIONS = {
         mlp_dims,
         mlp_dims("128"),
     ),
-    "ion-state-dropout": ("spectrum_model_params", "state_dropout", float, 0.0),
     "transition-fc-dims": (
         "spectrum_model_params",
         "transition_fc_dims",
@@ -1263,7 +1262,6 @@ MODEL_OPTION_HELP = {
     "transition-dropout": "Dropout after hidden transition MLP layers.",
     "ion-state-fc-dims": "Comma-separated adduct x hydrogen-shift combination MLP hidden widths.",
     "ion-state-hidden-dim": "Combination MLP output width in competitive mode.",
-    "ion-state-dropout": "Dropout after hidden ion combination MLP layers.",
     "ce-fc-dims": "Comma-separated CE MLP hidden widths. Empty selects a linear map.",
     "ce-center": "Normalize CE as (CE - center) / scale; saved in the model.",
     "ce-scale": "Positive CE normalization scale (default 100). Does not convert measurement units.",

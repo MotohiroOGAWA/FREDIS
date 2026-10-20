@@ -86,7 +86,6 @@ normalization does not convert instrument units or fit dataset statistics.
 | `--propagation-steps` | `propagation_steps` | `6` |
 | `--ion-state-fc-dims` | `state_fc_dims` | `128` |
 | `--ion-state-hidden-dim` | `state_hidden_dim` (output width) | `128` |
-| `--ion-state-dropout` | `state_dropout` | `0` |
 | `--ce-fc-dims` | `ce_fc_dims` | `32` |
 | `--adduct-embedding-dim` | `adduct_embedding_dim` | `32` |
 | `--collision-energy-feature-dim` | `collision_energy_dim` | `16` |

@@ -85,7 +85,6 @@ class CompetitiveSpectrumModel(nn.Module):
         main_adduct_dim=128,
         collision_energy_dim=16,
         state_fc_dims=(128,),
-        state_dropout=0.0,
         transition_fc_dims=(128, 64),
         transition_dropout=0.0,
         propagation_steps=6,
@@ -107,8 +106,11 @@ class CompetitiveSpectrumModel(nn.Module):
             ion_embedding_dim + hydrogen_shift_embedding_dim,
             list(state_fc_dims),
             state_hidden_dim,
-            state_dropout,
+            0.0,
         )
+        self.state_encoder = nn.Sequential(*(
+            layer for layer in self.state_encoder if not isinstance(layer, nn.Dropout)
+        ))
         if len(set(descriptors)) != len(descriptors) or set(descriptors) - set(
             SUPPORTED_DESCRIPTOR_NAMES
         ):
