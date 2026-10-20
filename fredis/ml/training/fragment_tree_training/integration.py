@@ -133,7 +133,6 @@ def integrate_checkpoints(checkpoints, head_checkpoint, output):
         str(p.pattern_id): architectures[p.key] for p in union.patterns
     }
     config["fine_tuning"] = {
-        "version": 1,
         "frozen_pattern_ids": [p.pattern_id for p in union.patterns],
         "pattern_mapping": [],
         "source_checkpoint": str(head),

@@ -559,7 +559,7 @@ its candidate rows must not be mistaken for already formula-merged peaks.
 
 Training uses CPU-prepared structures and ion-condition grids rather than
 running learned branch search inside each differentiable forward pass.
-Prepared tensors use schema `fredis.fragment-tree-training`, version 2.
+Prepared tensors use schema `fredis.fragment-tree-training`.
 Rebuild prepared data for this architecture; no old-format conversion is supplied.
 
 Observed peaks are assigned chemical explanations during preparation. Branch

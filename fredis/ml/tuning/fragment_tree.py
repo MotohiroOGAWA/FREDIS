@@ -155,7 +155,6 @@ def run(plan):
     results = []
     report = {
         "schema": "fredis.tuning-result",
-        "version": 1,
         "status": "running",
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "searchMethod": "grid",

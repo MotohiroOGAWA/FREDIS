@@ -27,7 +27,7 @@ def test_integration_preserves_patterns_and_exports_chemistry(checkpoints):
     before = torch.load(a,weights_only=False)
     merged = torch.load(output,weights_only=False)
     assert report['patterns']
-    assert merged['model_config']['fine_tuning']['version'] == 1
+    assert 'version' not in merged['model_config']['fine_tuning']
     assert all(torch.equal(value,merged['model_state_dict'][key]) for key,value in before['model_state_dict'].items())
     chemistry = json.loads(output.with_suffix('.fragmenter.pft').read_text())
     assert chemistry['fragmenter_params'] == merged['model_config']['fragmenter_params']

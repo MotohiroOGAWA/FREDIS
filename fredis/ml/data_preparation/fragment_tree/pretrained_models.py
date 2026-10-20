@@ -72,7 +72,6 @@ class StagedPretrainedModels:
             for item in self.files.values():
                 shutil.copyfile(item["staged"], directory / item["file"])
             manifest = {
-                "version": 1,
                 "files": [
                     {key: value for key, value in item.items() if key != "staged"}
                     for item in self.files.values()

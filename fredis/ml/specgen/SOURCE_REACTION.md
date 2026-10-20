@@ -1,7 +1,7 @@
 # Source-anchored competitive fragmentation model
 
 The architecture is `fragment-tree-competitive-ion`. Prepared training tensors
-use `fredis.fragment-tree-training`, version **2**. Regenerate prepared data and
+use schema `fredis.fragment-tree-training`. Regenerate prepared data and
 train a new checkpoint for this architecture; retired ion-embedding models are
 not converted or silently accepted.
 

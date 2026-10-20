@@ -158,11 +158,10 @@ def test_multiple_physical_ions_and_training_step_use_no_chemistry(tmp_path):
     assert {'branch_positive_mil_loss','branch_negative_loss','num_physical_ion_candidates','num_ion_explanations'}<=result.metrics.keys()
 
 
-def test_prepared_payload_has_explicit_fredis_schema_version(tmp_path):
+def test_prepared_payload_has_schema_without_version(tmp_path):
     _,data=prepared_two_ce();path=tmp_path/'data.preft.pt';data.save(path)
     payload=torch.load(path,weights_only=False)
-    assert set(payload)=={'schema','schema_version','structure'}
+    assert set(payload)=={'schema','structure'}
     assert payload['schema']=='fredis.fragment-tree-training'
-    assert payload['schema_version']==2
     loaded=SourceReactionStructure.load(path)
     assert loaded.num_branch_groups==1

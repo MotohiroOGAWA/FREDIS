@@ -248,7 +248,7 @@ reaction sets at every depth, valid continuations and next-state indices,
 positive paths per experimental peak, weak negatives, materialized fragment
 graph tensors, physical-ion candidates with explanations, formula tensors,
 exact m/z, charge, precursor formulas, intensity targets and peak annotations.
-The current payload uses `schema_version=1`. No format conversion is provided;
+The payload uses schema `fredis.fragment-tree-training`. No format conversion is provided;
 regenerate `.preft.pt` files after a format change.
 
 ## Validation split

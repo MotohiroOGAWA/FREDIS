@@ -5,10 +5,6 @@ from __future__ import annotations
 
 def configure_pattern_training(generator, config):
     """Configure trainability without adding layers or altering weights."""
-    if config.get("version") != 1:
-        raise ValueError(
-            "Unsupported pattern-feature configuration; expected version 1."
-        )
     generator.requires_grad_(True)
     generator.mol_encoder.requires_grad_(False)
     reaction = generator.feature_model.reaction_instance_encoder

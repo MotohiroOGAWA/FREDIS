@@ -188,7 +188,6 @@ def assemble_config(config, imports):
             )
     if bindings:
         config["fine_tuning"] = dict(
-            version=1,
             frozen_pattern_ids=list(owners),
             pattern_imports=bindings,
             pattern_mapping=[],

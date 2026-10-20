@@ -37,7 +37,7 @@ subdirectories of outputDir; the complete Cartesian product of candidate values 
 is recorded and later trials continue. The overall exit code is nonzero if any
 trial fails. Do not reuse an existing search output directory.
 
-`fragment-tree.tuning.pft` is a versioned `fredis.tuning-result` JSON document.
+`fragment-tree.tuning.pft` is a `fredis.tuning-result` JSON document.
 It records trial configurations, CLI arguments, status, timestamps, exit codes,
 and **all numeric completed-epoch validation observations**, not just the selected
 score. It also merges the per-epoch `metric_distributions.tsv` observations, preserving

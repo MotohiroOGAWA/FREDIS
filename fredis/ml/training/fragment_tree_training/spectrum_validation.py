@@ -621,7 +621,6 @@ def validate_spectra(
     )
     payload = dict(
         schema="fredis.spectrum-validation",
-        schema_version=1,
         mode="free-running spectrum generation",
         summary=summary,
         representatives=_representatives(records),

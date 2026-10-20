@@ -110,7 +110,6 @@ def prepare_model_config(
         overrides[str(new_id)] = pattern_config(base_config, old_id)
     config["fragmenter_params"] = deepcopy(new_config["fragmenter_params"])
     config["fine_tuning"] = dict(
-        version=1,
         source_checkpoint=str(checkpoint_path),
         pattern_set_path=str(pattern_set_path),
         pattern_mapping=mapping,

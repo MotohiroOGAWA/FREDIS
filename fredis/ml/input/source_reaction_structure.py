@@ -2,7 +2,7 @@
 
 Chemistry belongs in preparation. Objects loaded by the training loop contain
 only graphs, indices and numeric targets; prepared datasets are regenerated
-when this contract changes rather than migrated between format versions.
+when this contract changes.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from fredis.libs.mmkit.mmkit import Compound
 from ..mol.graph_builder import MolGraphBuilder
 
 SCHEMA = "fredis.fragment-tree-training"
-SCHEMA_VERSION = 2
 
 
 class UnresolvedPrecursorError(ValueError):
@@ -180,7 +179,7 @@ class SourceReactionStructure:
     def save(self, path: str | Path) -> None:
         torch.save(
             dict(
-                schema=SCHEMA, schema_version=SCHEMA_VERSION, structure=self.to("cpu")
+                schema=SCHEMA, structure=self.to("cpu")
             ),
             path,
         )
@@ -197,7 +196,6 @@ class SourceReactionStructure:
         if (
             not isinstance(payload, dict)
             or payload.get("schema") != SCHEMA
-            or payload.get("schema_version") != SCHEMA_VERSION
         ):
             raise ValueError(
                 "Unsupported prepared data; regenerate from the original MSDataset"
@@ -836,7 +834,6 @@ def save_fragment_tree_structure(
     torch.save(
         dict(
             schema=SCHEMA,
-            schema_version=SCHEMA_VERSION,
             structure=structure.to("cpu"),
             metadata=dict(metadata or {}),
         ),

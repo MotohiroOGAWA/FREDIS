@@ -106,7 +106,7 @@ def test_fine_tuning_remaps_existing_pattern_encoder_and_trains_new_pattern(tmp_
     checkpoint = tmp_path / 'base.pt'
     torch.save({'model_state_dict': old.state_dict()}, checkpoint)
     new = Generator({0: 'CCC', 1: 'CC'})
-    config = {'version': 1, 'frozen_pattern_ids': [1], 'pattern_mapping': [[0, 1]], 'source_checkpoint': str(checkpoint),
+    config = {'frozen_pattern_ids': [1], 'pattern_mapping': [[0, 1]], 'source_checkpoint': str(checkpoint),
               }
     configure_pattern_training(new, config)
     initialize_from_base(new, {'fine_tuning': config})
