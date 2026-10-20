@@ -205,7 +205,7 @@ def test_inference_annotates_full_condition_grid_after_scoring(monkeypatch):
     shift = Adduct.from_dict({'H': int(data.explanation_hydrogen_shift[index])})
     expected = ion.apply_to_formula(shift.apply_to_formula(result.fragments.compounds[node].formula)).normalized
     torch.testing.assert_close(result.spectra.formula_tensor[index], generator.tensorizer.formula_to_tensor(expected))
-    assert float(result.spectra.mz[index]) == pytest.approx(expected.exact_mass)
+    assert float(result.spectra.mz[index]) == pytest.approx(expected.exact_mass / abs(ion.charge))
 
 
 def test_mixed_main_adduct_batch_routes_to_separate_banks():
@@ -233,3 +233,27 @@ def test_mixed_main_adduct_batch_routes_to_separate_banks():
     merged = merge_candidate_peaks(result.spectra)
     assert (merged.formula_tensor[:, :-1] >= 0).all()
     assert (merged.mz > 0).all()
+
+
+@pytest.mark.parametrize("adduct_type", ["[M+2H]2+", "[M-2H]2-"])
+def test_annotation_mz_uses_adduct_charge(adduct_type):
+    from types import SimpleNamespace
+    from fredis.ml.specgen.fragment_spectrum_model import SpectrumModelBatch, annotate_ion_conditions
+    generator = create_spectrum_generator(config())
+    compound = Compound.from_smiles('CCO')
+    data = SpectrumModelBatch(
+        decoded=SimpleNamespace(compounds=[compound]),
+        physical_candidate_node_index=torch.tensor([0]),
+        physical_candidate_sample_index=torch.tensor([0]),
+        physical_candidate_formula_tensor=torch.empty(0),
+        physical_candidate_mz=torch.empty(0),
+        physical_candidate_charge=torch.tensor([Adduct.parse(adduct_type).charge]),
+        physical_candidate_explanation_ptr=torch.tensor([0, 1]),
+        explanation_adduct_index=torch.tensor([0]),
+        explanation_hydrogen_shift=torch.tensor([0]),
+        ion_type_strs=(adduct_type,),
+    )
+    annotated = annotate_ion_conditions(data, generator.tensorizer)
+    ion = Adduct.parse(adduct_type)
+    formula = ion.apply_to_formula(compound.formula).normalized
+    assert annotated.physical_candidate_mz.item() == pytest.approx(formula.exact_mass / abs(ion.charge))

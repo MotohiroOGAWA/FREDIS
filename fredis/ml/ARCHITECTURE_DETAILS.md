@@ -536,7 +536,7 @@ shift = Adduct.from_dict({'H': hydrogen_shift})
 formula = fragment_ion_adduct.apply_to_formula(
     shift.apply_to_formula(fragment_compound.formula)
 ).normalized
-mz = formula.exact_mass
+mz = formula.exact_mass / abs(fragment_ion_adduct.charge)
 ```
 
 The implementation uses `exact_mass` for the annotation; the model's precursor

@@ -198,6 +198,7 @@ def annotate_ion_conditions(
 ) -> SpectrumModelBatch:
     """mmkit annotations only; call after scoring in inference, before targets in preparation."""
     formulas = []
+    mzs = []
     starts = data.physical_candidate_explanation_ptr[:-1].tolist()
     for node, start in zip(data.physical_candidate_node_index.tolist(), starts):
         ion = Adduct.parse(
@@ -208,6 +209,7 @@ def annotate_ion_conditions(
             shift.apply_to_formula(data.decoded.compounds[node].formula)
         ).normalized
         formulas.append(formula)
+        mzs.append(formula.exact_mass / abs(ion.charge))
     device = data.physical_candidate_node_index.device
     return replace(
         data,
@@ -215,7 +217,7 @@ def annotate_ion_conditions(
             formulas, device=device
         ),
         physical_candidate_mz=torch.tensor(
-            [f.exact_mass for f in formulas], dtype=torch.float64, device=device
+            mzs, dtype=torch.float64, device=device
         ),
     )
 
