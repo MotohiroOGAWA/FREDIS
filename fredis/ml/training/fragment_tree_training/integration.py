@@ -13,7 +13,7 @@ from fredis.ml.specgen.source_anchored_spectrum_predictor import (
 from .model import ReactionFragmentTreeTrainingModel
 
 PATTERN_KEY = re.compile(
-    r"\.(?:reactant_encoders|pattern_heads|neighborhood_encoders|global_encoders)\.(\d+)\."
+    r"\.(?:reactant_encoders|pattern_heads|neighborhood_encoders)\.(\d+)\."
 )
 
 

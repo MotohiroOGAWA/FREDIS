@@ -30,9 +30,6 @@ def pattern_config(params, pid):
         input_mode="chemical",
         neighborhood_hops=3,
         neighborhood_hidden_dim=32,
-        global_num_layers=0,
-        global_hidden_dim=32,
-        global_num_heads=4,
         neighborhood_edge_features=True,
     )
     override = dict(reaction.get("pattern_model_params", {}).get(str(pid), {}))

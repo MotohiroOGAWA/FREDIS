@@ -120,7 +120,6 @@ class SourceReactionFeatureModel(nn.Module):
         }
         kwargs["source_atom_features"] = data.source_graph.x.to(device)
         kwargs["source_edge_attr"] = data.source_graph.edge_attr.to(device)
-        kwargs["source_batch"] = data.source_graph.batch.to(device)
         kwargs["source_edge_index"] = data.source_graph.edge_index.to(device)
         reactions = self.reaction_instance_encoder(source_mol_h=source_h, **kwargs)
         return reactions, source_h
@@ -144,7 +143,6 @@ class SourceReactionFeatureModel(nn.Module):
                 source_atom_features=data.source_graph.x,
                 source_edge_index=data.source_graph.edge_index,
                 source_edge_attr=data.source_graph.edge_attr,
-                source_batch=data.source_graph.batch,
             )
             if static_features is None
             else static_features[0]

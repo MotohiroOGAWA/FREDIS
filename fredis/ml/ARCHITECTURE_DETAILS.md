@@ -225,13 +225,7 @@ s_u <- s_u + GELU(mean_of_incoming_messages_at_shell_d)
 Root chemistry is a separate channel. The neighborhood output is `[3,2,32]`;
 an isolated role receives zero. Different patterns have different weights.
 
-`global_num_layers=0` disables global attention by default. When enabled, a
-bond-aware GCN creates molecular memory; ordered SMARTS atoms query all atoms
-of the same molecule. Query uses raw atom features plus SMARTS-position one-hot;
-keys/values add distance embeddings. Distances are explored to 64, with 65 for
-unreached atoms. Output width is `global_hidden_dim` per role.
-
-Without global attention, pattern 0's reactant Graphormer input is:
+Pattern 0's reactant Graphormer input is:
 
 ```text
 matched atoms          [3,2,35]
@@ -276,7 +270,7 @@ fragmentation step. New patterns add their own modules but retain common output
 width Dr. Pattern IDs and imported weights must remain correctly associated.
 
 Code: [reaction encoder](specgen/components/reaction/reaction_instance_encoder.py),
-[neighborhood](reaction/external_neighborhood.py), [global attention](reaction/global_attention.py),
+[neighborhood](reaction/external_neighborhood.py),
 [reactant Graphormer](reaction/reactant_graphormer.py).
 
 ## 8. Branch adduct features and CE features

@@ -209,40 +209,6 @@ Each check emits an `intermediate_validation_end` JSON event with step, sample c
 
 Full validation still runs at each epoch end. Learning-rate scheduling, early stopping, and best-checkpoint selection use full-validation results; intermediate checks are for monitoring.
 
-### Global structure for an individual reaction pattern
-
-New reaction architectures may enable a pattern-owned molecular GNN and separate
-cross-attention through `reaction_model_params.pattern_model_params[pattern_id]`:
-
-```json
-{
-  "hidden_dim": 64,
-  "graph_dim": 128,
-  "num_layers": 2,
-  "num_heads": 4,
-  "neighborhood_hops": 3,
-  "neighborhood_hidden_dim": 32,
-  "global_num_layers": 3,
-  "global_hidden_dim": 64,
-  "global_num_heads": 4
-}
-```
-
-`global_num_layers: 0` (the default) disables this mechanism and allocates no
-additional pattern parameters. The GNN consumes chemical atom features and bond
-features from the complete original source molecule. Ordered SMARTS atoms supply
-queries; all atoms of that same molecule supply keys and values. Learned shortest
-bond-distance embeddings relative to each queried atom distinguish distant bond
-positions. Distances 0–64 have separate embeddings; larger distances and disconnected
-atoms share the overflow embedding. Attention returns one vector of
-`global_hidden_dim` per SMARTS atom, concatenated with its chemistry and optional
-external-neighborhood features before the fixed-capacity reactant Graphormer.
-Context atoms do not join its self-attention token sequence.
-
-Workbench exposes these settings per new pattern in Training. Imported architectures
-and Resume remain fixed. Exports and integrations include the GNN, cross-attention,
-and distance embeddings as part of that complete pattern model.
-
 Independent branches share a frozen pretrained feature model. Define different
 SMARTS for newly trained specialists, import the same base into each dataset,
 train each branch, and use `train integrate-patterns` to collect their pattern

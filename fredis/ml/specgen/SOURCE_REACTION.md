@@ -8,8 +8,8 @@ not converted or silently accepted.
 ## Source reactions and search
 
 Each reaction instance is encoded from the original source molecule using a
-pattern-owned external-neighborhood encoder, reactant Graphormer, optional
-global attention, and pattern readout. Reaction-set attention uses a BOS token.
+pattern-owned external-neighborhood encoder, reactant Graphormer, and
+pattern readout. Reaction-set attention uses a BOS token.
 The main precursor adduct conditions branch selection; CE does not change the
 structural search. Each (molecule, main adduct) shares a branch graph across CE.
 

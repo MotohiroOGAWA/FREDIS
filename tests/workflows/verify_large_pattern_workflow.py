@@ -175,7 +175,7 @@ for label,pattern in [('flavonoid',flav_pattern),('lipid',lipid_pattern)]:
     meta=json.loads((out/('data_'+label)/'preparation_config.json').read_text());fragmenter=Fragmenter.from_dict(meta['chemistry_config']['fragmenter_params'])
     pid=next(p.pattern_id for p in fragmenter.reaction_pattern_set.patterns if p.name==pattern['name'])
     arch=deepcopy(saved['model_config']);arch.pop('fine_tuning',None)
-    arch['reaction_model_params']['pattern_model_params']={str(pid):dict(hidden_dim=8,graph_dim=13,num_layers=2,num_heads=2,dropout=0,neighborhood_hops=3,neighborhood_hidden_dim=8,global_num_layers=3 if label=='lipid' else 0,global_hidden_dim=8,global_num_heads=2)}
+    arch['reaction_model_params']['pattern_model_params']={str(pid):dict(hidden_dim=8,graph_dim=13,num_layers=2,num_heads=2,dropout=0,neighborhood_hops=3,neighborhood_hidden_dim=8)}
     train(label,arch)
 train('lipid',resume=True)
 merged=out/'integrated.pt'
@@ -208,8 +208,6 @@ for split in ['train','validation']:
         present=set(data.reaction_type[:,0].tolist());routing.append(dict(file=str(path),split=split,pattern_ids=sorted(present)))
 assert sum(pattern_ids[flav_pattern['name']] in r['pattern_ids'] for r in routing)>=10
 assert sum(pattern_ids[lipid_pattern['name']] in r['pattern_ids'] for r in routing)>=10
-module=updated.feature_model.reaction_instance_encoder.global_encoders[str(pattern_ids[lipid_pattern['name']])]
-change=float((module.norm.weight-1).abs().max());assert change>0
 models=out/'models';models.mkdir(exist_ok=True)
 shutil.copyfile(archive,models/'integrated_features.pt');shutil.copyfile(heads,models/'integrated_final.pt')
 for name in [flav_pattern['name'],lipid_pattern['name']]:
@@ -226,6 +224,6 @@ for stage in ['flavonoid','lipid']:
     predicted=MSDataset.load(str(out/('prediction_'+stage)/'predicted.msds'))
     assert predicted.n_peaks_total>0
     predictions.append(dict(stage=stage,compound=str(row.Name),adduct=str(row.AdductType),collision_energy=float(row.VerificationCollisionEnergy),peaks=predicted.n_peaks_total))
-report=dict(predictions=predictions,source=selection['source'],selection=str(out/'selection.json'),commands=commands,preparation_checks=preparation_checks,weight_checks=weight_checks,routing=routing,pattern_ids=pattern_ids,head_training_feature_difference=maximum,global_norm_weight_change=change,all_selected_spectra_used=True,original_integrated_file_removed=True,scope='Workflow verification; not an accuracy benchmark')
+report=dict(predictions=predictions,source=selection['source'],selection=str(out/'selection.json'),commands=commands,preparation_checks=preparation_checks,weight_checks=weight_checks,routing=routing,pattern_ids=pattern_ids,head_training_feature_difference=maximum,all_selected_spectra_used=True,original_integrated_file_removed=True,scope='Workflow verification; not an accuracy benchmark')
 (out/'report.json').write_text(json.dumps(report,indent=2))
 print(out/'report.json',flush=True)

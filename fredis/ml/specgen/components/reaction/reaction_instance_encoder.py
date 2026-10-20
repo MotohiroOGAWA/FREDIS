@@ -6,8 +6,6 @@ from torch import Tensor, nn
 from ....reaction.reactant_graphormer import ReactantGraphormerEncoder
 from collections.abc import Mapping
 from ....reaction.external_neighborhood import ExternalNeighborhoodEncoder
-from ....reaction.global_attention import GlobalStructureAttention
-from rdkit import Chem
 
 
 class PatternReactionReadout(nn.Module):
@@ -65,7 +63,6 @@ class ReactionInstanceEncoder(nn.Module):
         self.reactant_encoders = nn.ModuleDict()
         self.pattern_heads = nn.ModuleDict()
         self.neighborhood_encoders = nn.ModuleDict()
-        self.global_encoders = nn.ModuleDict()
         self.pattern_model_params = {}
         overrides = pattern_model_params or {}
         unknown = set(map(str, overrides)) - set(map(str, pattern_smarts))
@@ -82,9 +79,6 @@ class ReactionInstanceEncoder(nn.Module):
                 input_mode="chemical",
                 neighborhood_hops=3,
                 neighborhood_hidden_dim=32,
-                global_num_layers=0,
-                global_hidden_dim=32,
-                global_num_heads=4,
                 neighborhood_edge_features=True,
             )
             override = dict(overrides.get(str(pid), overrides.get(pid, {})))
@@ -129,26 +123,9 @@ class ReactionInstanceEncoder(nn.Module):
                     or config["neighborhood_hidden_dim"] < 1
                 ):
                     raise ValueError("neighborhood_hidden_dim must be positive")
-            if (
-                type(config["global_num_layers"]) is not int
-                or config["global_num_layers"] < 0
-            ):
-                raise ValueError("global_num_layers must be a non-negative integer")
-            if config["global_num_layers"]:
-                self.global_encoders[str(pid)] = GlobalStructureAttention(
-                    atom_dim,
-                    raw_bond_dim,
-                    Chem.MolFromSmarts(smarts).GetNumAtoms(),
-                    config["global_hidden_dim"],
-                    config["global_num_layers"],
-                    config["global_num_heads"],
-                    config["dropout"],
-                )
             input_dim = atom_dim + (
                 config["neighborhood_hidden_dim"] if config["neighborhood_hops"] else 0
             )
-            if config["global_num_layers"]:
-                input_dim += config["global_hidden_dim"]
             self.reactant_encoders[str(pid)] = ReactantGraphormerEncoder(
                 smarts,
                 atom_dim=input_dim,
@@ -174,8 +151,6 @@ class ReactionInstanceEncoder(nn.Module):
             self.pattern_heads[pid].eval()
             if pid in self.neighborhood_encoders:
                 self.neighborhood_encoders[pid].eval()
-            if pid in self.global_encoders:
-                self.global_encoders[pid].eval()
         return self
 
     def forward(
@@ -189,7 +164,6 @@ class ReactionInstanceEncoder(nn.Module):
         source_atom_features: Tensor | None = None,
         source_edge_index: Tensor | None = None,
         source_edge_attr: Tensor | None = None,
-        source_batch: Tensor | None = None,
     ) -> Tensor:
         a = reaction_type.shape[0]
         if a == 0:
@@ -218,20 +192,6 @@ class ReactionInstanceEncoder(nn.Module):
                     source_atom_features, source_edge_index, sites, source_edge_attr
                 )
                 inputs = torch.cat((inputs, outside), dim=-1)
-            if pattern_id in self.global_encoders:
-                if source_edge_attr is None or source_batch is None:
-                    raise ValueError(
-                        "Global attention requires source bond features and molecule ownership"
-                    )
-                global_h = self.global_encoders[pattern_id](
-                    source_atom_features,
-                    source_edge_index,
-                    source_edge_attr,
-                    source_batch,
-                    sites,
-                    reaction_tree_index[rows],
-                )
-                inputs = torch.cat((inputs, global_h), dim=-1)
             _, graph_h = encoder.encode_matches(inputs)
             result[rows] = self.pattern_heads[pattern_id](
                 graph_h,

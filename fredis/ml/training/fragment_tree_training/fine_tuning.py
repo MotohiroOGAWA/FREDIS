@@ -139,7 +139,7 @@ def initialize_from_base(model, model_config):
     for key, value in target.items():
         original_key = key
         match = re.search(
-            r"\.(?:reactant_encoders|pattern_heads|neighborhood_encoders|global_encoders)\.(\d+)\.",
+            r"\.(?:reactant_encoders|pattern_heads|neighborhood_encoders)\.(\d+)\.",
             key,
         )
         if match:
