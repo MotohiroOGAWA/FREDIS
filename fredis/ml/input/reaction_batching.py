@@ -159,9 +159,6 @@ def _select_spectrum_batch(
         target_intensity=select_optional(
             spectrum_batch.target_intensity, candidate_indices
         ),
-        precursor_formula_tensor=select_optional(
-            getattr(spectrum_batch, "precursor_formula_tensor", None), sample_indices
-        ),
         precursor_adducts=(
             tuple(spectrum_batch.precursor_adducts[i] for i in sample_indices.tolist())
             if getattr(spectrum_batch, "precursor_adducts", ())

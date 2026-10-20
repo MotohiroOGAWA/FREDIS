@@ -20,7 +20,7 @@ def test_descriptors_only_affect_post_branch_intensity():
     def output(value):
         features=generator.feature_model(value,training_pool=True)
         spectrum=generator.spectrum_model(value.spectrum_batch,reaction_h=features.reaction_h,
-            main_adduct_h=features.sample_main_adduct_h,collision_energy_h=features.collision_energy_h,
+            collision_energy_h=features.collision_energy_h,
             source_embeddings=features.source_embeddings)
         return features,spectrum
     with torch.no_grad():
@@ -34,7 +34,7 @@ def test_descriptors_only_affect_post_branch_intensity():
     assert not torch.equal(before.intensity,after.intensity)
     _,train=output(data)
     train.intensity.square().sum().backward()
-    grad=generator.spectrum_model.transition_score[0].weight.grad
+    grad=next(iter(generator.spectrum_model.transition_heads.values())).layers[0].weight.grad
     assert grad.abs().sum()>0
 
 

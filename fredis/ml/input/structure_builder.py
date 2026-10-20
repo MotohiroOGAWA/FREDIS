@@ -461,16 +461,24 @@ class ReactionStructureBuilder:
             ion_type_strs=getattr(generator, "ion_type_strs", None),
         )
         target = []
-        for sample, mz in zip(
+        valid_formulas = (
+            (spectrum_batch.physical_candidate_formula_tensor[:, :-1] >= 0)
+            .all(1)
+            .tolist()
+        )
+        for sample, mz, valid_formula in zip(
             spectrum_batch.physical_candidate_sample_index.tolist(),
             spectrum_batch.physical_candidate_mz.tolist(),
+            valid_formulas,
         ):
             matches = [
                 float(intensity)
                 for observed, intensity in zip(
                     peaks_mz[sample], peaks_intensity[sample]
                 )
-                if fragmenter.mass_tolerance.within(observed, mz)
+                if valid_formula
+                and mz > 0
+                and fragmenter.mass_tolerance.within(observed, mz)
             ]
             target.append(max(matches, default=0.0))
         return (

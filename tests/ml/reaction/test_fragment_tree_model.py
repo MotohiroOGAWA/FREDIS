@@ -117,13 +117,20 @@ def test_fragment_node_budget_is_shared_across_collision_energies():
     assert output.selection.decoded.state_sample_index.numel()<=2
 
 
-def test_physical_candidates_preserve_equivalent_explanations_without_sum_bias():
-    _,data=prepared_two_ce();spectrum_batch=data.spectrum_batch
-    counts=spectrum_batch.physical_candidate_explanation_ptr[1:]-spectrum_batch.physical_candidate_explanation_ptr[:-1]
-    assert torch.any(counts>1)
-    candidate=int((counts>1).nonzero()[0]);start,stop=spectrum_batch.physical_candidate_explanation_ptr[candidate:candidate+2]
-    pairs=set(zip(spectrum_batch.explanation_adduct_index[start:stop].tolist(),spectrum_batch.explanation_hydrogen_shift[start:stop].tolist()))
-    assert len(pairs)==int(counts[candidate])
+def test_condition_states_keep_equivalent_formulas_separate_until_output():
+    generator, data = prepared_two_ce()
+    batch = data.spectrum_batch
+    assert (batch.physical_candidate_explanation_ptr.diff() == 1).all()
+    rows = ((batch.physical_candidate_sample_index == 0)
+            & (batch.physical_candidate_node_index == 0)).nonzero().flatten()
+    conditions = generator.spectrum_model.main_adduct_conditions['[M+H]+']
+    assert rows.numel() == len(conditions)
+    pairs = list(zip(
+        (batch.ion_type_strs[int(i)] for i in batch.explanation_adduct_index[rows]),
+        batch.explanation_hydrogen_shift[rows].tolist(),
+    ))
+    assert pairs == list(conditions)
+    assert torch.unique(batch.physical_candidate_formula_tensor[rows], dim=0).shape[0] < rows.numel()
 
 def test_shared_hydrogen_shift_range_is_used_for_every_adduct():
     generator,_=prepared_two_ce()
@@ -156,6 +163,6 @@ def test_prepared_payload_has_explicit_fredis_schema_version(tmp_path):
     payload=torch.load(path,weights_only=False)
     assert set(payload)=={'schema','schema_version','structure'}
     assert payload['schema']=='fredis.fragment-tree-training'
-    assert payload['schema_version']==1
+    assert payload['schema_version']==2
     loaded=SourceReactionStructure.load(path)
     assert loaded.num_branch_groups==1

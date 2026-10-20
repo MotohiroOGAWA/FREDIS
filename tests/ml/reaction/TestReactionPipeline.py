@@ -19,7 +19,7 @@ def config() -> dict:
                                        max_degree=4, max_spatial_dist=3, max_edge_dist=3, dropout=0.,
                                        external_feature_dim=0),
             'reaction_model_params': dict(hidden_dim=16, branch_main_adduct_dim=16, num_heads=4, state_num_layers=1),
-            'spectrum_model_params': dict(state_hidden_dim=16, state_fc_dims=[16], transition_fc_dims=[16]),
+            'spectrum_model_params': dict(transition_fc_dims=[16]),
             'generation_params': dict(branch_path_threshold=0., max_fragment_nodes=32),
             # Neutral-loss forms resolve to a registered main adduct during prediction.
             'adduct_type_strs': ['[M+H]+', '[M+Na]+', '[M+H4N]+', '[2M+H]+', '[M+H-H2O]+', '[M+H-2H2O]+', '[M+H-C6H6]+']}

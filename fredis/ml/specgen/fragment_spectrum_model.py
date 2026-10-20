@@ -8,7 +8,6 @@ import torch
 from torch import Tensor
 from torch_geometric.data import Batch
 from fredis.domain.fragment.fragmenter import Fragmenter
-from fredis.domain.fragment.ion_tree import FragmentIonTree
 from fredis.libs.mmkit.mmkit import Adduct
 from ..mol.formula_encoder import FormulaTensorizer
 from .materialization import DecodedFragmentTreeBatch
@@ -34,7 +33,6 @@ class SpectrumModelBatch:
     explanation_adduct_index: Tensor
     explanation_hydrogen_shift: Tensor
     target_intensity: Tensor | None = None
-    precursor_formula_tensor: Tensor | None = None
     precursor_adducts: tuple[str, ...] = ()
     physical_candidate_adduct: tuple[str, ...] = ()
     ion_type_strs: tuple[str, ...] = ()
@@ -46,7 +44,6 @@ class SpectrumModelBatch:
 
     def to(self, device: str | torch.device):
         names = (
-            "precursor_formula_tensor",
             "physical_candidate_node_index",
             "physical_candidate_sample_index",
             "physical_candidate_formula_tensor",
@@ -119,8 +116,9 @@ def prepare_spectrum_model_batch(
     tensorizer: FormulaTensorizer,
     sample_branch_group_index: Tensor | None = None,
     ion_type_strs: Sequence[str] | None = None,
+    annotate: bool = True,
 ) -> SpectrumModelBatch:
-    """Run all formula/ion chemistry and physical-candidate grouping."""
+    """Prepare all ion-condition states; mmkit formula/mz are annotation only."""
     sample_count = len(precursor_types)
     sample_branch_group_index = torch.as_tensor(
         (
@@ -143,20 +141,11 @@ def prepare_spectrum_model_batch(
     ion_to_index = {value: i for i, value in enumerate(ion_vocab)}
     nodes = []
     samples = []
-    formulas = []
-    mzs = []
     charges = []
     explanation_rows = []
     adducts = []
     node_offset = 0
     for branch_group, tree in enumerate(decoded.trees):
-        ion_tree = FragmentIonTree.from_fragment_tree(
-            tree,
-            fragment_ion_adduct_rule_set=fragmenter.adduct_rule_set,
-            fragment_compounds=decoded.compounds[
-                node_offset : node_offset + tree.num_nodes
-            ],
-        )
         group_samples = (
             (sample_branch_group_index == branch_group).nonzero().flatten().tolist()
         )
@@ -164,37 +153,21 @@ def prepare_spectrum_model_batch(
             node_offset += tree.num_nodes
             continue
         main = fragmenter._resolve_main_adduct_type(precursor_types[group_samples[0]])
-        formula_group = ion_tree.get_formula_candidate_group(main)
-        local = {}
-        for formula_index, formula in enumerate(formula_group.formulas):
-            for entry in range(
-                formula_group.indptr[formula_index],
-                formula_group.indptr[formula_index + 1],
-            ):
-                node = int(formula_group.node_indices[entry])
-                net = formula_group.candidate_adducts[
-                    formula_group.candidate_adduct_indices[entry]
-                ]
-                ion = str(
-                    formula_group.fragment_ion_adducts[
-                        formula_group.fragment_ion_adduct_positions[entry]
-                    ]
-                )
-                hydrogen_shift = int(formula_group.hydrogen_shifts[entry])
-                key = (node, str(formula.normalized), str(net), int(net.charge))
-                local.setdefault(
-                    key, dict(node=node, formula=formula, net=net, explanations=[])
-                )["explanations"].append((ion_to_index[ion], hydrogen_shift))
+        rule = fragmenter.adduct_rule_set.get_rule_by_adduct_type(main)
+        # State topology is the full ion x shift grid, independent of formula.
         for sample in group_samples:
-            for item in local.values():
-                nodes.append(node_offset + item["node"])
-                samples.append(sample)
-                formulas.append(item["formula"])
-                mzs.append(item["formula"].exact_mass)
-                charges.append(item["net"].charge)
-                adducts.append(str(item["net"]))
-                row = tuple(dict.fromkeys(item["explanations"]))
-                explanation_rows.append(row)
+            for node, compound in enumerate(
+                decoded.compounds[node_offset : node_offset + tree.num_nodes]
+            ):
+                for ion in rule.fragment_ion_adducts:
+                    for shift in fragmenter.adduct_rule_set.hydrogen_shifts:
+                        hydrogen = Adduct.from_dict({"H": shift})
+                        net = ion.add_prefer_self(hydrogen)
+                        nodes.append(node_offset + node)
+                        samples.append(sample)
+                        charges.append(net.charge)
+                        adducts.append(str(net))
+                        explanation_rows.append(((ion_to_index[str(ion)], shift),))
         node_offset += tree.num_nodes
     explanation_ptr, flat = __import__(
         "fredis.ml.input.source_reaction_structure", fromlist=["csr"]
@@ -202,34 +175,48 @@ def prepare_spectrum_model_batch(
     pairs = (
         flat.reshape(-1, 2) if flat.numel() else torch.empty((0, 2), dtype=torch.long)
     )
-    root_nodes = {}
-    for node, group in enumerate(decoded.node_sample_index.tolist()):
-        root_nodes.setdefault(group, node)
-    precursor_formulas = tensorizer.formulas_to_tensor(
-        [
-            adduct.apply_to_formula(
-                decoded.compounds[
-                    root_nodes[int(sample_branch_group_index[sample])]
-                ].formula
-            ).normalized
-            for sample, adduct in enumerate(precursor_types)
-        ]
-    )
-    return SpectrumModelBatch(
+    result = SpectrumModelBatch(
         decoded=decoded,
         physical_candidate_node_index=torch.tensor(nodes, dtype=torch.long),
         physical_candidate_sample_index=torch.tensor(samples, dtype=torch.long),
-        physical_candidate_formula_tensor=tensorizer.formulas_to_tensor(formulas),
-        physical_candidate_mz=torch.tensor(mzs, dtype=torch.float64),
+        physical_candidate_formula_tensor=torch.empty((len(nodes), tensorizer.dim)),
+        physical_candidate_mz=torch.empty(len(nodes), dtype=torch.float64),
         physical_candidate_charge=torch.tensor(charges, dtype=torch.long),
         physical_candidate_explanation_ptr=explanation_ptr,
         explanation_adduct_index=pairs[:, 0],
         explanation_hydrogen_shift=pairs[:, 1],
-        precursor_formula_tensor=precursor_formulas,
         precursor_adducts=tuple(str(a) for a in precursor_types),
         physical_candidate_adduct=tuple(adducts),
         ion_type_strs=tuple(ion_vocab),
         node_smiles=tuple(c.smiles for c in decoded.compounds),
+    )
+    return annotate_ion_conditions(result, tensorizer) if annotate else result
+
+
+def annotate_ion_conditions(
+    data: SpectrumModelBatch, tensorizer: FormulaTensorizer
+) -> SpectrumModelBatch:
+    """mmkit annotations only; call after scoring in inference, before targets in preparation."""
+    formulas = []
+    starts = data.physical_candidate_explanation_ptr[:-1].tolist()
+    for node, start in zip(data.physical_candidate_node_index.tolist(), starts):
+        ion = Adduct.parse(
+            data.ion_type_strs[int(data.explanation_adduct_index[start])]
+        )
+        shift = Adduct.from_dict({"H": int(data.explanation_hydrogen_shift[start])})
+        formula = ion.apply_to_formula(
+            shift.apply_to_formula(data.decoded.compounds[node].formula)
+        ).normalized
+        formulas.append(formula)
+    device = data.physical_candidate_node_index.device
+    return replace(
+        data,
+        physical_candidate_formula_tensor=tensorizer.formulas_to_tensor(
+            formulas, device=device
+        ),
+        physical_candidate_mz=torch.tensor(
+            [f.exact_mass for f in formulas], dtype=torch.float64, device=device
+        ),
     )
 
 
@@ -334,14 +321,6 @@ def collate_spectrum_model_batches(
         explanation_adduct_index=pairs[:, 0],
         explanation_hydrogen_shift=pairs[:, 1],
         target_intensity=torch.cat(targets) if targets else None,
-        precursor_formula_tensor=(
-            torch.cat([item.precursor_formula_tensor for item in items])
-            if all(
-                getattr(item, "precursor_formula_tensor", None) is not None
-                for item in items
-            )
-            else None
-        ),
         precursor_adducts=tuple(
             a for item in items for a in getattr(item, "precursor_adducts", ())
         ),

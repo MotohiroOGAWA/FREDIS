@@ -206,7 +206,6 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             spectrum_output = self.spectrum_model(
                 data.spectrum_batch,
                 reaction_h=encoded.reaction_h,
-                main_adduct_h=encoded.sample_main_adduct_h,
                 collision_energy_h=encoded.collision_energy_h,
                 source_embeddings=encoded.source_embeddings,
                 loss_settings=self.spectrum_loss,

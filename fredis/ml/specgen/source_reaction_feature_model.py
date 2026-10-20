@@ -20,7 +20,6 @@ class SourceReactionFeatures:
     branch_main_adduct_h: Tensor
     pool: ReactionPool
     source_embeddings: Tensor | None = None
-    sample_main_adduct_h: Tensor | None = None
     collision_energy_h: Tensor | None = None
 
 
@@ -37,7 +36,6 @@ class SourceReactionFeatureModel(nn.Module):
         state_dropout: float = 0.0,
         adduct_encoder: nn.Module | None = None,
         collision_energy_encoder: nn.Module | None = None,
-        intensity_main_adduct_dim: int | None = None,
         pattern_smarts: dict[int, str] | None = None,
         reactant_num_layers: int = 2,
         reactant_dropout: float = 0.0,
@@ -75,12 +73,6 @@ class SourceReactionFeatureModel(nn.Module):
             nn.Linear(adduct_encoder.feature_dim, branch_main_adduct_dim),
             nn.GELU(),
             nn.LayerNorm(branch_main_adduct_dim),
-        )
-        intensity_main_adduct_dim = intensity_main_adduct_dim or branch_main_adduct_dim
-        self.intensity_main_adduct_projection = nn.Sequential(
-            nn.Linear(adduct_encoder.feature_dim, intensity_main_adduct_dim),
-            nn.GELU(),
-            nn.LayerNorm(intensity_main_adduct_dim),
         )
         self.decoder = BranchingReactionDecoder(
             hidden_dim,
@@ -160,9 +152,6 @@ class SourceReactionFeatureModel(nn.Module):
             else static_features[0]
         )
         source_embeddings = source if source is not None else static_features[1]
-        sample_adduct = self.intensity_main_adduct_projection(
-            self.adduct_encoder(data.condition_features[:, 0].long())
-        )
         collision_energy = self.collision_energy_encoder(data.condition_features[:, 1])
         group_adduct_index = (
             data.branch_group_adduct_index
@@ -177,6 +166,5 @@ class SourceReactionFeatureModel(nn.Module):
             condition,
             pool,
             source_embeddings,
-            sample_adduct,
             collision_energy,
         )

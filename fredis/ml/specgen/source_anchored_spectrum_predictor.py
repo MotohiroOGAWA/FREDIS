@@ -79,7 +79,6 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         params = dict(reaction_model_params or {})
         spectrum_params = dict(spectrum_model_params or {})
         hidden = params.get("hidden_dim", 128)
-        main_adduct_dim = spectrum_params.get("main_adduct_dim", 128)
         collision_energy_dim = spectrum_params.get("collision_energy_dim", 16)
         mol_params = dict(mol_encoder_params)
         frozen = {str(pid) for pid in (fine_tuning or {}).get("frozen_pattern_ids", [])}
@@ -95,7 +94,9 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         adduct_embedding_dim = spectrum_params.pop("adduct_embedding_dim", 32)
         if type(adduct_embedding_dim) is not int or adduct_embedding_dim < 1:
             raise ValueError("adduct_embedding_dim must be a positive integer")
-        adduct_encoder = AdductEmbeddingLayer(self.adduct_type_strs, adduct_embedding_dim)
+        adduct_encoder = AdductEmbeddingLayer(
+            self.adduct_type_strs, adduct_embedding_dim
+        )
         collision_energy_encoder = CollisionEnergyFeatureLayer(
             collision_energy_dim,
             fc_dims=spectrum_params.pop("ce_fc_dims", (32,)),
@@ -125,7 +126,6 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             max_reaction_count=self.fragmenter.tree_max_reaction_count,
             adduct_encoder=adduct_encoder,
             collision_energy_encoder=collision_energy_encoder,
-            intensity_main_adduct_dim=main_adduct_dim,
             pattern_smarts={
                 pattern.pattern_id: pattern.reactant_smarts for pattern in patterns
             },
@@ -142,7 +142,13 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             **params,
         )
         self.tensorizer = FormulaTensorizer.from_symbols_and_adducts(
-            symbols=self.mol_encoder.symbols, adducts=self.fragmenter.adduct_types
+            symbols=self.mol_encoder.symbols,
+            adducts=tuple(self.fragmenter.adduct_types)
+            + tuple(
+                ion
+                for rule in self.fragmenter.adduct_rule_set.adduct_rules
+                for ion in rule.fragment_ion_adducts
+            ),
         )
         ion_types = tuple(
             dict.fromkeys(
@@ -151,17 +157,37 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 for value in rule.fragment_ion_adducts
             )
         )
-        spectrum_params.setdefault("ion_type_count", len(ion_types))
-        spectrum_params.setdefault(
-            "hydrogen_shift_min", self.fragmenter.adduct_rule_set.hydrogen_shift_min
-        )
-        spectrum_params.setdefault(
-            "hydrogen_shift_max", self.fragmenter.adduct_rule_set.hydrogen_shift_max
-        )
+        shifts = self.fragmenter.adduct_rule_set.hydrogen_shifts
+        if 0 not in shifts:
+            raise ValueError("Probability propagation requires hydrogen shift 0")
+        for rule in self.fragmenter.adduct_rule_set.adduct_rules:
+            if str(rule.adduct_type) not in {
+                str(ion) for ion in rule.fragment_ion_adducts
+            }:
+                raise ValueError(
+                    "Each main adduct must be present among its fragment_ion_adducts"
+                )
+        main_adduct_conditions = {
+            str(rule.adduct_type): [
+                (str(ion), shift)
+                for ion in rule.fragment_ion_adducts
+                for shift in shifts
+            ]
+            for rule in self.fragmenter.adduct_rule_set.adduct_rules
+        }
+        precursor_main_adducts = {
+            value: str(self.fragmenter._resolve_main_adduct_type(Adduct.parse(value)))
+            for value in self.adduct_type_strs
+        }
         from .competitive_spectrum_model import CompetitiveSpectrumModel
 
         self.spectrum_model = CompetitiveSpectrumModel(
-            self.mol_encoder, hidden, **spectrum_params
+            self.mol_encoder,
+            hidden,
+            main_adduct_conditions=main_adduct_conditions,
+            precursor_main_adducts=precursor_main_adducts,
+            formula_tensorizer=self.tensorizer,
+            **spectrum_params,
         )
         self.ion_type_strs = ion_types
         self.set_generation(GenerationSettings.from_dict(generation_params))
@@ -393,6 +419,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 self.tensorizer,
                 sample_branch_group_index=chunk.sample_branch_group_index,
                 ion_type_strs=self.ion_type_strs,
+                annotate=False,
             )
             spectrum_batch = deduplicate_molecular_graphs(
                 spectrum_batch, tuple(source.smiles for source in unique_sources)
@@ -428,10 +455,14 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             spectra = self.spectrum_model(
                 spectrum_batch,
                 reaction_h=features.reaction_h,
-                main_adduct_h=features.sample_main_adduct_h,
                 collision_energy_h=features.collision_energy_h,
                 source_embeddings=features.source_embeddings,
                 molecular_embeddings=molecular,
+            )
+            spectrum_batch = replace(
+                spectrum_batch,
+                physical_candidate_formula_tensor=spectra.formula_tensor,
+                physical_candidate_mz=spectra.mz,
             )
             yield SourceAnchoredSpectrumOutput(
                 selection,

@@ -30,11 +30,15 @@ only lists permitted fragment-ion adducts:
 `fragment_ion_adducts` are required. Every listed fragment-ion adduct applies
 to every neutral fragment; charged fragments get no fragment-ion adducts.
 
-Each explanation is `(fragment, fragment-ion adduct, ΔH)`. Explanations with
-the same final formula and charge share one physical-ion candidate. Their log
-probabilities are summed directly; the fragment log probability is then added
-exactly once. Attention is used only to pool explanation embeddings for the
-intensity head.
+Each structural node has independent output states for every fragment-ion
+adduct × hydrogen-shift condition. Each main adduct owns a separate transition
+head bank; every layer has one weight matrix and bias per output condition.
+Heads consume parent/child molecular embeddings, reaction features and CE,
+using GELU and configurable dropout. Ion/adduct-shift embeddings and pooling
+are not used. Formula-equivalent states are merged only after propagation for
+loss/output. In inference, mmkit computes ion formulas and m/z after prediction;
+training preparation computes annotations for assigning observed targets. Neither
+formula nor m/z controls the transition network or state graph.
 
 ## Molecular and reaction encoding
 

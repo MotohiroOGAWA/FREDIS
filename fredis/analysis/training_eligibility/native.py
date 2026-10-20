@@ -129,13 +129,8 @@ def default_model(chemistry):
         state_dropout=0.0,
     )
     model["spectrum_model_params"].update(
-        state_hidden_dim=16,
-        state_fc_dims=[16],
         transition_fc_dims=[16],
         ce_fc_dims=[16],
-        ion_embedding_dim=8,
-        hydrogen_shift_embedding_dim=8,
-        main_adduct_dim=16,
         collision_energy_dim=16,
     )
     model["fragmenter_params"] = chemistry["fragmenter_params"]

@@ -20,7 +20,7 @@ from fredis.libs.mmkit.mmkit import Compound
 from ..mol.graph_builder import MolGraphBuilder
 
 SCHEMA = "fredis.fragment-tree-training"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class UnresolvedPrecursorError(ValueError):

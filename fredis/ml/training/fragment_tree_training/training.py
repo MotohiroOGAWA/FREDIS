@@ -1216,15 +1216,6 @@ MODEL_OPTIONS = {
     "reaction-num-heads": ("reaction_model_params", "num_heads", int, 4),
     "reaction-state-layers": ("reaction_model_params", "state_num_layers", int, 2),
     "adduct-embedding-dim": ("spectrum_model_params", "adduct_embedding_dim", int, 32),
-    "ion-embedding-dim": ("spectrum_model_params", "ion_embedding_dim", int, 32),
-    "hydrogen-shift-embedding-dim": (
-        "spectrum_model_params",
-        "hydrogen_shift_embedding_dim",
-        int,
-        16,
-    ),
-    "ion-state-hidden-dim": ("spectrum_model_params", "state_hidden_dim", int, 128),
-    "main-adduct-embedding-dim": ("spectrum_model_params", "main_adduct_dim", int, 128),
     "collision-energy-feature-dim": (
         "spectrum_model_params",
         "collision_energy_dim",
@@ -1234,12 +1225,6 @@ MODEL_OPTIONS = {
     "ce-fc-dims": ("spectrum_model_params", "ce_fc_dims", mlp_dims, mlp_dims("32")),
     "ce-center": ("spectrum_model_params", "ce_center", float, 0.0),
     "ce-scale": ("spectrum_model_params", "ce_scale", float, 100.0),
-    "ion-state-fc-dims": (
-        "spectrum_model_params",
-        "state_fc_dims",
-        mlp_dims,
-        mlp_dims("128"),
-    ),
     "transition-fc-dims": (
         "spectrum_model_params",
         "transition_fc_dims",
@@ -1260,8 +1245,6 @@ MODEL_OPTIONS = {
 MODEL_OPTION_HELP = {
     "transition-fc-dims": "Comma-separated transition MLP hidden widths, e.g. 128,64. Empty selects a linear map.",
     "transition-dropout": "Dropout after hidden transition MLP layers.",
-    "ion-state-fc-dims": "Comma-separated adduct x hydrogen-shift combination MLP hidden widths.",
-    "ion-state-hidden-dim": "Combination MLP output width in competitive mode.",
     "ce-fc-dims": "Comma-separated CE MLP hidden widths. Empty selects a linear map.",
     "ce-center": "Normalize CE as (CE - center) / scale; saved in the model.",
     "ce-scale": "Positive CE normalization scale (default 100). Does not convert measurement units.",

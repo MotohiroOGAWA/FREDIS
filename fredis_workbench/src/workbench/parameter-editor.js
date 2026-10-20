@@ -14,7 +14,6 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   const descriptions={
     ce_fc_dims:'CE MLP hidden widths, e.g. 32, 16; empty means linear. Input is (CE - center) / scale.',
     ce_center:'CE normalization center.',ce_scale:'Positive CE normalization scale. 100 maps CE 0..100 to 0..1 when center is zero.',
-    state_fc_dims:'Hidden widths of the fragment ion adduct × hydrogen shift combination MLP.',
     transition_fc_dims:'Hidden widths of the competing transition score MLP. Output is one logit per transition.',transition_dropout:'Dropout in the transition MLP.',propagation_steps:'Number of Markov probability propagation steps, including self transitions.',
     architecture:'Spectrum generator architecture. Source-anchored reaction models operate on primitive reactions.',
     max_reaction_count:'Maximum number of primitive reactions in a normalized fragment reaction state.',
@@ -42,13 +41,13 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     branch_path_threshold:'Minimum cumulative path probability retained by fragment tree search. Zero disables threshold pruning. Saved with the model; prediction can override it.',
     max_fragment_nodes:'Maximum fragment nodes shared by the complete (compound, main adduct) branch group. Saved with the model; prediction can override it.',
     peak_intensity_threshold:'Minimum max-normalized intensity retained in generated spectra. Does not affect training loss.',
-    ion_embedding_dim:'Embedding width for fragment-ion-adduct identity.',hydrogen_shift_embedding_dim:'Embedding width for the net hydrogen shift.',state_hidden_dim:'Output width of the ion combination MLP.',main_adduct_dim:'Main-adduct feature width passed separately to the intensity head.',collision_energy_dim:'Collision-energy feature width passed separately to the intensity head.',
+    collision_energy_dim:'Collision-energy feature width passed separately to the intensity head.',
     generation_params:'Spectrum generation settings, separate from the model architecture. They are saved with the model and used by validation and prediction; prediction can override them.',
     name:'Human-readable name stored in this configuration.',
     freeze_mol_encoder:'Freeze the molecular encoder during training.',
   };
   const templates={patterns:{name:'new_pattern',reactant_smarts:'[!#1:1]-[!#1:2]',products:[{name:'product',smarts:'[!#1:1]'}]},products:{name:'product',smarts:'[!#1:1]'},adduct_rules:{name:'new_rule',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']},fragment_ion_adducts:'[M+H]+',symbols:'C'};
-  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],ion_embedding_dim:32,hydrogen_shift_embedding_dim:16,state_hidden_dim:128,main_adduct_dim:128,collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,state_fc_dims:[128],transition_fc_dims:[128,64],transition_dropout:0,propagation_steps:6},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
+  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,transition_fc_dims:[128,64],transition_dropout:0,propagation_steps:6},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
   // Purely cosmetic sub-headings for the sections with the most fields; any
   // field not listed here (e.g. a newer option) still renders, just ungrouped.
   const fieldGroups={
@@ -59,10 +58,9 @@ function createParameterEditor(container, initial, kind = "training", editReacti
       'Branch Scorer · Architecture':['state_num_layers'],
     },
     spectrum_model_params:{
-      'Transition MLP':['transition_fc_dims','transition_dropout','propagation_steps'],
-      'Adduct Embedding':['adduct_embedding_dim','main_adduct_dim'],
+      'Condition-specific Transition MLP':['transition_fc_dims','transition_dropout','propagation_steps'],
+      'Adduct Embedding':['adduct_embedding_dim'],
       'Collision Energy MLP':['collision_energy_dim','ce_fc_dims','ce_center','ce_scale'],
-      'Ion combination MLP':['ion_embedding_dim','hydrogen_shift_embedding_dim','state_hidden_dim','state_fc_dims'],
       'Intensity Head · Architecture':['descriptors'],
     },
     generation_params:{
@@ -96,7 +94,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
         input.onchange=()=>{parent[key]=molDescriptors.filter(item=>item===name?input.checked:parent[key].includes(item));};wrapper.append(input,node('span',name));group.append(wrapper);}
       host.append(group);return;
     }
-    if(['ce_fc_dims','state_fc_dims','transition_fc_dims'].includes(key)&&Array.isArray(value)){
+    if(['ce_fc_dims','transition_fc_dims'].includes(key)&&Array.isArray(value)){
       const wrapper=node('label'),label=node('span',title(key));label.dataset.help=help(key,full);const input=node('input');input.type='text';input.dataset.parameterPath=full;input.value=value.join(', ');input.placeholder='e.g. 128, 64 (empty = linear)';input.oninput=()=>{const dims=input.value.trim()?input.value.split(',').map(v=>/^\d+$/.test(v.trim())?Number(v):NaN):[];if(dims.some(v=>!Number.isSafeInteger(v)||v<1)){input.setCustomValidity('Enter comma-separated positive integers.');return;}input.setCustomValidity('');parent[key]=dims;};wrapper.append(label,input);host.append(wrapper);return;
     }
     if(Array.isArray(value)||value&&typeof value==='object'){

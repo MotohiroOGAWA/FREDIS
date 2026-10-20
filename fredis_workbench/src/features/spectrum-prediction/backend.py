@@ -145,7 +145,7 @@ def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=())
         if node not in local_index or candidate_sample_index[entry] != sample:
             continue
         probability = float(ion_probability[entry])
-        if probability < threshold:
+        if probability < threshold or not bool((candidate_formula_tensor[entry, :-1] >= 0).all()) or candidate_mz[entry] <= 0:
             continue
         annotations_by_node.setdefault(local_index[node], []).append(
             {
@@ -268,7 +268,7 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
             # Below the trained ion confidence threshold: the same unrelated
             # adduct/hydrogen-shift candidate this model now learns to push
             # toward zero, kept out of the predicted spectrum shown here.
-            if intensity >= intensity_threshold
+            if intensity >= intensity_threshold and bool((formula_row[:-1] >= 0).all()) and mz > 0
         ),
         key=lambda peak: peak["mz"],
     )

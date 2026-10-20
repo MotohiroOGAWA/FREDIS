@@ -1,102 +1,117 @@
 # Source-anchored competitive fragmentation model
 
-The current architecture is `fragment-tree-competitive-ion`. Prepared tensors,
-analysis artifacts and fine-tuning metadata start at schema/version **1**.
-There is one supported model path; older encodings and format conversions are
-not implemented. Model configurations are plain `model_config` dictionaries.
+The architecture is `fragment-tree-competitive-ion`. Prepared training tensors
+use `fredis.fragment-tree-training`, version **2**. Regenerate prepared data and
+train a new checkpoint for this architecture; retired ion-embedding models are
+not converted or silently accepted.
 
-## Reaction features and candidate graph
+## Source reactions and search
 
-Each source reaction instance has a pattern-owned Reactant Graphormer. Its
-inputs are raw chemical atom features, fixed SMARTS-position one-hot features,
-and optionally external-neighborhood and whole-molecule features. External
-neighborhoods use the original source graph, block paths through other SMARTS
-atoms and support any non-negative `neighborhood_hops`, including 4 and above.
-No fixed 1/2/3-hop CSR tensors are prepared or stored.
+Each reaction instance is encoded from the original source molecule using a
+pattern-owned external-neighborhood encoder, reactant Graphormer, optional
+global attention, and pattern readout. Reaction-set attention uses a BOS token.
+The main precursor adduct conditions branch selection; CE does not change the
+structural search. Each (molecule, main adduct) shares a branch graph across CE.
 
-The pattern readout produces `h_reaction` in a common feature space. The
-reaction-set Set Transformer summarizes selected reactions with a BOS token;
-that state summary is separate from `h_reaction`. Main adduct conditions the
-proposal decoder, while CE does not change proposal features.
+Batch prediction computes conflict, invalidation, and dominance relations in
+CPU preparation workers, once per unique molecule. Inference reuses them.
+Search retains the best proposal score per reaction set, then restores all
+valid edges between accepted sets before materializing chemical structures.
 
-The decoder proposes bounded reaction sets, retaining the best cumulative
-proposal score for duplicate sets. It then retains **all chemically valid
-transitions between accepted sets**, including alternate parents. RDKit
-materializes accepted reaction sets after decoding. Distinct sets keep distinct
-internal states even when their product SMILES match; molecular embeddings can
-still be shared. Preparation includes every exhaustively enumerated state,
-including alternatives without observed peaks.
+## Independent condition heads
 
-## Competitive ion transitions
+There is one independent transition-head bank per main adduct. Its conditions
+are the Cartesian product of that rule's `fragment_ion_adducts` and the inclusive
+`hydrogen_shift_min ... hydrogen_shift_max` range. Conditions are ordered by ion
+first, then increasing hydrogen shift.
 
-Each structural state has physical ion candidates with deduplicated
-`fragment_ion_adduct × hydrogen_shift` explanations. Both fields are embedded
-and passed through a configurable combination MLP. Equivalent explanations
-share a physical parent state, whose features are their mean; outgoing child
-explanations retain their individual combination embeddings.
+For example, `[M+Na]+` with two fragment-ion adducts and six shifts has 12
+conditions. Each layer has `weight[12, output_width, input_width]` and
+`bias[12, output_width]`. `[M+H]+` uses another bank with entirely separate
+parameters. No learned fragment-adduct, hydrogen-shift, or ion-state embedding
+is used. Hidden layers use GELU followed by configurable dropout; the last
+layer produces an event logit.
 
-For every structural edge and valid parent/child ion pair, a transition MLP
-scores the parent and child molecular embeddings, optional fragment descriptors,
-reused `h_reaction`, parent ion features, child combination features, main adduct
-and CE. Transitions must retain charge and have elementwise nonnegative neutral
-loss. These constraints supplement structural compatibility and adduct rules;
-they are not a complete model of ion chemistry.
+Inputs are parent molecular embedding, child molecular embedding, the added
+reaction embedding, and CE features. Optional spectrum descriptors are appended
+to each molecular embedding after signed-log scaling. The learned precursor
+adduct embedding remains a condition of branch search, not an input to these
+transition heads. The head bank itself supplies main-adduct specificity.
 
-All outgoing events compete with a learned self transition in a source-wise
-softmax. Duplicate enumerated events are excluded. Equivalent explanations and
-alternative paths contribute by **addition**, not by maximum-path selection.
+With graph width 64, reaction width 128, CE width 16, no descriptors, and hidden
+widths `[128,64]`, each bank contains weights `[12,128,272]`, `[12,64,128]`, and
+`[12,1,64]`. These widths are configurable. The source molecule in the transition
+input means the immediate parent structural node; the child is the product of
+that structural transition.
 
-Starting from the observed precursor ion, probabilities propagate for a fixed
-number of steps:
+## State graph and probability flow
 
-```text
-p[t + 1, child] = sum_parent p[t, parent] * T[parent, child]
+Every structural node has the full ion/shift condition grid, including conditions
+that later give invalid formulas. Every structural edge connects its parent
+conditions to all child conditions. Child condition selects the scoring weights.
+No formula, mass, charge, or elemental-neutral-loss test controls neural states,
+edges, or logits. Every state also has a self event scored using the same bank,
+the state's condition, two copies of its molecular embedding, zero reaction
+features, and CE. Outgoing events and persistence compete in a parent-wise
+softmax. Leaf states have only their self event.
+
+Initial probability is placed on the original source-root state with fragment
+adduct equal to the main adduct and hydrogen shift zero, using categorical
+labels only. The ion rules must include that state. Initialization no longer
+matches downstream neutral-loss states by formula. The declared precursor
+adduct continues to be validated in CPU input preparation, but does not change
+this main-adduct source-root initialization.
+
+`propagation_steps` applications of the transition matrix produce final state
+occupancies. Self events count as propagation steps. Alternative pathways add
+probability. Intermediate occupancy is not accumulated as intensity.
+
+## Formula and m/z annotations
+
+Inference computes mmkit annotations after scoring and propagation:
+
+```python
+shift = Adduct.from_dict({'H': hydrogen_shift})
+formula = fragment_ion_adduct.apply_to_formula(
+    shift.apply_to_formula(fragment_compound.formula)
+).normalized
+mz = formula.exact_mass
 ```
 
-Initialization prefers a matching source-root ion. If a neutral-loss precursor
-matches only downstream structural states, its initial mass is distributed
-uniformly among those matches. Self transitions mean persistence for one step;
-leaf states persist with probability one. `propagation_steps` includes self
-transitions and is separate from the maximum reaction count.
+These values are output annotations, not learned transition inputs. Training
+preparation computes the same annotations early solely to assign observed
+peak targets. Equivalent formulas are merged only for supervision and output,
+not to merge neural states before propagation. Invalid negative-element
+formulas and non-positive masses are omitted from exported peaks. The internal
+probability mass on such states remains visible and is not redistributed during
+propagation. Display normalization uses valid formula peaks only.
 
-Final probabilities are summed by sample and output formula before spectrum
-comparison or peak-intensity filtering. Candidate intensities are divided by the
-maximum formula-grouped probability in that sample. The spectrum objective is
-cross entropy against sum-normalized target intensities plus a weighted cosine
-term; proposal branch loss remains separate. There is no independent intensity
-regressor, fragment/state BCE classifier or ion-confidence threshold. Output
-confidence is one for the viewer interface, not a learned presence probability.
-Transition outputs retain each event's source, target, explanation, reaction and
-probability; self events use explanation/reaction index -1.
+## Loss
 
-## Configurable MLPs
+Branch supervision is positive path MIL plus weighted weak-negative softplus.
+The spectrum objective sums probabilities by sample/formula, compares them with
+sum-normalized observed intensities by cross entropy, and adds a weighted cosine
+loss. Teacher intensities for equivalent candidates use maximum, not sum.
+The complete probability distribution, including invalid/unobserved states,
+competes for mass; there is no independent intensity or confidence classifier.
+Confidence is one in the viewer interface.
 
-All three MLPs use `build_fc_layers` from `common/torch_utils/nn_utils.py`:
-Linear/ReLU/Dropout hidden blocks followed by a linear output. Widths are
-comma-separated positive integers; an empty list selects a linear map.
+Training uses prepared structural graphs. Spectrum loss differentiates through
+the transition heads, CE, reaction features and molecular encoders, but not
+through discrete proposal selection or RDKit materialization.
 
-CE is exactly `MLP((CE - ce_center) / ce_scale)`. There is no sinusoidal encoding
-or post-MLP LayerNorm. Defaults center 0 and scale 100 map CE 0..100 to 0..1;
-normalization does not convert instrument units or fit dataset statistics.
+## CLI and Workbench
 
-| CLI argument | Spectrum model setting | Default |
+| CLI argument | Setting | Default |
 |---|---|---|
 | `--transition-fc-dims` | `transition_fc_dims` | `128,64` |
 | `--transition-dropout` | `transition_dropout` | `0` |
 | `--propagation-steps` | `propagation_steps` | `6` |
-| `--ion-state-fc-dims` | `state_fc_dims` | `128` |
-| `--ion-state-hidden-dim` | `state_hidden_dim` (output width) | `128` |
 | `--ce-fc-dims` | `ce_fc_dims` | `32` |
-| `--adduct-embedding-dim` | `adduct_embedding_dim` | `32` |
 | `--collision-energy-feature-dim` | `collision_energy_dim` | `16` |
 | `--ce-center` | `ce_center` | `0` |
 | `--ce-scale` | `ce_scale` | `100` |
+| `--adduct-embedding-dim` | branch-search `adduct_embedding_dim` | `32` |
 
-Workbench exposes these fields under Spectrum Model Params. Architecture and
-normalization are saved with the checkpoint. Candidate proposal pruning limits
-the states available to probability propagation, so coverage and predictive
-accuracy need evaluation on real datasets.
-
-Precursor adduct identity uses `adduct_embedding_dim` before separate branch and
-spectrum projections. The CE MLP has no dropout setting. In Workbench, adduct
-and CE settings are collapsed by default.
+CE is a dropout-free ReLU MLP of `(CE - ce_center) / ce_scale`. Workbench exposes
+condition-head widths and dropout; branch adduct and CE settings start collapsed.
