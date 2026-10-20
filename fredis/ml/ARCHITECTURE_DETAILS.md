@@ -495,8 +495,9 @@ The example's sample-specific structural edges number `4+4+2=10`:
 ```text
 break events: 10 * 12 * 12 = 1440
 self events:                 132
-all source/target/logit rows: 1572
+Transition Head rows:        1572
 transition inputs:           [1572,272]
+additional sink logits:      one per terminal state
 ```
 
 The main adduct chooses the bank and the child condition chooses a weight slice.
@@ -511,17 +512,21 @@ main adduct and shift 0, using categorical labels. Rules must contain this
 condition. Formula-based matching to downstream neutral-loss precursor states
 is not used. CPU input reachability checks still validate declared precursors.
 
-```python
-state = initial_probability  # [132], sum 1 per sample, 3 over this batch
-for _ in range(propagation_steps):
-    contribution = state[source] * transition_probability  # [1572]
-    state = zeros(132).scatter_add(0, target, contribution)  # [132]
-```
+Process each state once in topological order, after all parents have contributed.
+Retain `incoming_probability * P(self)` as its final mass; never propagate Self
+mass again. Add break-event mass to child incoming probabilities.
 
-The same transition matrix is reused for six steps by default. For `P->F=0.7`,
-`P->P=0.3`, and `F->F=1`, occupancies are `(1,0)`, `(0.3,0.7)`, `(0.09,0.91)`.
-Final occupancy is used, not accumulated intermediate arrivals. Internal mass
-is conserved, including mass on conditions later found chemically invalid.
+Even terminal states obtain a Self logit from the Transition Head. Each
+main-adduct/ion/shift condition has a learnable sink logit initialized to zero.
+Leaves use `softmax([self_logit, sink_logit])`. Sink denotes unobserved
+disappearance: its mass is absorbed and excluded from spectrum intensities.
+For each sample, `sum(final_probability) + sink_probability = sum(initial_probability)`.
+The `probability_mass_error` metric includes sink. Cyclic break graphs are rejected.
+Output `sink_probability` is per sample. Diagnostics use target -1 for sink,
+reaction index -1 for Self, and reaction index -2 for sink.
+
+For `P->F=0.7`, `P(self)=0.3`, terminal `F(self)=0.6`, and `F(sink)=0.4`,
+final mass is 0.3 at P, 0.42 at F, and 0.28 in sink.
 
 ## 14. Formula annotation, aggregation and export
 
@@ -699,7 +704,6 @@ learned proposal graphs.
 | `ce_fc_dims`, `ce_center`, `ce_scale` | `--ce-fc-dims`, `--ce-center`, `--ce-scale` | `[32]`, 0, 100 |
 | `transition_fc_dims` | `--transition-fc-dims` | `[128,64]`, per-condition GELU MLP |
 | `transition_dropout` | `--transition-dropout` | 0 |
-| `propagation_steps` | `--propagation-steps` | 6 |
 | Spectrum `descriptors` | `--intensity-descriptors` | `[]` |
 | Branch / weak-negative / MIL temperature | `--branch-weight`, `--negative-weight`, `--branch-mil-temperature` | 1, 0.5, 0.1 |
 | Spectrum / cosine weights | `--intensity-loss-weight`, `--cosine-loss-weight` | 1, 1 |
@@ -729,7 +733,7 @@ Code: [CLI settings](training/fragment_tree_training/training.py),
 - Parent ion condition has no additional learned input channel.
 - Formulas/masses annotate and supervise; they do not constrain learned transition topology.
 - Initialization is categorical main-adduct/zero-shift source-root initialization.
-- Probabilities represent final occupancy after fixed-step propagation.
+- Probabilities represent final Self mass after a single topological DAG pass.
 - Formula aggregation is post-propagation; display filtering does not restore discarded mass.
 - Spectrum supervision is limited to represented candidate formulas.
 - Spectrum loss does not backpropagate through structural proposal selection.

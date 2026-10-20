@@ -1232,7 +1232,6 @@ MODEL_OPTIONS = {
         mlp_dims("128,64"),
     ),
     "transition-dropout": ("spectrum_model_params", "transition_dropout", float, 0.0),
-    "propagation-steps": ("spectrum_model_params", "propagation_steps", int, 6),
     "branch-path-threshold": ("generation_params", "branch_path_threshold", float, 0.0),
     "max-fragment-nodes": ("generation_params", "max_fragment_nodes", int, 100),
     "peak-intensity-threshold": (
@@ -1249,7 +1248,6 @@ MODEL_OPTION_HELP = {
     "ce-center": "Normalize CE as (CE - center) / scale; saved in the model.",
     "ce-scale": "Positive CE normalization scale (default 100). Does not convert measurement units.",
     "collision-energy-feature-dim": "CE MLP output width.",
-    "propagation-steps": "Number of Markov propagation steps including self transitions, not reaction count.",
 }
 # Training objective of the spectrum model: (default, help).
 SPECTRUM_LOSS_OPTIONS = {

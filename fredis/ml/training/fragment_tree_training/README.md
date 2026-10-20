@@ -48,8 +48,13 @@ MIL with `negative_weight * mean(softplus(negative_logit))`.
 ## Competitive spectrum objective
 
 Every child `(fragment_ion_adduct, hydrogen_shift)` state and self
-transition competes in a parent-wise softmax. Fixed-step probability propagation
-sums all incoming paths. Final ion probabilities are grouped by output formula.
+transition competes in a parent-wise softmax. Terminal Self competes with a
+learnable sink logit per main-adduct/ion/shift condition. Topological DAG traversal
+sums all incoming paths before processing each state once. Self mass is final;
+break mass flows to children; terminal sink mass is unobserved and absorbed.
+Final ion probabilities are grouped by output formula only after traversal.
+Final mass plus sink mass equals initial mass for each sample. Spectrum loss
+backpropagates through transition and sink logits.
 Two equally weighted objectives are added: one includes the precursor peak,
 and one excludes its entire formula group and those of its hydrogen-shift
 variants. Each uses

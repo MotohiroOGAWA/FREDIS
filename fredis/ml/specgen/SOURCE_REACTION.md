@@ -51,8 +51,13 @@ conditions to all child conditions. Child condition selects the scoring weights.
 No formula, mass, charge, or elemental-neutral-loss test controls neural states,
 edges, or logits. Every state also has a self event scored using the same bank,
 the state's condition, two copies of its molecular embedding, zero reaction
-features, and CE. Outgoing events and persistence compete in a parent-wise
-softmax. Leaf states have only their self event.
+features, and CE. At nonterminal states, break events and Self compete in a
+parent-wise softmax. At terminal states, Self competes with a sink event.
+Each main-adduct bank has one learnable sink logit per ion/shift condition,
+initialized to zero. Terminal probabilities are
+`P(self) = exp(self_logit) / (exp(self_logit) + exp(sink_logit))` and
+`P(sink) = 1 - P(self)`. Terminal Self is always scored by the Transition Head.
+Sink is unobserved disappearance and never contributes to spectrum intensity.
 
 Initial probability is placed on the original source-root state with fragment
 adduct equal to the main adduct and hydrogen shift zero, using categorical
@@ -61,9 +66,17 @@ matches downstream neutral-loss states by formula. The declared precursor
 adduct continues to be validated in CPU input preparation, but does not change
 this main-adduct source-root initialization.
 
-`propagation_steps` applications of the transition matrix produce final state
-occupancies. Self events count as propagation steps. Alternative pathways add
-probability. Intermediate occupancy is not accumulated as intensity.
+The DAG is processed once in topological order. All incoming parent contributions
+are summed before a state is visited. `incoming_probability * P(self)` is retained
+as that state's final probability and is never propagated again. Break mass is
+added to child incoming probabilities. At leaves, `incoming_probability * P(sink)`
+is absorbed. For each sample, final retained mass plus sink mass equals initial
+mass. Ion/shift states remain independent throughout propagation; formula groups
+are summed only afterward. Cyclic break graphs are rejected.
+
+Output `sink_probability` stores total sink mass per sample. Transition diagnostics
+use target `-1` for sink, reaction `-1` for final Self and reaction `-2` for sink.
+`probability_mass_error` includes sink; it does not renormalize retained mass.
 
 ## Formula and m/z annotations
 
@@ -110,7 +123,6 @@ through discrete proposal selection or RDKit materialization.
 |---|---|---|
 | `--transition-fc-dims` | `transition_fc_dims` | `128,64` |
 | `--transition-dropout` | `transition_dropout` | `0` |
-| `--propagation-steps` | `propagation_steps` | `6` |
 | `--ce-fc-dims` | `ce_fc_dims` | `32` |
 | `--collision-energy-feature-dim` | `collision_energy_dim` | `16` |
 | `--ce-center` | `ce_center` | `0` |

@@ -87,7 +87,8 @@ class SpectrumModelBatch:
 class SpectrumModelOutput:
     """State predictions and optional sparse transition diagnostics.
 
-    Transition endpoints index state rows. Reaction index -1 denotes persistence.
+    Transition endpoints index state rows; target -1 denotes sink.
+    Reaction index -1 denotes final Self, -2 denotes terminal sink.
     """
 
     intensity: Tensor
@@ -102,6 +103,7 @@ class SpectrumModelOutput:
     transition_target_index: Tensor | None = None
     transition_probability: Tensor | None = None
     transition_reaction_index: Tensor | None = None
+    sink_probability: Tensor | None = None  # Total absorbed sink mass per sample.
 
 
 @dataclass(frozen=True)

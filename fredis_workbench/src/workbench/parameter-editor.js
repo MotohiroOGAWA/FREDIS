@@ -14,7 +14,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   const descriptions={
     ce_fc_dims:'CE MLP hidden widths, e.g. 32, 16; empty means linear. Input is (CE - center) / scale.',
     ce_center:'CE normalization center.',ce_scale:'Positive CE normalization scale. 100 maps CE 0..100 to 0..1 when center is zero.',
-    transition_fc_dims:'Hidden widths of the competing transition score MLP. Output is one logit per transition.',transition_dropout:'Dropout in the transition MLP.',propagation_steps:'Number of Markov probability propagation steps, including self transitions.',
+    transition_fc_dims:'Hidden widths of the competing transition score MLP. Output is one logit per transition.',transition_dropout:'Dropout in the transition MLP.',
     architecture:'Spectrum generator architecture. Source-anchored reaction models operate on primitive reactions.',
     max_reaction_count:'Maximum number of primitive reactions in a normalized fragment reaction state.',
     precursor_candidate_max_reaction_count:'Maximum reaction count used to find candidates for the observed precursor.',
@@ -47,7 +47,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     freeze_mol_encoder:'Freeze the molecular encoder during training.',
   };
   const templates={patterns:{name:'new_pattern',reactant_smarts:'[!#1:1]-[!#1:2]',products:[{name:'product',smarts:'[!#1:1]'}]},products:{name:'product',smarts:'[!#1:1]'},adduct_rules:{name:'new_rule',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']},fragment_ion_adducts:'[M+H]+',symbols:'C'};
-  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,transition_fc_dims:[128,64],transition_dropout:0,propagation_steps:6},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
+  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,transition_fc_dims:[128,64],transition_dropout:0},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
   // Purely cosmetic sub-headings for the sections with the most fields; any
   // field not listed here (e.g. a newer option) still renders, just ungrouped.
   const fieldGroups={
@@ -58,7 +58,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
       'Branch Scorer · Architecture':['state_num_layers'],
     },
     spectrum_model_params:{
-      'Condition-specific Transition MLP':['transition_fc_dims','transition_dropout','propagation_steps'],
+      'Condition-specific Transition MLP':['transition_fc_dims','transition_dropout'],
       'Adduct Embedding':['adduct_embedding_dim'],
       'Collision Energy MLP':['collision_energy_dim','ce_fc_dims','ce_center','ce_scale'],
       'Intensity Head · Architecture':['descriptors'],

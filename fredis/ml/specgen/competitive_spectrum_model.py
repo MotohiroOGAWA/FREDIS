@@ -34,13 +34,58 @@ def _adduct_without_hydrogen(adduct_type):
     )
 
 
-def propagate_probability(initial, source, target, probability, steps):
-    state = initial
-    for _ in range(steps):
-        state = state.new_zeros(state.shape).scatter_add_(
-            0, target, state[source] * probability
+def propagate_probability(initial, source, target, probability):
+    """Process each DAG state once; self absorbs, target -1 denotes terminal sink.
+
+    Kahn frontiers ensure all parents contribute before a state is processed.
+    Only topology is inspected on CPU; probability operations retain autograd.
+    Returns final retained mass and sink mass, both indexed by state.
+    """
+    count = initial.numel()
+    sources = source.detach().cpu().tolist()
+    targets = target.detach().cpu().tolist()
+    outgoing = [[] for _ in range(count)]
+    children = [[] for _ in range(count)]
+    indegree = [0] * count
+    for event, (parent, child) in enumerate(zip(sources, targets)):
+        if not 0 <= parent < count or not -1 <= child < count:
+            raise ValueError("Invalid probability event endpoint")
+        outgoing[parent].append(event)
+        if child >= 0 and child != parent:
+            children[parent].append(child)
+            indegree[child] += 1
+    frontier = [state for state, degree in enumerate(indegree) if degree == 0]
+    levels = []
+    visited = 0
+    while frontier:
+        levels.append([event for state in frontier for event in outgoing[state]])
+        visited += len(frontier)
+        following = []
+        for parent in frontier:
+            for child in children[parent]:
+                indegree[child] -= 1
+                if indegree[child] == 0:
+                    following.append(child)
+        frontier = following
+    if visited != count:
+        raise ValueError("Fragment probability graph must be a DAG")
+
+    incoming = initial
+    final = initial * 0
+    sink = initial * 0
+    for events in levels:
+        index = torch.tensor(events, dtype=torch.long, device=source.device)
+        parents, children_index = source[index], target[index]
+        mass = incoming[parents] * probability[index]
+        self_event = children_index == parents
+        sink_event = children_index == -1
+        break_event = ~(self_event | sink_event)
+        final = final.index_add(0, parents[self_event], mass[self_event])
+        sink = sink.index_add(0, parents[sink_event], mass[sink_event])
+        incoming = incoming.index_add(
+            0, children_index[break_event], mass[break_event]
         )
-    return state
+    return final, sink
 
 
 def merge_candidate_peaks(output):
@@ -109,15 +154,11 @@ class CompetitiveSpectrumModel(nn.Module):
         collision_energy_dim=16,
         transition_fc_dims=(128, 64),
         transition_dropout=0.0,
-        propagation_steps=6,
         descriptors=(),
     ):
         super().__init__()
-        if type(propagation_steps) is not int or propagation_steps < 1:
-            raise ValueError("propagation_steps must be a positive integer")
         self.formula_tensorizer = formula_tensorizer
         self.mol_encoder = mol_encoder
-        self.propagation_steps = propagation_steps
         self.main_adduct_conditions = {
             key: tuple(values) for key, values in main_adduct_conditions.items()
         }
@@ -145,6 +186,14 @@ class CompetitiveSpectrumModel(nn.Module):
                     tuple(transition_fc_dims),
                     transition_dropout,
                 )
+                for main, conditions in self.main_adduct_conditions.items()
+            }
+        )
+        # Terminal disappearance competes with Self. A separate scalar per
+        # main-adduct/ion/shift condition avoids forcing terminal survival to 1.
+        self.sink_logits = nn.ParameterDict(
+            {
+                self.head_index[main]: nn.Parameter(torch.zeros(len(conditions)))
                 for main, conditions in self.main_adduct_conditions.items()
             }
         )
@@ -187,7 +236,7 @@ class CompetitiveSpectrumModel(nn.Module):
         ) = self._enumerate_transitions(
             data, state_node_index, state_sample_index, sample_count, device
         )
-        source, target, probabilities, ids = self._score_transitions(
+        source, target, probabilities, event_reactions = self._score_transitions(
             data,
             molecular,
             state_node_index,
@@ -198,8 +247,17 @@ class CompetitiveSpectrumModel(nn.Module):
             reaction_target_index,
             reaction_index,
         )
-        final_probability = propagate_probability(
-            initial_probability, source, target, probabilities, self.propagation_steps
+        final_probability, state_sink_probability = propagate_probability(
+            initial_probability, source, target, probabilities
+        )
+        sink_probability = final_probability.new_zeros(sample_count).scatter_add_(
+            0, state_sample_index, state_sink_probability
+        )
+        retained_probability = final_probability.new_zeros(sample_count).scatter_add_(
+            0, state_sample_index, final_probability
+        )
+        initial_mass = initial_probability.new_zeros(sample_count).scatter_add_(
+            0, state_sample_index, initial_probability
         )
         if data.target_intensity is None:
             from .fragment_spectrum_model import annotate_ion_conditions
@@ -223,14 +281,11 @@ class CompetitiveSpectrumModel(nn.Module):
             "num_ion_states": final_probability.new_tensor(
                 float(state_count)
             ),
+            "sink_probability": sink_probability.mean(),
+            "retained_probability": retained_probability.mean(),
             "probability_mass_error": (
-                final_probability.new_zeros(sample_count).scatter_add_(
-                    0, state_sample_index, final_probability
-                )
-                - 1
-            )
-            .abs()
-            .max(),
+                retained_probability + sink_probability - initial_mass
+            ).abs().max(),
         }
         # No independent presence classifier: confidence gating is inapplicable.
         return SpectrumModelOutput(
@@ -245,9 +300,8 @@ class CompetitiveSpectrumModel(nn.Module):
             transition_source_index=source,
             transition_target_index=target,
             transition_probability=probabilities,
-            transition_reaction_index=torch.cat(
-                (reaction_index, torch.full_like(ids, -1))
-            ),
+            transition_reaction_index=event_reactions,
+            sink_probability=sink_probability,
         )
 
     def _encode_molecules(self, data, source_embeddings, molecular_embeddings):
@@ -401,6 +455,7 @@ class CompetitiveSpectrumModel(nn.Module):
         )
         sample_values = samples.tolist()
         logits = molecular.new_zeros(source.numel())
+        sink_by_event = molecular.new_zeros(source.numel())
         for main, conditions in self.main_adduct_conditions.items():
             rows = [
                 i for i, sample in enumerate(sample_values) if mains[sample] == main
@@ -424,7 +479,20 @@ class CompetitiveSpectrumModel(nn.Module):
             logits[index] = self.transition_heads[self.head_index[main]](
                 inputs[index], condition
             )
-        return source, target, segment_softmax(logits, source, count), ids
+            sink_by_event[index] = self.sink_logits[self.head_index[main]][condition]
+        terminal = torch.ones(count, dtype=torch.bool, device=molecular.device)
+        terminal[reaction_source_index] = False
+        leaves = terminal.nonzero().flatten()
+        # Self rows follow break rows and carry the state's own condition.
+        sink = sink_by_event[reaction_source_index.numel() + leaves]
+        source = torch.cat((source, leaves))
+        target = torch.cat((target, torch.full_like(leaves, -1)))
+        logits = torch.cat((logits, sink))
+        # Reaction -1 is final Self; -2 is unobserved terminal disappearance.
+        event_reactions = torch.cat(
+            (reaction_index, torch.full_like(ids, -1), torch.full_like(leaves, -2))
+        )
+        return source, target, segment_softmax(logits, source, count), event_reactions
 
     def _spectrum_loss(
         self,

@@ -13,20 +13,23 @@ from .TestReactionPipeline import config,chemistry
 def competitive_config():
     value=config()
     value['spectrum_model_params'].update(ce_fc_dims=[12,8],collision_energy_dim=8,ce_scale=100.,ce_center=0.,
-        transition_fc_dims=[16,8],transition_dropout=0.,propagation_steps=3)
+        transition_fc_dims=[16,8],transition_dropout=0.)
     return value
 
 
 def test_flow_competes_and_adds_diamond_paths():
-    # 0 -> 1/2 -> 3. Self transitions compete too; mass must remain one.
-    source=torch.tensor([0,0,0,1,1,2,2,3]);target=torch.tensor([0,1,2,1,3,2,3,3])
-    logits=torch.zeros(8,requires_grad=True)
+    # Scrambled IDs: 3 -> 2/0 -> 1, including terminal Self and sink.
+    source=torch.tensor([3,3,3,2,2,0,0,1,1])
+    target=torch.tensor([3,2,0,2,1,0,1,1,-1])
+    logits=torch.zeros(9,requires_grad=True)
     probs=segment_softmax(logits,source,4)
-    torch.testing.assert_close(probs[:3],torch.full((3,),1/3))
-    final=propagate_probability(torch.tensor([1.,0.,0.,0.]),source,target,probs,2)
-    torch.testing.assert_close(final.sum(),torch.tensor(1.))
-    torch.testing.assert_close(final[3],torch.tensor(1/3))
-    (-final[3].log()).backward();assert logits.grad.abs().sum()>0
+    initial=torch.tensor([0.,0.,0.,1.])
+    final,sink=propagate_probability(initial,source,target,probs)
+    torch.testing.assert_close(final,torch.tensor([1/6,1/6,1/6,1/3]))
+    torch.testing.assert_close(sink,torch.tensor([0.,1/6,0.,0.]))
+    torch.testing.assert_close(final.sum()+sink.sum(),initial.sum())
+    (-final[1].log()).backward()
+    assert torch.isfinite(logits.grad).all() and logits.grad.abs().sum()>0
 
 
 def test_ce_is_normalized_scalar_mlp_and_roundtrips():
@@ -48,6 +51,22 @@ def test_competitive_training_prediction_and_checkpoint():
         collision_energy_h=features.collision_energy_h,source_embeddings=features.source_embeddings)
     assert torch.isfinite(output.loss) and output.metrics['probability_mass_error']<1e-5
     output.loss.backward()
+    assert any(p.grad is not None and p.grad.abs().sum()>0
+               for p in generator.spectrum_model.sink_logits.values())
+    retained = output.ion_probability.new_zeros(2).scatter_add_(
+        0, output.sample_index, output.ion_probability
+    )
+    torch.testing.assert_close(retained + output.sink_probability, torch.ones(2))
+    sink_events = output.transition_target_index == -1
+    leaves = output.transition_source_index[sink_events]
+    self_events = output.transition_source_index == output.transition_target_index
+    self_prob = output.transition_probability[self_events]
+    assert leaves.numel() > 0
+    assert (self_prob[leaves] > 0).all() and (self_prob[leaves] < 1).all()
+    torch.testing.assert_close(
+        self_prob[leaves] + output.transition_probability[sink_events],
+        torch.ones(leaves.numel()),
+    )
     assert next(iter(generator.spectrum_model.transition_heads.values())).layers[0].weight.grad.abs().sum()>0
     assert generator.feature_model.collision_energy_encoder.proj[0].weight.grad.abs().sum()>0
     assert any(p.grad is not None and p.grad.abs().sum()>0 for p in generator.feature_model.reaction_instance_encoder.parameters())
@@ -92,11 +111,15 @@ def test_mlp_cli_forwarding_and_configuration():
     parser=build_arg_parser()
     args=parser.parse_args(['--train-dir','train','--val-dir','val','--output-dir','out',
         '--ce-fc-dims','24,12','--ce-scale','50','--collision-energy-feature-dim','7',
-        '--transition-fc-dims','48,24','--propagation-steps','4'])
+        '--transition-fc-dims','48,24'])
     forwarded=parser.parse_args(namespace_argv(parser,args))
     cfg=training_model_config(forwarded)['spectrum_model_params']
     assert cfg['ce_fc_dims']==[24,12] and cfg['collision_energy_dim']==7 and cfg['ce_scale']==50
-    assert cfg['transition_fc_dims']==[48,24] and cfg['propagation_steps']==4
+    assert cfg['transition_fc_dims']==[48,24]
+    assert 'propagation_steps' not in cfg
+    with pytest.raises(SystemExit):
+        parser.parse_args(['--train-dir','t','--val-dir','v','--output-dir','o',
+                           '--propagation-steps','6'])
     assert parser.parse_args(namespace_argv(parser,parser.parse_args(['--train-dir','t','--val-dir','v','--output-dir','o','--transition-fc-dims','']))).transition_fc_dims==[]
 
 
@@ -223,7 +246,7 @@ def test_mixed_main_adduct_batch_routes_to_separate_banks():
     assert len(result.fragments.trees) == 2
     probabilities = result.spectra.ion_probability
     totals = probabilities.new_zeros(2).scatter_add_(0, result.spectra.sample_index, probabilities)
-    torch.testing.assert_close(totals, torch.ones(2))
+    torch.testing.assert_close(totals + result.spectra.sink_probability, torch.ones(2))
     invalid = (result.spectra.formula_tensor[:, :-1] < 0).any(1)
     assert invalid.any(), 'The neural grid must not be pruned by output formula validity'
     from fredis.ml.specgen.competitive_spectrum_model import merge_candidate_peaks
@@ -333,3 +356,50 @@ def test_precursor_loss_excludes_hydrogen_shifts_but_keeps_other_ions(precursor_
     assert (gradient[[0, 1, 2, 5]] == 0).all()
     assert (gradient[[3, 4, 6, 7]] != 0).all()
     assert torch.isfinite(loss)
+
+
+def test_terminal_self_and_sink_are_learnable_and_conserve_initial_mass():
+    logits = torch.tensor([0., 0.], dtype=torch.float64, requires_grad=True)
+    final, sink = propagate_probability(
+        torch.tensor([.7], dtype=torch.float64), torch.tensor([0, 0]),
+        torch.tensor([0, -1]), logits.softmax(0),
+    )
+    torch.testing.assert_close(final, torch.tensor([.35], dtype=torch.float64))
+    torch.testing.assert_close(sink, torch.tensor([.35], dtype=torch.float64))
+    (-final.log().sum()).backward()
+    assert logits.grad[0] < 0 and logits.grad[1] > 0
+
+
+def test_dag_flow_reaches_beyond_six_breaks_without_repropagating_self():
+    count = 10
+    source = torch.tensor([i for i in range(count) for _ in range(2)])
+    target = torch.tensor([v for i in range(count) for v in (i, i+1 if i+1<count else -1)])
+    probability = torch.tensor([.25, .75] * (count-1) + [.5, .5], requires_grad=True)
+    initial = torch.zeros(count); initial[0] = 1
+    final, sink = propagate_probability(initial, source, target, probability)
+    expected = torch.tensor([.25 * .75**i for i in range(count-1)] + [.5 * .75**(count-1)])
+    torch.testing.assert_close(final, expected)
+    assert final[-1] > 0
+    torch.testing.assert_close(final.sum()+sink.sum(), torch.tensor(1.))
+    final[-1].backward()
+    assert torch.isfinite(probability.grad).all()
+    assert (probability.grad[1:2*(count-1):2] > 0).all()
+
+
+def test_probability_flow_rejects_break_cycles():
+    with pytest.raises(ValueError, match='DAG'):
+        propagate_probability(torch.tensor([1., 0.]), torch.tensor([0, 1]),
+                              torch.tensor([1, 0]), torch.ones(2))
+
+
+def test_disconnected_samples_and_multiple_initial_states_conserve_mass():
+    # Two independent DAGs; the first has mass initially at both its root and child.
+    initial = torch.tensor([.6, .4, 1., 0.])
+    source = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3])
+    target = torch.tensor([0, 1, 1, -1, 2, 3, 3, -1])
+    final, sink = propagate_probability(initial, source, target, torch.full((8,), .5))
+    sample = torch.tensor([0, 0, 1, 1])
+    total = torch.zeros(2).scatter_add_(0, sample, final + sink)
+    torch.testing.assert_close(total, torch.ones(2))
+    torch.testing.assert_close(final, torch.tensor([.3, .35, .5, .25]))
+    torch.testing.assert_close(sink, torch.tensor([0., .35, 0., .25]))
