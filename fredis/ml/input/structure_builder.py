@@ -462,13 +462,13 @@ class ReactionStructureBuilder:
         )
         target = []
         valid_formulas = (
-            (spectrum_batch.physical_candidate_formula_tensor[:, :-1] >= 0)
+            (spectrum_batch.state_formula_tensor[:, :-1] >= 0)
             .all(1)
             .tolist()
         )
         for sample, mz, valid_formula in zip(
-            spectrum_batch.physical_candidate_sample_index.tolist(),
-            spectrum_batch.physical_candidate_mz.tolist(),
+            spectrum_batch.state_sample_index.tolist(),
+            spectrum_batch.state_mz.tolist(),
             valid_formulas,
         ):
             matches = [

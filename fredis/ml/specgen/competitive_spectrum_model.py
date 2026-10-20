@@ -1,7 +1,7 @@
 """CE-conditioned competing ion transitions and differentiable probability flow.
 
 The structural graph supplies allowed reactions. Every child adduct/shift
-explanation competes with all other outgoing explanations and a self transition.
+condition competes with all other outgoing transitions and a self transition.
 No tree-wide attention or independently regressed intensity is used.
 """
 
@@ -170,34 +170,32 @@ class CompetitiveSpectrumModel(nn.Module):
             data, source_embeddings, molecular_embeddings
         )
         device = molecular.device
-        candidate_node_index = data.physical_candidate_node_index
-        candidate_sample_index = data.physical_candidate_sample_index
-        candidate_count = candidate_node_index.numel()
+        state_node_index = data.state_node_index
+        state_sample_index = data.state_sample_index
+        state_count = state_node_index.numel()
         sample_count = collision_energy_h.shape[0]
-        if candidate_count == 0:
-            raise ValueError("Competitive model requires physical ion candidates")
+        if state_count == 0:
+            raise ValueError("Competitive model requires ion states")
 
         initial_probability = self._initial_probability(
-            data, molecular, candidate_node_index, candidate_sample_index, sample_count
+            data, molecular, state_node_index, state_sample_index, sample_count
         )
         (
             reaction_source_index,
             reaction_target_index,
-            explanation_index,
             reaction_index,
         ) = self._enumerate_transitions(
-            data, candidate_node_index, candidate_sample_index, sample_count, device
+            data, state_node_index, state_sample_index, sample_count, device
         )
         source, target, probabilities, ids = self._score_transitions(
             data,
             molecular,
-            candidate_node_index,
-            candidate_sample_index,
+            state_node_index,
+            state_sample_index,
             reaction_h,
             collision_energy_h,
             reaction_source_index,
             reaction_target_index,
-            explanation_index,
             reaction_index,
         )
         final_probability = propagate_probability(
@@ -207,11 +205,11 @@ class CompetitiveSpectrumModel(nn.Module):
             from .fragment_spectrum_model import annotate_ion_conditions
 
             data = annotate_ion_conditions(data, self.formula_tensorizer)
-        formulas = data.physical_candidate_formula_tensor
+        formulas = data.state_formula_tensor
         normalized, loss, loss_metrics = self._spectrum_loss(
             data,
             final_probability,
-            candidate_sample_index,
+            state_sample_index,
             formulas,
             sample_count,
             settings,
@@ -222,15 +220,12 @@ class CompetitiveSpectrumModel(nn.Module):
             "num_ion_transitions": final_probability.new_tensor(
                 float(reaction_source_index.numel())
             ),
-            "num_physical_ion_candidates": final_probability.new_tensor(
-                float(candidate_count)
-            ),
-            "num_ion_explanations": final_probability.new_tensor(
-                float(data.explanation_adduct_index.numel())
+            "num_ion_states": final_probability.new_tensor(
+                float(state_count)
             ),
             "probability_mass_error": (
                 final_probability.new_zeros(sample_count).scatter_add_(
-                    0, candidate_sample_index, final_probability
+                    0, state_sample_index, final_probability
                 )
                 - 1
             )
@@ -240,9 +235,9 @@ class CompetitiveSpectrumModel(nn.Module):
         # No independent presence classifier: confidence gating is inapplicable.
         return SpectrumModelOutput(
             normalized,
-            candidate_sample_index,
+            state_sample_index,
             formulas,
-            data.physical_candidate_mz,
+            data.state_mz,
             loss,
             torch.ones_like(final_probability),
             final_probability,
@@ -250,9 +245,6 @@ class CompetitiveSpectrumModel(nn.Module):
             transition_source_index=source,
             transition_target_index=target,
             transition_probability=probabilities,
-            transition_explanation_index=torch.cat(
-                (explanation_index, torch.full_like(ids, -1))
-            ),
             transition_reaction_index=torch.cat(
                 (reaction_index, torch.full_like(ids, -1))
             ),
@@ -295,28 +287,27 @@ class CompetitiveSpectrumModel(nn.Module):
         self,
         data,
         molecular,
-        candidate_node_index,
-        candidate_sample_index,
+        state_node_index,
+        state_sample_index,
         sample_count,
     ):
         """Seed source structures by adduct/shift labels, never by formula or m/z."""
-        result = molecular.new_zeros(candidate_node_index.numel())
+        result = molecular.new_zeros(state_node_index.numel())
         groups = data.decoded.node_sample_index.tolist()
         roots = {}
         for node, group in enumerate(groups):
             roots.setdefault(group, node)
-        starts = data.physical_candidate_explanation_ptr[:-1]
         mains = self._sample_main_adducts(data)
         for sample in range(sample_count):
-            rows = (candidate_sample_index == sample).nonzero().flatten()
+            rows = (state_sample_index == sample).nonzero().flatten()
             if not rows.numel():
                 raise ValueError("Every sample requires ion-condition states")
-            root = roots[groups[int(candidate_node_index[rows[0]])]]
+            root = roots[groups[int(state_node_index[rows[0]])]]
             ion = data.ion_type_strs.index(mains[sample])
             seeds = rows[
-                (candidate_node_index[rows] == root)
-                & (data.explanation_adduct_index[starts[rows]] == ion)
-                & (data.explanation_hydrogen_shift[starts[rows]] == 0)
+                (state_node_index[rows] == root)
+                & (data.state_adduct_index[rows] == ion)
+                & (data.state_hydrogen_shift[rows] == 0)
             ]
             if not seeds.numel():
                 raise ValueError(
@@ -326,63 +317,47 @@ class CompetitiveSpectrumModel(nn.Module):
         return result
 
     def _enumerate_transitions(
-        self, data, candidate_node_index, candidate_sample_index, sample_count, device
+        self, data, state_node_index, state_sample_index, sample_count, device
     ):
         """Enumerate structural transitions across the complete output-condition grid."""
-        candidate_nodes = candidate_node_index.detach().cpu().tolist()
-        candidate_samples = candidate_sample_index.detach().cpu().tolist()
-        candidates_by_node_and_sample = {}
-        for candidate_index, (node_index, sample_index) in enumerate(
-            zip(candidate_nodes, candidate_samples)
+        state_nodes = state_node_index.detach().cpu().tolist()
+        state_samples = state_sample_index.detach().cpu().tolist()
+        states_by_node_and_sample = {}
+        for state_index, (node_index, sample_index) in enumerate(
+            zip(state_nodes, state_samples)
         ):
-            candidates_by_node_and_sample.setdefault(
+            states_by_node_and_sample.setdefault(
                 (node_index, sample_index), []
-            ).append(candidate_index)
+            ).append(state_index)
         source = []
         target = []
-        explanation = []
         reactions = []
         seen = set()
-        explanation_ptr = (
-            data.physical_candidate_explanation_ptr.detach().cpu().tolist()
-        )
         reaction_ids = data.decoded.edge_added_reaction_index.detach().cpu().tolist()
         for edge, (a, b) in enumerate(
             data.decoded.edge_index.detach().cpu().T.tolist()
         ):
             reaction_index = reaction_ids[edge]
             for sample_index in range(sample_count):
-                for parent_index in candidates_by_node_and_sample.get(
+                for parent_index in states_by_node_and_sample.get(
                     (a, sample_index), ()
                 ):
-                    for child_index in candidates_by_node_and_sample.get(
+                    for child_index in states_by_node_and_sample.get(
                         (b, sample_index), ()
                     ):
-                        for explanation_index in range(
-                            explanation_ptr[child_index],
-                            explanation_ptr[child_index + 1],
-                        ):
-                            event = (
-                                parent_index,
-                                child_index,
-                                explanation_index,
-                                reaction_index,
-                            )
-                            if event in seen:
-                                continue
-                            seen.add(event)
-                            source.append(parent_index)
-                            target.append(child_index)
-                            explanation.append(explanation_index)
-                            reactions.append(reaction_index)
+                        event = (parent_index, child_index, reaction_index)
+                        if event in seen:
+                            continue
+                        seen.add(event)
+                        source.append(parent_index)
+                        target.append(child_index)
+                        reactions.append(reaction_index)
         reaction_source_index = torch.tensor(source, device=device, dtype=torch.long)
         reaction_target_index = torch.tensor(target, device=device, dtype=torch.long)
-        explanation_index = torch.tensor(explanation, device=device, dtype=torch.long)
         reaction_index = torch.tensor(reactions, device=device, dtype=torch.long)
         return (
             reaction_source_index,
             reaction_target_index,
-            explanation_index,
             reaction_index,
         )
 
@@ -390,32 +365,28 @@ class CompetitiveSpectrumModel(nn.Module):
         self,
         data,
         molecular,
-        candidate_node_index,
-        candidate_sample_index,
+        state_node_index,
+        state_sample_index,
         reaction_h,
         collision_energy_h,
         reaction_source_index,
         reaction_target_index,
-        explanation_index,
         reaction_index,
     ):
-        count = candidate_node_index.numel()
+        count = state_node_index.numel()
         ids = torch.arange(count, device=molecular.device)
         source = torch.cat((reaction_source_index, ids))
         target = torch.cat((reaction_target_index, ids))
-        explanations = torch.cat(
-            (explanation_index, data.physical_candidate_explanation_ptr[:-1])
-        )
         reaction_features = molecular.new_zeros((source.numel(), self.reaction_dim))
         valid = reaction_index >= 0
         reaction_features[: reaction_index.numel()][valid] = reaction_h[
             reaction_index[valid]
         ]
-        samples = candidate_sample_index[source]
+        samples = state_sample_index[source]
         inputs = torch.cat(
             (
-                molecular[candidate_node_index[source]],
-                molecular[candidate_node_index[target]],
+                molecular[state_node_index[source]],
+                molecular[state_node_index[target]],
                 reaction_features,
                 collision_energy_h[samples],
             ),
@@ -424,8 +395,8 @@ class CompetitiveSpectrumModel(nn.Module):
         mains = self._sample_main_adducts(data)
         condition_values = list(
             zip(
-                data.explanation_adduct_index[explanations].tolist(),
-                data.explanation_hydrogen_shift[explanations].tolist(),
+                data.state_adduct_index[target].tolist(),
+                data.state_hydrogen_shift[target].tolist(),
             )
         )
         sample_values = samples.tolist()
@@ -459,31 +430,31 @@ class CompetitiveSpectrumModel(nn.Module):
         self,
         data,
         final_probability,
-        candidate_sample_index,
+        state_sample_index,
         formulas,
         sample_count,
         settings,
     ):
         """Merge formula-equivalent probabilities for normalization and supervision."""
         # Compare observed peaks only after summing all structures/paths that
-        # yield the same formula in a sample. Keep candidate rows for viewers.
+        # yield the same formula in a sample. Keep state rows for viewers.
         keys = torch.cat(
-            (candidate_sample_index[:, None].to(formulas.dtype), formulas), 1
+            (state_sample_index[:, None].to(formulas.dtype), formulas), 1
         )
         _, peak_group_index = torch.unique(keys, dim=0, return_inverse=True)
         peak_count = int(peak_group_index.max()) + 1
         peak_probability = final_probability.new_zeros(peak_count).scatter_add_(
             0, peak_group_index, final_probability
         )
-        peak_sample = candidate_sample_index.new_zeros(peak_count).scatter_reduce_(
+        peak_sample = state_sample_index.new_zeros(peak_count).scatter_reduce_(
             0,
             peak_group_index,
-            candidate_sample_index,
+            state_sample_index,
             reduce="amax",
             include_self=True,
         )
         valid_candidate = (formulas[:, :-1] >= 0).all(1) & (
-            data.physical_candidate_mz > 0
+            data.state_mz > 0
         )
         valid_peak = torch.zeros(peak_count, dtype=torch.bool, device=formulas.device)
         valid_peak.scatter_reduce_(
@@ -496,7 +467,7 @@ class CompetitiveSpectrumModel(nn.Module):
             reduce="amax",
             include_self=True,
         )
-        normalized = final_probability / maxima[candidate_sample_index].clamp_min(1e-12)
+        normalized = final_probability / maxima[state_sample_index].clamp_min(1e-12)
         zero = final_probability.sum() * 0
         metrics = {
             "spectrum_loss_with_precursor": zero,
@@ -519,17 +490,18 @@ class CompetitiveSpectrumModel(nn.Module):
         groups = data.decoded.node_sample_index.tolist()
         for node, group in enumerate(groups):
             roots.setdefault(group, node)
-        candidate_nodes = data.physical_candidate_node_index.tolist()
-        candidate_samples = candidate_sample_index.tolist()
+        state_nodes = data.state_node_index.tolist()
+        state_samples = state_sample_index.tolist()
         precursor_signatures = [
             _adduct_without_hydrogen(adduct) for adduct in data.precursor_adducts
         ]
         precursor_candidate = torch.tensor(
             [
                 node == roots[groups[node]]
-                and _adduct_without_hydrogen(adduct) == precursor_signatures[sample]
-                for node, sample, adduct in zip(
-                    candidate_nodes, candidate_samples, data.physical_candidate_adduct
+                and _adduct_without_hydrogen(data.ion_type_strs[adduct_index])
+                == precursor_signatures[sample]
+                for node, sample, adduct_index in zip(
+                    state_nodes, state_samples, data.state_adduct_index.tolist()
                 )
             ],
             dtype=torch.bool,

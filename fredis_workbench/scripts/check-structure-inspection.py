@@ -23,8 +23,8 @@ metadata = {'smiles': 'C', 'record_indexes': [7],
 structure = SimpleNamespace(
     num_samples=0, num_branch_groups=0, reaction_type=torch.empty(0),
     condition_features=torch.empty((0, 2)), spectrum_batch=SimpleNamespace(
-        decoded=SimpleNamespace(trees=(), compounds=()), physical_candidate_node_index=torch.empty(0),
-        explanation_adduct_index=torch.empty(0)),
+        decoded=SimpleNamespace(trees=(), compounds=()), state_node_index=torch.empty(0),
+        state_adduct_index=torch.empty(0)),
     **{name: torch.empty(0, dtype=torch.long) for name in (
         'teacher_node_reaction_ptr', 'teacher_node_reaction_index',
         'teacher_positive_reaction_ptr', 'teacher_positive_reaction_index',

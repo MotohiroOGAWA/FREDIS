@@ -38,11 +38,11 @@ fragments = SimpleNamespace(
     ),
 )
 spectrum_batch = SimpleNamespace(
-    physical_candidate_node_index=torch.tensor([1]),
-    physical_candidate_adduct=("[M+H]+",),
-    physical_candidate_sample_index=torch.tensor([0]),
-    physical_candidate_mz=torch.tensor([33.0335]),
-    physical_candidate_formula_tensor=torch.tensor([[1, 4, 1]]),
+    state_node_index=torch.tensor([1]),
+    state_adducts=("[M+H]+",),
+    state_sample_index=torch.tensor([0]),
+    state_mz=torch.tensor([33.0335]),
+    state_formula_tensor=torch.tensor([[1, 4, 1]]),
 )
 spectra = SimpleNamespace(
     ion_probability=torch.tensor([0.9]),

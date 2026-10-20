@@ -128,12 +128,12 @@ def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=())
 
     spectrum_batch = result.spectrum_batch
     spectra = result.spectra
-    candidate_node_index = spectrum_batch.physical_candidate_node_index.detach().cpu().tolist()
+    candidate_node_index = spectrum_batch.state_node_index.detach().cpu().tolist()
     ion_probability = spectra.ion_probability.detach().cpu().tolist()
-    candidate_adduct = spectrum_batch.physical_candidate_adduct
-    candidate_sample_index = spectrum_batch.physical_candidate_sample_index.detach().cpu().tolist()
-    candidate_mz = spectrum_batch.physical_candidate_mz.detach().cpu().tolist()
-    candidate_formula_tensor = spectrum_batch.physical_candidate_formula_tensor
+    candidate_adduct = spectrum_batch.state_adducts
+    candidate_sample_index = spectrum_batch.state_sample_index.detach().cpu().tolist()
+    candidate_mz = spectrum_batch.state_mz.detach().cpu().tolist()
+    candidate_formula_tensor = spectrum_batch.state_formula_tensor
     intensity = spectra.intensity.detach().cpu().tolist()
 
     # Candidate ions below the trained confidence threshold are the same
@@ -244,9 +244,9 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
     if not result.spectra.mz.numel():
         raise ValueError("The model did not produce any peaks for this input.")
     intensity_threshold = generator.generation.peak_intensity_threshold
-    node_indices = result.spectrum_batch.physical_candidate_node_index.detach().cpu().tolist()
+    node_indices = result.spectrum_batch.state_node_index.detach().cpu().tolist()
     node_smiles = result.spectrum_batch.node_smiles
-    ion_adducts = result.spectrum_batch.physical_candidate_adduct
+    ion_adducts = result.spectrum_batch.state_adducts
     peaks = sorted(
         (
             {

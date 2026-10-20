@@ -53,7 +53,7 @@ records with that SMILES (all adducts and collision energies)
   ├─ precursor resolution             records with an unreachable precursor are dropped
   ├─ peak annotation                  peaks → formulas → reaction combinations on the source
   ├─ teacher structure                teacher states, positive / weak-negative reactions
-  ├─ materialized teacher trees       physical-ion candidates and intensity targets
+  ├─ materialized teacher trees       ion-condition states and intensity targets
   └─ data/<stem>.preft.pt + one manifest row
 ```
 
@@ -236,18 +236,19 @@ states**: sets of primitive-reaction indices, starting from the empty state.
   - A positive reaction that is invalid is an error.
 
 The teacher states are then materialized into one fragment tree per branch
-group. `prepare_spectrum_model_batch` groups each node's formula entries into
-**physical-ion candidates**: (node, formula, net adduct, charge), each with its
-(fragment-ion adduct, ΔH) explanations.
+group. `prepare_spectrum_model_batch` creates one state per
+(structural node, fragment-ion adduct, hydrogen shift, sample). Conditions with
+equal formulas stay separate before prediction. Formula and m/z are annotations
+for peak assignment and output.
 
 - `target_intensity` is the highest observed intensity within tolerance of the
-  candidate m/z, or 0.
+  state m/z, or 0.
 
 The saved payload contains source graphs and primitive-reaction features, teacher
 reaction sets at every depth, valid continuations and next-state indices,
 positive paths per experimental peak, weak negatives, materialized fragment
-graph tensors, physical-ion candidates with explanations, formula tensors,
-exact m/z, charge, precursor formulas, intensity targets and peak annotations.
+graph tensors, ion-condition states, formula tensors with charge, exact m/z,
+precursor adducts, intensity targets and peak annotations.
 The payload uses schema `fredis.fragment-tree-training`. No format conversion is provided;
 regenerate `.preft.pt` files after a format change.
 
@@ -428,8 +429,7 @@ Tab-separated, one row per source, sorted by SMILES.
 | `num_teacher_nodes` | Teacher states, including one empty root per branch group |
 | `num_transition_states` | Teacher states plus one-step next states of valid reactions |
 | `num_positive_transitions` | Unique teacher (parent, child, reaction) steps |
-| `num_physical_ion_candidates` | Physical-ion candidates, replicated per sample |
-| `num_ion_explanations` | (fragment-ion adduct, ΔH) explanations of those candidates |
+| `num_ion_states` | Structural-node/ion-condition/sample states |
 | `max_teacher_reaction_count` | Largest number of reactions in a teacher state |
 | `num_nodes`, `num_edges` | Nodes and edges of the **materialized teacher trees**, not the full search tree |
 | `assignment_score`, `assignment_score_without_precursor` | Mean per-sample assignment scores |
@@ -479,7 +479,7 @@ Split-level summary:
   - `num_teacher_nodes`, `num_positive_transitions`,
     `mean_teacher_nodes_per_sample`, `mean_positive_edges_per_sample`
   - `num_branch_groups`, `num_transition_states`,
-    `num_physical_ion_candidates`, `num_ion_explanations`,
+    `num_ion_states`,
     `max_teacher_reaction_count`
   - `num_sources`, `num_samples`, `num_metadata_valid_records`,
     `num_skipped_sources`, `num_skipped_records`, `num_rejected_records`,

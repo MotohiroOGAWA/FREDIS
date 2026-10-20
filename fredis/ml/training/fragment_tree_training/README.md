@@ -47,7 +47,7 @@ MIL with `negative_weight * mean(softplus(negative_logit))`.
 
 ## Competitive spectrum objective
 
-Every valid child `(fragment_ion_adduct, hydrogen_shift)` explanation and self
+Every child `(fragment_ion_adduct, hydrogen_shift)` state and self
 transition competes in a parent-wise softmax. Fixed-step probability propagation
 sums all incoming paths. Final ion probabilities are grouped by output formula.
 Two equally weighted objectives are added: one includes the precursor peak,
@@ -68,7 +68,7 @@ and resumes the saved best validation loss and non-improvement count.
 ## Prepared-tensor boundary
 
 Training consumes source/fragment graphs, reaction/state transitions, MIL paths,
-physical candidates, explanation indices, masses, formulas, and targets already
+ion states, condition indices, masses, formulas, and targets already
 stored by preparation. Forward, loss, backward, and optimizer steps perform
 only tensor and neural-network operations. RDKit parsing, fragmentation,
 materialization, ion chemistry, formula calculation, and graph construction are
@@ -83,7 +83,7 @@ its `training_settings`.
 ## Metrics and outputs
 
 Reports include branch losses, transition cross entropy, cosine similarity,
-probability-mass error, candidate counts and generated-tree search statistics.
+probability-mass error, ion-state counts and generated-tree search statistics.
 Validation runs the inference path. TensorBoard, JSON/TSV reports, last/best
 checkpoints and detailed spectrum-validation artifacts are written to the run
 directory.

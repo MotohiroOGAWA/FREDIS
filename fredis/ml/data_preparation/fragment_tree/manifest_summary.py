@@ -15,13 +15,10 @@ def structure_manifest_fields(structure):
         num_positive_transitions=structure.transition_added_reaction_index.numel(),
         num_branch_groups=structure.num_branch_groups,
         num_transition_states=structure.transition_state_branch_group_index.numel(),
-        num_physical_ion_candidates=(
-            spectrum_batch.physical_candidate_node_index.numel()
+        num_ion_states=(
+            spectrum_batch.state_node_index.numel()
             if spectrum_batch
             else 0
-        ),
-        num_ion_explanations=(
-            spectrum_batch.explanation_adduct_index.numel() if spectrum_batch else 0
         ),
         max_teacher_reaction_count=(
             int(structure.teacher_node_reaction_count.max())

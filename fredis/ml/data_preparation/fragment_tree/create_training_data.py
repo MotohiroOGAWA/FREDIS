@@ -702,8 +702,7 @@ def create_reaction_training_data(
                 "num_teacher_nodes",
                 "num_transition_states",
                 "num_positive_transitions",
-                "num_physical_ion_candidates",
-                "num_ion_explanations",
+                "num_ion_states",
                 "max_teacher_reaction_count",
                 "num_nodes",
                 "num_edges",
@@ -782,12 +781,9 @@ def create_reaction_training_data(
                 num_transition_states=sum(
                     row.get("num_transition_states", 0) or 0 for row in manifest_rows
                 ),
-                num_physical_ion_candidates=sum(
-                    row.get("num_physical_ion_candidates", 0) or 0
+                num_ion_states=sum(
+                    row.get("num_ion_states", 0) or 0
                     for row in manifest_rows
-                ),
-                num_ion_explanations=sum(
-                    row.get("num_ion_explanations", 0) or 0 for row in manifest_rows
                 ),
                 max_teacher_reaction_count=max(
                     (

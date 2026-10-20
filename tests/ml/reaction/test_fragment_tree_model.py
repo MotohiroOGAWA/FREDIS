@@ -120,17 +120,16 @@ def test_fragment_node_budget_is_shared_across_collision_energies():
 def test_condition_states_keep_equivalent_formulas_separate_until_output():
     generator, data = prepared_two_ce()
     batch = data.spectrum_batch
-    assert (batch.physical_candidate_explanation_ptr.diff() == 1).all()
-    rows = ((batch.physical_candidate_sample_index == 0)
-            & (batch.physical_candidate_node_index == 0)).nonzero().flatten()
+    rows = ((batch.state_sample_index == 0)
+            & (batch.state_node_index == 0)).nonzero().flatten()
     conditions = generator.spectrum_model.main_adduct_conditions['[M+H]+']
     assert rows.numel() == len(conditions)
     pairs = list(zip(
-        (batch.ion_type_strs[int(i)] for i in batch.explanation_adduct_index[rows]),
-        batch.explanation_hydrogen_shift[rows].tolist(),
+        (batch.ion_type_strs[int(i)] for i in batch.state_adduct_index[rows]),
+        batch.state_hydrogen_shift[rows].tolist(),
     ))
     assert pairs == list(conditions)
-    assert torch.unique(batch.physical_candidate_formula_tensor[rows], dim=0).shape[0] < rows.numel()
+    assert torch.unique(batch.state_formula_tensor[rows], dim=0).shape[0] < rows.numel()
 
 def test_shared_hydrogen_shift_range_is_used_for_every_adduct():
     generator,_=prepared_two_ce()
@@ -143,7 +142,7 @@ def test_shared_hydrogen_shift_range_is_used_for_every_adduct():
 
 def test_multiple_physical_ions_and_training_step_use_no_chemistry(tmp_path):
     generator,data=prepared_two_ce();spectrum_batch=data.spectrum_batch
-    per_node=torch.bincount(spectrum_batch.physical_candidate_node_index)
+    per_node=torch.bincount(spectrum_batch.state_node_index)
     assert int(per_node.max())>1
     path=tmp_path/'strict.preft.pt';data.save(path);data=SourceReactionStructure.load(path)
     trainer=ReactionFragmentTreeTrainingModel(generator.feature_model,spectrum_model=generator.spectrum_model)
@@ -155,7 +154,7 @@ def test_multiple_physical_ions_and_training_step_use_no_chemistry(tmp_path):
          patch.object(materialization,'materialize_reaction_states',side_effect=AssertionError('fragment materialization in training')):
         optimizer.zero_grad();result=trainer(data);result.loss.backward();optimizer.step()
     assert torch.isfinite(result.loss)
-    assert {'branch_positive_mil_loss','branch_negative_loss','num_physical_ion_candidates','num_ion_explanations'}<=result.metrics.keys()
+    assert {'branch_positive_mil_loss','branch_negative_loss','num_ion_states'}<=result.metrics.keys()
 
 
 def test_prepared_payload_has_schema_without_version(tmp_path):

@@ -109,53 +109,26 @@ def _select_spectrum_batch(
     )
 
     candidate_indices = _included_indices(
-        spectrum_batch.physical_candidate_sample_index, sample_map
+        spectrum_batch.state_sample_index, sample_map
     )
-    explanations = []
-    explanation_indices = []
-    for candidate in candidate_indices.tolist():
-        start, stop = spectrum_batch.physical_candidate_explanation_ptr[
-            candidate : candidate + 2
-        ]
-        explanation_indices.extend(range(int(start), int(stop)))
-        explanations.append(
-            list(
-                zip(
-                    spectrum_batch.explanation_adduct_index[start:stop].tolist(),
-                    spectrum_batch.explanation_hydrogen_shift[start:stop].tolist(),
-                )
-            )
-        )
-    explanation_ptr, flat_explanations = csr(explanations)
-    explanation_pairs = (
-        flat_explanations.reshape(-1, 2)
-        if flat_explanations.numel()
-        else torch.empty((0, 2), dtype=torch.long)
-    )
-    explanation_indices = torch.tensor(explanation_indices, dtype=torch.long)
-
     def select_optional(values, indices):
         return values[indices] if values is not None else None
 
     selected_batch = replace(
         spectrum_batch,
         decoded=selected_decoded,
-        physical_candidate_node_index=node_map[
-            spectrum_batch.physical_candidate_node_index[candidate_indices]
+        state_node_index=node_map[
+            spectrum_batch.state_node_index[candidate_indices]
         ],
-        physical_candidate_sample_index=sample_map[
-            spectrum_batch.physical_candidate_sample_index[candidate_indices]
+        state_sample_index=sample_map[
+            spectrum_batch.state_sample_index[candidate_indices]
         ],
-        physical_candidate_formula_tensor=spectrum_batch.physical_candidate_formula_tensor[
+        state_formula_tensor=spectrum_batch.state_formula_tensor[
             candidate_indices
         ],
-        physical_candidate_mz=spectrum_batch.physical_candidate_mz[candidate_indices],
-        physical_candidate_charge=spectrum_batch.physical_candidate_charge[
-            candidate_indices
-        ],
-        physical_candidate_explanation_ptr=explanation_ptr,
-        explanation_adduct_index=explanation_pairs[:, 0],
-        explanation_hydrogen_shift=explanation_pairs[:, 1],
+        state_mz=spectrum_batch.state_mz[candidate_indices],
+        state_adduct_index=spectrum_batch.state_adduct_index[candidate_indices],
+        state_hydrogen_shift=spectrum_batch.state_hydrogen_shift[candidate_indices],
         target_intensity=select_optional(
             spectrum_batch.target_intensity, candidate_indices
         ),
@@ -163,10 +136,6 @@ def _select_spectrum_batch(
             tuple(spectrum_batch.precursor_adducts[i] for i in sample_indices.tolist())
             if getattr(spectrum_batch, "precursor_adducts", ())
             else ()
-        ),
-        physical_candidate_adduct=tuple(
-            spectrum_batch.physical_candidate_adduct[i]
-            for i in candidate_indices.tolist()
         ),
         node_smiles=tuple(spectrum_batch.node_smiles[i] for i in node_indices.tolist()),
         # Molecular deduplication must be rebuilt for the selected graphs.

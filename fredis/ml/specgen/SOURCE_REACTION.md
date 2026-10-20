@@ -28,8 +28,7 @@ first, then increasing hydrogen shift.
 For example, `[M+Na]+` with two fragment-ion adducts and six shifts has 12
 conditions. Each layer has `weight[12, output_width, input_width]` and
 `bias[12, output_width]`. `[M+H]+` uses another bank with entirely separate
-parameters. No learned fragment-adduct, hydrogen-shift, or ion-state embedding
-is used. Hidden layers use GELU followed by configurable dropout; the last
+parameters. Hidden layers use GELU followed by configurable dropout; the last
 layer produces an event logit.
 
 Inputs are parent molecular embedding, child molecular embedding, the added
@@ -96,7 +95,7 @@ precursor-excluded terms. The excluded term removes the formula-level peak of
 Source with the declared precursor adduct and its hydrogen-shift variants,
 then separately sum-normalizes the
 remaining prediction and target. Samples with no remaining positive targets
-contribute only the inclusive term. Teacher intensities for equivalent candidates use maximum, not sum.
+contribute only the inclusive term. Teacher intensities for formula-equivalent states use maximum, not sum.
 The complete probability distribution, including invalid/unobserved states,
 competes for mass; there is no independent intensity or confidence classifier.
 Confidence is one in the viewer interface.

@@ -318,7 +318,7 @@ def _load_prepared_datasets(
             "samples": pieces.total_unfiltered_samples,
             "filtered_samples": pieces.total_samples,
             "teacher_states": stats.get("num_teacher_nodes"),
-            "formula_targets": stats.get("num_physical_ion_candidates"),
+            "formula_targets": stats.get("num_ion_states"),
             "chunks": len(pieces),
             "loading_mode": (
                 "cache_on_first_use" if cache_dataset_in_memory else "streaming"

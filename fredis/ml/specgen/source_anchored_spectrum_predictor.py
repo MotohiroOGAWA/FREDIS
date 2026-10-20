@@ -40,7 +40,7 @@ class SourceAnchoredSpectrumOutput:
     selection: SourceAnchoredSelectionOutput
     fragments: DecodedFragmentTreeBatch
     spectra: SpectrumModelOutput
-    # physical_candidate_node_index links each candidate ion to its
+    # state_node_index links each ion state to its
     # fragment-tree node; consumers that need that mapping (e.g.
     # a fragment-tree viewer) read it from here instead of re-deriving it.
     spectrum_batch: SpectrumModelBatch
@@ -461,8 +461,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             )
             spectrum_batch = replace(
                 spectrum_batch,
-                physical_candidate_formula_tensor=spectra.formula_tensor,
-                physical_candidate_mz=spectra.mz,
+                state_formula_tensor=spectra.formula_tensor,
+                state_mz=spectra.mz,
             )
             yield SourceAnchoredSpectrumOutput(
                 selection,

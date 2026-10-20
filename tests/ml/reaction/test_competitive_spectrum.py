@@ -67,7 +67,6 @@ def test_competitive_training_prediction_and_checkpoint():
     sources=pred.spectra.transition_source_index
     totals=probabilities.new_zeros(pred.spectra.intensity.numel()).scatter_add_(0,sources,probabilities)
     torch.testing.assert_close(totals,torch.ones_like(totals))
-    assert torch.any(pred.spectra.transition_explanation_index>=0)
 
     assert not any('tree_encoder' in k for k in generator.spectrum_model.state_dict())
     subset=select_samples(data,[1]);assert subset.spectrum_batch.precursor_adducts==('[M+H]+',)
@@ -173,9 +172,8 @@ def test_formula_and_mz_do_not_control_transitions_or_probability_flow():
                   source_embeddings=features.source_embeddings)
     original = generator.spectrum_model(data.spectrum_batch, **kwargs)
     modified = replace(data.spectrum_batch,
-        physical_candidate_formula_tensor=data.spectrum_batch.physical_candidate_formula_tensor + 100,
-        physical_candidate_mz=data.spectrum_batch.physical_candidate_mz + 1000,
-        physical_candidate_charge=-data.spectrum_batch.physical_candidate_charge,
+        state_formula_tensor=data.spectrum_batch.state_formula_tensor + 100,
+        state_mz=data.spectrum_batch.state_mz + 1000,
     )
     changed = generator.spectrum_model(modified, **kwargs)
     for field in ('transition_source_index', 'transition_target_index', 'transition_probability', 'ion_probability'):
@@ -197,12 +195,11 @@ def test_inference_annotates_full_condition_grid_after_scoring(monkeypatch):
     hook.remove()
     data = result.spectrum_batch
     per_node = len(model.main_adduct_conditions['[M+H]+'])
-    assert data.physical_candidate_node_index.numel() == len(result.fragments.compounds) * per_node
-    assert (data.physical_candidate_explanation_ptr.diff() == 1).all()
+    assert data.state_node_index.numel() == len(result.fragments.compounds) * per_node
     index = 0
-    node = int(data.physical_candidate_node_index[index])
-    ion = Adduct.parse(data.ion_type_strs[int(data.explanation_adduct_index[index])])
-    shift = Adduct.from_dict({'H': int(data.explanation_hydrogen_shift[index])})
+    node = int(data.state_node_index[index])
+    ion = Adduct.parse(data.ion_type_strs[int(data.state_adduct_index[index])])
+    shift = Adduct.from_dict({'H': int(data.state_hydrogen_shift[index])})
     expected = ion.apply_to_formula(shift.apply_to_formula(result.fragments.compounds[node].formula)).normalized
     torch.testing.assert_close(result.spectra.formula_tensor[index], generator.tensorizer.formula_to_tensor(expected))
     assert float(result.spectra.mz[index]) == pytest.approx(expected.exact_mass / abs(ion.charge))
@@ -243,20 +240,18 @@ def test_annotation_mz_uses_adduct_charge(adduct_type):
     compound = Compound.from_smiles('CCO')
     data = SpectrumModelBatch(
         decoded=SimpleNamespace(compounds=[compound]),
-        physical_candidate_node_index=torch.tensor([0]),
-        physical_candidate_sample_index=torch.tensor([0]),
-        physical_candidate_formula_tensor=torch.empty(0),
-        physical_candidate_mz=torch.empty(0),
-        physical_candidate_charge=torch.tensor([Adduct.parse(adduct_type).charge]),
-        physical_candidate_explanation_ptr=torch.tensor([0, 1]),
-        explanation_adduct_index=torch.tensor([0]),
-        explanation_hydrogen_shift=torch.tensor([0]),
+        state_node_index=torch.tensor([0]),
+        state_sample_index=torch.tensor([0]),
+        state_formula_tensor=torch.empty(0),
+        state_mz=torch.empty(0),
+        state_adduct_index=torch.tensor([0]),
+        state_hydrogen_shift=torch.tensor([0]),
         ion_type_strs=(adduct_type,),
     )
     annotated = annotate_ion_conditions(data, generator.tensorizer)
     ion = Adduct.parse(adduct_type)
     formula = ion.apply_to_formula(compound.formula).normalized
-    assert annotated.physical_candidate_mz.item() == pytest.approx(formula.exact_mass / abs(ion.charge))
+    assert annotated.state_mz.item() == pytest.approx(formula.exact_mass / abs(ion.charge))
 
 
 @pytest.mark.parametrize('precursor_adduct', ['[M+H]+', '[M+H-H2O]+'])
@@ -267,9 +262,10 @@ def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct
     adduct = str(Adduct.parse(precursor_adduct))
     data = SimpleNamespace(
         decoded=SimpleNamespace(node_sample_index=torch.tensor([0, 0, 0, 0])),
-        physical_candidate_node_index=torch.tensor([0, 1, 2, 3]),
-        physical_candidate_mz=torch.tensor([100., 50., 40., 100.]),
-        physical_candidate_adduct=(adduct,) * 4,
+        state_node_index=torch.tensor([0, 1, 2, 3]),
+        state_mz=torch.tensor([100., 50., 40., 100.]),
+        ion_type_strs=(adduct,),
+        state_adduct_index=torch.zeros(4, dtype=torch.long),
         precursor_adducts=(adduct,),
         target_intensity=torch.tensor([100., 1., 1., 100.]),
     )
@@ -317,9 +313,10 @@ def test_precursor_loss_excludes_hydrogen_shifts_but_keeps_other_ions(precursor_
     water_loss = str(precursor.add_prefer_self(Adduct.parse('[M-H2O]')))
     data = SimpleNamespace(
         decoded=SimpleNamespace(node_sample_index=torch.zeros(4, dtype=torch.long)),
-        physical_candidate_node_index=torch.tensor([0, 0, 0, 1, 2, 3, 0, 0]),
-        physical_candidate_mz=torch.ones(8),
-        physical_candidate_adduct=(str(precursor), plus, minus, plus, minus, plus, sodium, water_loss),
+        state_node_index=torch.tensor([0, 0, 0, 1, 2, 3, 0, 0]),
+        state_mz=torch.ones(8),
+        ion_type_strs=(str(precursor), plus, minus, plus, minus, plus, sodium, water_loss),
+        state_adduct_index=torch.arange(8),
         precursor_adducts=(str(precursor),),
         target_intensity=torch.tensor([100., 50., 50., 1., 1., 50., 1., 1.]),
     )

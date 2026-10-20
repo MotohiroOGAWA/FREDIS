@@ -132,16 +132,16 @@ def _node_depths(spectrum_batch, sample, precursor_mz, tolerance):
     )
     candidate_rows = (
         torch.nonzero(
-            spectrum_batch.physical_candidate_sample_index == sample, as_tuple=False
+            spectrum_batch.state_sample_index == sample, as_tuple=False
         )
         .flatten()
         .tolist()
     )
     seeds = {
-        int(spectrum_batch.physical_candidate_node_index[row])
+        int(spectrum_batch.state_node_index[row])
         for row in candidate_rows
         if tolerance.within(
-            float(spectrum_batch.physical_candidate_mz[row]), float(precursor_mz)
+            float(spectrum_batch.state_mz[row]), float(precursor_mz)
         )
     }
     if not seeds and sample_nodes:
@@ -165,14 +165,14 @@ def _formula_depths(spectrum_batch, sample, node_depths, precursor_mz, tolerance
     result = {}
     for row in (
         torch.nonzero(
-            spectrum_batch.physical_candidate_sample_index == sample, as_tuple=False
+            spectrum_batch.state_sample_index == sample, as_tuple=False
         )
         .flatten()
         .tolist()
     ):
-        node = int(spectrum_batch.physical_candidate_node_index[row])
+        node = int(spectrum_batch.state_node_index[row])
         if tolerance.within(
-            float(spectrum_batch.physical_candidate_mz[row]), float(precursor_mz)
+            float(spectrum_batch.state_mz[row]), float(precursor_mz)
         ):
             result[row] = 0
         elif node in node_depths:
@@ -362,7 +362,7 @@ def validate_spectra(
                     annotation = annotations[input_index]
                     formula_rows = (
                         torch.nonzero(
-                            output.spectrum_batch.physical_candidate_sample_index
+                            output.spectrum_batch.state_sample_index
                             == sample,
                             as_tuple=False,
                         )
@@ -370,7 +370,7 @@ def validate_spectra(
                         .tolist()
                     )
                     mz = [
-                        float(output.spectrum_batch.physical_candidate_mz[row])
+                        float(output.spectrum_batch.state_mz[row])
                         for row in formula_rows
                     ]
                     intensity = [

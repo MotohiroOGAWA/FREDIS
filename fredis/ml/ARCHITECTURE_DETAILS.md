@@ -404,19 +404,17 @@ B, CE20: 3 * 12 = 36 states
 K = 132
 ```
 
-`physical_candidate_*` are retained field names, but each row now means one
-structural-node/condition/sample state. Formula-equivalent conditions are not
-collapsed before scoring, and there is no ion-state embedding or pooling MLP.
+Each row represents one structural-node/condition/sample state.
+Formula-equivalent conditions stay separate before scoring.
 
 | Tensor | Shape | Meaning |
 |---|---|---|
-| `physical_candidate_node_index` | `[132]` | State -> global structural node |
-| `physical_candidate_sample_index` | `[132]` | State -> spectrum condition |
-| `explanation_adduct_index` | `[132]` | Condition's fragment-ion vocabulary ID |
-| `explanation_hydrogen_shift` | `[132]` | Condition's signed shift |
-| `physical_candidate_explanation_ptr` | `[133]` | CSR boundaries, now `[0,1,...,132]` |
-| `physical_candidate_formula_tensor` | `[132,F]` | Output-only elemental counts + charge |
-| `physical_candidate_mz` | `[132]` | Output mass annotation |
+| `state_node_index` | `[132]` | State -> global structural node |
+| `state_sample_index` | `[132]` | State -> spectrum condition |
+| `state_adduct_index` | `[132]` | Condition's fragment-ion vocabulary ID |
+| `state_hydrogen_shift` | `[132]` | Condition's signed shift |
+| `state_formula_tensor` | `[132,F]` | Output-only elemental counts + charge |
+| `state_mz` | `[132]` | Output mass annotation |
 
 For a one-node/one-sample mini-example with two ions and shifts `[-1,0]`:
 
@@ -425,11 +423,9 @@ node_index   = [0,0,0,0]
 sample_index = [0,0,0,0]
 adduct_index = [0,0,1,1]
 shift        = [-1,0,-1,0]
-ptr          = [0,1,2,3,4]
 ```
 
-The CSR interval `ptr[i]:ptr[i+1]` contains exactly one explanation. With a
-second CE, the node labels repeat but sample IDs change. Source and fragment
+Each state directly indexes its condition. With a second CE, the node labels repeat but sample IDs change. Source and fragment
 molecular vectors are selected by node IDs; CE is selected by sample IDs.
 Formula/mz fields are populated after inference propagation. Training preparation
 populates them earlier only to construct targets. They are not condition IDs.
