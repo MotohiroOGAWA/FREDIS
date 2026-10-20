@@ -158,15 +158,6 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             )
         )
         shifts = self.fragmenter.adduct_rule_set.hydrogen_shifts
-        if 0 not in shifts:
-            raise ValueError("Probability propagation requires hydrogen shift 0")
-        for rule in self.fragmenter.adduct_rule_set.adduct_rules:
-            if str(rule.adduct_type) not in {
-                str(ion) for ion in rule.fragment_ion_adducts
-            }:
-                raise ValueError(
-                    "Each main adduct must be present among its fragment_ion_adducts"
-                )
         main_adduct_conditions = {
             str(rule.adduct_type): [
                 (str(ion), shift)

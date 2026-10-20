@@ -1,4 +1,4 @@
-"""Independent GELU MLP parameters for every ion/shift output condition."""
+"""Independent GELU MLP slices for fragment event types or ion/shift conditions."""
 
 from __future__ import annotations
 import math
@@ -26,14 +26,14 @@ class ConditionLinear(nn.Module):
         return output
 
 
-class ConditionTransitionHead(nn.Module):
+class ConditionHead(nn.Module):
     def __init__(self, conditions, input_dim, hidden_dims, dropout):
         super().__init__()
         dims = (input_dim, *hidden_dims, 1)
         if any(type(d) is not int or d < 1 for d in dims):
-            raise ValueError("Transition MLP widths must be positive integers")
+            raise ValueError("Head MLP widths must be positive integers")
         if not math.isfinite(dropout) or not 0 <= dropout < 1:
-            raise ValueError("transition_dropout must be in [0, 1)")
+            raise ValueError("dropout must be in [0, 1)")
         self.layers = nn.ModuleList(
             ConditionLinear(conditions, a, b) for a, b in zip(dims, dims[1:])
         )

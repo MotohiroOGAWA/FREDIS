@@ -1225,13 +1225,15 @@ MODEL_OPTIONS = {
     "ce-fc-dims": ("spectrum_model_params", "ce_fc_dims", mlp_dims, mlp_dims("32")),
     "ce-center": ("spectrum_model_params", "ce_center", float, 0.0),
     "ce-scale": ("spectrum_model_params", "ce_scale", float, 100.0),
-    "transition-fc-dims": (
+    "fragment-fc-dims": (
         "spectrum_model_params",
-        "transition_fc_dims",
+        "fragment_fc_dims",
         mlp_dims,
         mlp_dims("128,64"),
     ),
-    "transition-dropout": ("spectrum_model_params", "transition_dropout", float, 0.0),
+    "fragment-dropout": ("spectrum_model_params", "fragment_dropout", float, 0.0),
+    "state-fc-dims": ("spectrum_model_params", "state_fc_dims", mlp_dims, mlp_dims("128,64")),
+    "state-dropout": ("spectrum_model_params", "state_dropout", float, 0.0),
     "branch-path-threshold": ("generation_params", "branch_path_threshold", float, 0.0),
     "max-fragment-nodes": ("generation_params", "max_fragment_nodes", int, 100),
     "peak-intensity-threshold": (
@@ -1242,8 +1244,10 @@ MODEL_OPTIONS = {
     ),
 }
 MODEL_OPTION_HELP = {
-    "transition-fc-dims": "Comma-separated transition MLP hidden widths, e.g. 128,64. Empty selects a linear map.",
-    "transition-dropout": "Dropout after hidden transition MLP layers.",
+    "state-fc-dims": "Comma-separated State Head MLP hidden widths. Empty selects a linear map.",
+    "state-dropout": "Dropout after hidden State Head MLP layers.",
+    "fragment-fc-dims": "Comma-separated Fragment Head MLP hidden widths, e.g. 128,64. Empty selects a linear map.",
+    "fragment-dropout": "Dropout after hidden Fragment Head MLP layers.",
     "ce-fc-dims": "Comma-separated CE MLP hidden widths. Empty selects a linear map.",
     "ce-center": "Normalize CE as (CE - center) / scale; saved in the model.",
     "ce-scale": "Positive CE normalization scale (default 100). Does not convert measurement units.",

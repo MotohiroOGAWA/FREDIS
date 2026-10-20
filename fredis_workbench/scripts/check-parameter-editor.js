@@ -36,13 +36,13 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  const current=editor.getValue(),args=buildArgs({input:'input.msds',outputDir:'output',fragmenterParams:current.fragmenter_params});assert(!args.includes('--params'));assert.deepEqual(JSON.parse(args[args.indexOf('--params-json')+1]),current.fragmenter_params);
  const dataArgs=buildArgs({input:'input.msds',outputDir:'out',fragmenterParams:current.fragmenter_params,symbols:current.symbols,maxUniqueFragmentSmiles:500,maxReactionCombinations:1000});assert(dataArgs.includes('--symbols-json'));assert.equal(dataArgs[dataArgs.indexOf('--max-unique-fragment-smiles')+1],'500');assert.equal(dataArgs[dataArgs.indexOf('--max-reaction-combinations')+1],'1000');assert(!dataArgs.includes('--max-node')&&!dataArgs.includes('--max-edge'));
  const trainingArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:current});assert(!trainingArgs.includes('--params'));assert(!trainingArgs.includes('--params-json'));
- // A resumed config always carries reaction_model_params.state_dropout and
- // spectrum_model_params.dropout (training_model_config writes both from the one
- // shared --dropout), but only that one shared field may ever be edited.
+ // Branch dropout remains linked to the shared setting; the new State Head
+ // dropout is independently editable in the spectrum model.
  const dropoutConfigRoot=new Element('div');
  createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{}},'training');
  assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.state_dropout'));
- assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
+ assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
+ assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');

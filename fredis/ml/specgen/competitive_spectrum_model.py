@@ -1,16 +1,11 @@
-"""CE-conditioned competing ion transitions and differentiable probability flow.
-
-The structural graph supplies allowed reactions. Every child adduct/shift
-condition competes with all other outgoing transitions and a self transition.
-No tree-wide attention or independently regressed intensity is used.
-"""
+"""Fragment DAG survival followed by conditional ion/shift state probabilities."""
 
 from __future__ import annotations
 from dataclasses import replace
 from functools import lru_cache
 import torch
 from torch import nn
-from .components.condition.condition_linear import ConditionTransitionHead
+from .components.condition.condition_linear import ConditionHead
 from ..common.torch_utils.segment_ops import segment_softmax
 from .fragment_spectrum_model import SpectrumModelOutput, SpectrumLossSettings
 from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
@@ -131,11 +126,13 @@ def merge_candidate_peaks(output):
         intensity=intensity,
         confidence=torch.ones_like(intensity),
         ion_probability=probability,
+        state_probability=None,
+        state_fragment_index=None,
     )
 
 
 class CompetitiveSpectrumModel(nn.Module):
-    """Compete structural ion-condition events with main-adduct-specific heads.
+    """Separate fragment events and conditional ion states per main adduct.
 
     State and edge construction is independent of formula/mz annotations.
     """
@@ -152,8 +149,10 @@ class CompetitiveSpectrumModel(nn.Module):
         precursor_main_adducts,
         formula_tensorizer,
         collision_energy_dim=16,
-        transition_fc_dims=(128, 64),
-        transition_dropout=0.0,
+        fragment_fc_dims=(128, 64),
+        fragment_dropout=0.0,
+        state_fc_dims=(128, 64),
+        state_dropout=0.0,
         descriptors=(),
     ):
         super().__init__()
@@ -178,25 +177,19 @@ class CompetitiveSpectrumModel(nn.Module):
             + reaction_dim
             + collision_energy_dim
         )
-        self.transition_heads = nn.ModuleDict(
-            {
-                self.head_index[main]: ConditionTransitionHead(
-                    len(conditions),
-                    input_dim,
-                    tuple(transition_fc_dims),
-                    transition_dropout,
-                )
-                for main, conditions in self.main_adduct_conditions.items()
-            }
-        )
-        # Terminal disappearance competes with Self. A separate scalar per
-        # main-adduct/ion/shift condition avoids forcing terminal survival to 1.
-        self.sink_logits = nn.ParameterDict(
-            {
-                self.head_index[main]: nn.Parameter(torch.zeros(len(conditions)))
-                for main, conditions in self.main_adduct_conditions.items()
-            }
-        )
+        self.fragment_heads = nn.ModuleDict({
+            self.head_index[main]: ConditionHead(
+                3, input_dim, tuple(fragment_fc_dims), fragment_dropout
+            )
+            for main in self.main_adduct_conditions
+        })
+        state_input_dim = 2 * (mol_encoder.graph_dim + len(descriptors)) + collision_energy_dim
+        self.state_heads = nn.ModuleDict({
+            self.head_index[main]: ConditionHead(
+                len(conditions), state_input_dim, tuple(state_fc_dims), state_dropout
+            )
+            for main, conditions in self.main_adduct_conditions.items()
+        })
         self.reaction_dim = reaction_dim
 
     def forward(
@@ -209,7 +202,7 @@ class CompetitiveSpectrumModel(nn.Module):
         molecular_embeddings=None,
         loss_settings=None,
     ):
-        """Score ion transitions, propagate mass, then compare formula-level peaks."""
+        """Propagate fragment mass, distribute into ion states, then supervise peaks."""
         if not getattr(data.decoded, "reaction_state_graph", False):
             raise ValueError(
                 "Competitive prediction requires all reaction-state transitions; regenerate prepared data"
@@ -226,39 +219,35 @@ class CompetitiveSpectrumModel(nn.Module):
         if state_count == 0:
             raise ValueError("Competitive model requires ion states")
 
-        initial_probability = self._initial_probability(
-            data, molecular, state_node_index, state_sample_index, sample_count
+        # A fragment row is (sample, structural node), independent of ion states.
+        fragments, state_fragment_index = torch.unique(
+            torch.stack((state_sample_index, state_node_index), dim=1),
+            dim=0, return_inverse=True,
         )
-        (
-            reaction_source_index,
-            reaction_target_index,
-            reaction_index,
-        ) = self._enumerate_transitions(
-            data, state_node_index, state_sample_index, sample_count, device
+        fragment_samples, fragment_nodes = fragments.unbind(1)
+        initial, source, target, event_reactions, event_type, root_index = self._fragment_events(
+            data, molecular, fragments, sample_count
         )
-        source, target, probabilities, event_reactions = self._score_transitions(
-            data,
-            molecular,
-            state_node_index,
-            state_sample_index,
-            reaction_h,
-            collision_energy_h,
-            reaction_source_index,
-            reaction_target_index,
-            reaction_index,
+        probabilities = self._score_fragment_events(
+            data, molecular, collision_energy_h, reaction_h,
+            fragment_nodes, fragment_samples, source, target, event_reactions, event_type,
         )
-        final_probability, state_sink_probability = propagate_probability(
-            initial_probability, source, target, probabilities
+        fragment_probability, fragment_sink = propagate_probability(
+            initial, source, target, probabilities
         )
-        sink_probability = final_probability.new_zeros(sample_count).scatter_add_(
-            0, state_sample_index, state_sink_probability
+        # State Head is evaluated after fragment propagation. It has no path
+        # back into Fragment Head logits or DAG event probabilities.
+        state_probability = self._score_states(
+            data, molecular, collision_energy_h, fragments, state_fragment_index, root_index
         )
-        retained_probability = final_probability.new_zeros(sample_count).scatter_add_(
-            0, state_sample_index, final_probability
+        final_probability = fragment_probability[state_fragment_index] * state_probability
+        sink_probability = molecular.new_zeros(sample_count).scatter_add_(
+            0, fragment_samples, fragment_sink
         )
-        initial_mass = initial_probability.new_zeros(sample_count).scatter_add_(
-            0, state_sample_index, initial_probability
+        retained_probability = molecular.new_zeros(sample_count).scatter_add_(
+            0, fragment_samples, fragment_probability
         )
+        initial_mass = molecular.new_zeros(sample_count).scatter_add_(0, fragment_samples, initial)
         if data.target_intensity is None:
             from .fragment_spectrum_model import annotate_ion_conditions
 
@@ -275,8 +264,8 @@ class CompetitiveSpectrumModel(nn.Module):
         metrics = {
             "intensity_loss": loss,
             **loss_metrics,
-            "num_ion_transitions": final_probability.new_tensor(
-                float(reaction_source_index.numel())
+            "num_fragment_transitions": final_probability.new_tensor(
+                float((event_type == 0).sum())
             ),
             "num_ion_states": final_probability.new_tensor(
                 float(state_count)
@@ -302,6 +291,11 @@ class CompetitiveSpectrumModel(nn.Module):
             transition_probability=probabilities,
             transition_reaction_index=event_reactions,
             sink_probability=sink_probability,
+            fragment_probability=fragment_probability,
+            fragment_node_index=fragment_nodes,
+            fragment_sample_index=fragment_samples,
+            state_fragment_index=state_fragment_index,
+            state_probability=state_probability,
         )
 
     def _encode_molecules(self, data, source_embeddings, molecular_embeddings):
@@ -337,162 +331,84 @@ class CompetitiveSpectrumModel(nn.Module):
     def _sample_main_adducts(self, data):
         return [self.precursor_main_adducts[value] for value in data.precursor_adducts]
 
-    def _initial_probability(
-        self,
-        data,
-        molecular,
-        state_node_index,
-        state_sample_index,
-        sample_count,
-    ):
-        """Seed source structures by adduct/shift labels, never by formula or m/z."""
-        result = molecular.new_zeros(state_node_index.numel())
-        groups = data.decoded.node_sample_index.tolist()
+    def _fragment_events(self, data, molecular, fragments, sample_count):
+        """Build Child/Self/Sink events on sample-specific Fragment DAGs."""
+        keys = fragments.detach().cpu().tolist()
+        lookup = {(sample, node): i for i, (sample, node) in enumerate(keys)}
+        groups = data.decoded.node_sample_index.detach().cpu().tolist()
         roots = {}
         for node, group in enumerate(groups):
             roots.setdefault(group, node)
-        mains = self._sample_main_adducts(data)
+        root_rows = [lookup[(sample, roots[groups[node]])] for sample, node in keys]
+        root_index = torch.tensor(root_rows, dtype=torch.long, device=molecular.device)
+        root_mask = [i == root for i, root in enumerate(root_rows)]
+        if sum(root_mask) != sample_count:
+            raise ValueError("Each spectrum sample requires exactly one fragment root")
+        initial = molecular.new_tensor(root_mask)
+        edges = data.decoded.edge_index.detach().cpu().T.tolist()
+        reactions = data.decoded.edge_added_reaction_index.detach().cpu().tolist()
+        events = set()
         for sample in range(sample_count):
-            rows = (state_sample_index == sample).nonzero().flatten()
-            if not rows.numel():
-                raise ValueError("Every sample requires ion-condition states")
-            root = roots[groups[int(state_node_index[rows[0]])]]
-            ion = data.ion_type_strs.index(mains[sample])
-            seeds = rows[
-                (state_node_index[rows] == root)
-                & (data.state_adduct_index[rows] == ion)
-                & (data.state_hydrogen_shift[rows] == 0)
-            ]
-            if not seeds.numel():
-                raise ValueError(
-                    "Ion rules must include main adduct with hydrogen shift 0 at Source"
-                )
-            result[seeds] = 1.0 / seeds.numel()
-        return result
+            for (parent, child), reaction in zip(edges, reactions):
+                parent_row, child_row = lookup.get((sample, parent)), lookup.get((sample, child))
+                if parent_row is not None and child_row is not None:
+                    if parent_row == child_row:
+                        raise ValueError("Break events must connect distinct fragments")
+                    events.add((parent_row, child_row, reaction, 0))
+        rows = sorted(events)
+        rows.extend((i, i, -1, 1) for i in range(len(keys)))
+        rows.extend((i, -1, -2, 2) for i in range(len(keys)))
+        tensors = torch.tensor(rows, dtype=torch.long, device=molecular.device)
+        return initial, *tensors.unbind(1), root_index
 
-    def _enumerate_transitions(
-        self, data, state_node_index, state_sample_index, sample_count, device
+    def _score_fragment_events(
+        self, data, molecular, collision_energy_h, reaction_h,
+        fragment_nodes, fragment_samples, source, target, reactions, event_type,
     ):
-        """Enumerate structural transitions across the complete output-condition grid."""
-        state_nodes = state_node_index.detach().cpu().tolist()
-        state_samples = state_sample_index.detach().cpu().tolist()
-        states_by_node_and_sample = {}
-        for state_index, (node_index, sample_index) in enumerate(
-            zip(state_nodes, state_samples)
-        ):
-            states_by_node_and_sample.setdefault(
-                (node_index, sample_index), []
-            ).append(state_index)
-        source = []
-        target = []
-        reactions = []
-        seen = set()
-        reaction_ids = data.decoded.edge_added_reaction_index.detach().cpu().tolist()
-        for edge, (a, b) in enumerate(
-            data.decoded.edge_index.detach().cpu().T.tolist()
-        ):
-            reaction_index = reaction_ids[edge]
-            for sample_index in range(sample_count):
-                for parent_index in states_by_node_and_sample.get(
-                    (a, sample_index), ()
-                ):
-                    for child_index in states_by_node_and_sample.get(
-                        (b, sample_index), ()
-                    ):
-                        event = (parent_index, child_index, reaction_index)
-                        if event in seen:
-                            continue
-                        seen.add(event)
-                        source.append(parent_index)
-                        target.append(child_index)
-                        reactions.append(reaction_index)
-        reaction_source_index = torch.tensor(source, device=device, dtype=torch.long)
-        reaction_target_index = torch.tensor(target, device=device, dtype=torch.long)
-        reaction_index = torch.tensor(reactions, device=device, dtype=torch.long)
-        return (
-            reaction_source_index,
-            reaction_target_index,
-            reaction_index,
-        )
-
-    def _score_transitions(
-        self,
-        data,
-        molecular,
-        state_node_index,
-        state_sample_index,
-        reaction_h,
-        collision_energy_h,
-        reaction_source_index,
-        reaction_target_index,
-        reaction_index,
-    ):
-        count = state_node_index.numel()
-        ids = torch.arange(count, device=molecular.device)
-        source = torch.cat((reaction_source_index, ids))
-        target = torch.cat((reaction_target_index, ids))
         reaction_features = molecular.new_zeros((source.numel(), self.reaction_dim))
-        valid = reaction_index >= 0
-        reaction_features[: reaction_index.numel()][valid] = reaction_h[
-            reaction_index[valid]
-        ]
-        samples = state_sample_index[source]
-        inputs = torch.cat(
-            (
-                molecular[state_node_index[source]],
-                molecular[state_node_index[target]],
-                reaction_features,
-                collision_energy_h[samples],
-            ),
-            1,
-        )
+        breaks = reactions >= 0
+        reaction_features[breaks] = reaction_h[reactions[breaks]]
+        # Self/Sink use the parent's structure twice and zero reaction features.
+        child = torch.where(target >= 0, target, source)
+        samples = fragment_samples[source]
+        inputs = torch.cat((
+            molecular[fragment_nodes[source]], molecular[fragment_nodes[child]],
+            reaction_features, collision_energy_h[samples],
+        ), dim=1)
         mains = self._sample_main_adducts(data)
-        condition_values = list(
-            zip(
-                data.state_adduct_index[target].tolist(),
-                data.state_hydrogen_shift[target].tolist(),
-            )
-        )
         sample_values = samples.tolist()
         logits = molecular.new_zeros(source.numel())
-        sink_by_event = molecular.new_zeros(source.numel())
+        for main in self.main_adduct_conditions:
+            rows = torch.tensor(
+                [i for i, sample in enumerate(sample_values) if mains[sample] == main],
+                dtype=torch.long, device=molecular.device,
+            )
+            if rows.numel():
+                logits[rows] = self.fragment_heads[self.head_index[main]](inputs[rows], event_type[rows])
+        return segment_softmax(logits, source, fragment_nodes.numel())
+
+    def _score_states(self, data, molecular, collision_energy_h, fragments, inverse, roots):
+        """Shared across fragments; normalize ion/shift states within each fragment."""
+        samples = data.state_sample_index
+        nodes = data.state_node_index
+        root_nodes = fragments[roots[inverse], 1]
+        inputs = torch.cat((molecular[nodes], molecular[root_nodes], collision_energy_h[samples]), dim=1)
+        mains = self._sample_main_adducts(data)
+        sample_values = samples.tolist()
+        adducts = data.state_adduct_index.tolist()
+        shifts = data.state_hydrogen_shift.tolist()
+        logits = molecular.new_zeros(nodes.numel())
         for main, conditions in self.main_adduct_conditions.items():
-            rows = [
-                i for i, sample in enumerate(sample_values) if mains[sample] == main
-            ]
+            rows = [i for i, sample in enumerate(sample_values) if mains[sample] == main]
             if not rows:
                 continue
             lookup = {value: i for i, value in enumerate(conditions)}
-            condition = torch.tensor(
-                [
-                    lookup[
-                        (
-                            data.ion_type_strs[condition_values[i][0]],
-                            condition_values[i][1],
-                        )
-                    ]
-                    for i in rows
-                ],
-                device=molecular.device,
-            )
-            index = torch.tensor(rows, device=molecular.device)
-            logits[index] = self.transition_heads[self.head_index[main]](
-                inputs[index], condition
-            )
-            sink_by_event[index] = self.sink_logits[self.head_index[main]][condition]
-        terminal = torch.ones(count, dtype=torch.bool, device=molecular.device)
-        terminal[reaction_source_index] = False
-        leaves = terminal.nonzero().flatten()
-        # Self rows follow break rows and carry the state's own condition.
-        sink = sink_by_event[reaction_source_index.numel() + leaves]
-        source = torch.cat((source, leaves))
-        target = torch.cat((target, torch.full_like(leaves, -1)))
-        logits = torch.cat((logits, sink))
-        # Reaction -1 is final Self; -2 is unobserved terminal disappearance.
-        event_reactions = torch.cat(
-            (reaction_index, torch.full_like(ids, -1), torch.full_like(leaves, -2))
-        )
-        return source, target, segment_softmax(logits, source, count), event_reactions
+            condition = torch.tensor([
+                lookup[(data.ion_type_strs[adducts[i]], shifts[i])] for i in rows
+            ], dtype=torch.long, device=molecular.device)
+            index = torch.tensor(rows, dtype=torch.long, device=molecular.device)
+            logits[index] = self.state_heads[self.head_index[main]](inputs[index], condition)
+        return segment_softmax(logits, inverse, fragments.shape[0])
 
     def _spectrum_loss(
         self,

@@ -1,8 +1,7 @@
 # FREDIS architecture, tensor flow, and training objectives
 
 Implementation reference: 2026-10-20. This document describes the current code,
-including main-adduct-specific ion/shift heads, not an older embedding-based
-spectrum model. Numbers below are either explicitly identified defaults or a
+including separate main-adduct-specific Fragment and State Heads. Numbers below are either explicitly identified defaults or a
 worked example; they are not measurements from a trained checkpoint.
 
 ## 1. Model boundary and execution order
@@ -21,11 +20,10 @@ SMILES + precursor adduct + collision energy (CE)
   -> shared MolEncoder and pattern-owned reaction encoders
   -> main-adduct-conditioned reaction-set search (no CE)
   -> RDKit materialization of accepted structural states
-  -> complete fragment-ion-adduct x hydrogen-shift state grid
-  -> independent condition-specific transition heads for each main adduct
-     inputs: parent structure, child structure, added reaction, CE
-  -> outgoing-event softmax including self events
-  -> repeated probability propagation
+  -> Fragment Head: Child / Self / Sink softmax per parent fragment
+  -> one topological DAG pass for fragment survival probabilities
+  -> State Head: ion-adduct x hydrogen-shift softmax per fragment
+  -> joint probabilities = fragment probability * conditional state probability
   -> mmkit formula and mass annotations
   -> formula aggregation, valid-peak normalization and export
 ```
@@ -433,100 +431,65 @@ populates them earlier only to construct targets. They are not condition IDs.
 Code: [state preparation and annotation](specgen/fragment_spectrum_model.py),
 [sample selection/collation](input/reaction_batching.py).
 
-## 12. Independent main-adduct/condition transition heads
+## 12. Fragment Head and State Head
 
-Each main adduct owns a separate `ConditionTransitionHead`. Its numeric module
-key is recorded by `head_index`; ion/shift labels determine its condition axis.
-For each layer:
+Each main precursor adduct owns two independent banks, shared across fragments.
+The main adduct selects the bank directly. Both use `ConditionHead` GELU MLPs
+with configurable hidden widths and dropout.
 
-```text
-weight [C, output_width, input_width]
-bias   [C, output_width]
-y[n] = weight[condition[n]] @ x[n] + bias[condition[n]]
-```
+Fragment Head inputs are parent molecular features, child molecular features,
+added reaction features and CE. Ion adduct and hydrogen shift are absent.
+Its three MLP slices score Child, Self and Sink. Self and Sink use the parent's
+features twice and zero reaction features. With molecule width 64, reaction
+width 128 and CE width 16, its input width is 272; first-layer weights are
+`[3,128,272]` with default hidden widths `[128,64]`.
 
-Events are grouped by condition for matrix multiplication to avoid copying one
-full weight matrix per event. Parameters remain independent across conditions
-and main adducts. Hidden layers use GELU and `transition_dropout`; the final
-layer is linear and emits a logit. Empty `transition_fc_dims` means a single
-condition-specific affine map.
+State Head inputs are fragment molecular features, original Source molecular
+features and CE. Its weights are shared by all fragments within the main-adduct
+bank, with one slice per ion/shift combination. For C=12 its input width is 144
+and its first-layer weights are `[12,128,144]`. It runs after Fragment DAG
+propagation and normalizes over all C states for each fragment/sample.
+Optional signed-log spectrum descriptors extend both molecular feature inputs.
 
-Inputs for a structural transition are:
+## 13. Fragment events, DAG propagation and State probabilities
 
-```text
-parent molecular vector  [N,64]
-child molecular vector   [N,64]
-added reaction vector    [N,128]
-CE vector                [N,16]
-concatenation            [N,272]
-```
-
-Here parent means the immediate parent structural node, not necessarily the
-original molecule. Reaction features still refer to the original source match.
-For C=12 and hidden widths `[128,64]`:
+The event graph contains sample-specific structural fragment rows. Each parent
+competes over its Child events, Self and Sink in one softmax. A terminal fragment
+still predicts both Self and Sink. No ion/shift Cartesian product appears in
+Fragment events. For the worked example, 11 fragment/sample rows and 10 Child
+edges produce 10 Child + 11 Self + 11 Sink = 32 events; State Head has 132 rows.
 
 ```text
-W1 [12,128,272], b1 [12,128] -> GELU -> Dropout
-W2 [12,64,128],  b2 [12,64]  -> GELU -> Dropout
-W3 [12,1,64],    b3 [12,1]   -> scalar logit per event
+P(Self | i) + sum_j P(j | i) + P(Sink | i) = 1
 ```
 
-Optional `spectrum_model_params.descriptors` append signed-log-transformed
-values to each molecular vector. With Dd descriptors, input width is
-`2*(Dm+Dd)+Dr+Dc`. This optional descriptor path is separate from MolEncoder's
-generic external-vector fusion.
+Initialize `incoming[root]=1` per sample. Visit each fragment once in topological
+order after summing every parent's contribution. Finalize
+`fragment_probability[i] = incoming[i] * P(Self | i)` and
+`sink[i] = incoming[i] * P(Sink | i)`; add only Child mass to child incoming values.
+Self and Sink are never repropagated. Cycles are rejected. For each sample,
+`sum(fragment_probability) + sum(sink) = 1`.
 
-The child condition chooses weights. There is no additional learned parent-ion
-feature: events with identical parent/child structures, reaction, CE and child
-condition receive identical break logits regardless of the parent's condition.
-Self events use the state's own condition, duplicate its molecular vector, and
-set reaction features to zero. Both use the same head bank.
+For root probabilities Self=0.2, Child=0.7, Sink=0.1 and terminal probabilities
+Self=0.6, Sink=0.4, retained masses are 0.2 and 0.42, with total sink mass 0.38.
 
-Code: [condition layers](specgen/components/condition/condition_linear.py),
-[head assembly and scoring](specgen/competitive_spectrum_model.py).
-
-## 13. Event graph, softmax and probability propagation
-
-Every structural edge connects all C parent conditions to all C child
-conditions. No formula, m/z, charge or neutral-loss test prunes these neural
-events. Duplicate event tuples are removed. Each state also has one self event.
-The example's sample-specific structural edges number `4+4+2=10`:
+After propagation, State Head normalizes ion/H-shift logits within each fragment:
 
 ```text
-break events: 10 * 12 * 12 = 1440
-self events:                 132
-Transition Head rows:        1572
-transition inputs:           [1572,272]
-additional sink logits:      one per terminal state
+sum_k state_probability[i,k] = 1
+joint_probability[i,k] = fragment_probability[i] * state_probability[i,k]
+log_joint_probability = log_fragment_probability + log_state_probability
 ```
 
-The main adduct chooses the bank and the child condition chooses a weight slice.
-For each parent state, softmax normalizes only that parent's outgoing events:
+These probabilities are multiplied, never added. State predictions cannot affect
+fragment flow. Different states retain separate rows until final formula-level
+aggregation. Formula/mass/charge do not control event or State normalization.
 
-```text
-P(event | parent) = exp(logit_event) / sum_outgoing exp(logit)
-```
-
-Initial mass is on the original source-root state with fragment adduct equal to
-main adduct and shift 0, using categorical labels. Rules must contain this
-condition. Formula-based matching to downstream neutral-loss precursor states
-is not used. CPU input reachability checks still validate declared precursors.
-
-Process each state once in topological order, after all parents have contributed.
-Retain `incoming_probability * P(self)` as its final mass; never propagate Self
-mass again. Add break-event mass to child incoming probabilities.
-
-Even terminal states obtain a Self logit from the Transition Head. Each
-main-adduct/ion/shift condition has a learnable sink logit initialized to zero.
-Leaves use `softmax([self_logit, sink_logit])`. Sink denotes unobserved
-disappearance: its mass is absorbed and excluded from spectrum intensities.
-For each sample, `sum(final_probability) + sink_probability = sum(initial_probability)`.
-The `probability_mass_error` metric includes sink. Cyclic break graphs are rejected.
-Output `sink_probability` is per sample. Diagnostics use target -1 for sink,
-reaction index -1 for Self, and reaction index -2 for sink.
-
-For `P->F=0.7`, `P(self)=0.3`, terminal `F(self)=0.6`, and `F(sink)=0.4`,
-final mass is 0.3 at P, 0.42 at F, and 0.28 in sink.
+Output diagnostics expose fragment probabilities and their node/sample indices,
+conditional state probabilities, and the state-to-fragment map. `ion_probability`
+is the joint probability. Transition diagnostics index fragment rows; Sink target
+is -1, Self reaction is -1 and Sink reaction is -2. `sink_probability` is per
+sample. `probability_mass_error` measures retained plus sink minus initial mass.
 
 ## 14. Formula annotation, aggregation and export
 
@@ -679,7 +642,8 @@ the precursor-excluded term.
 | Branch adduct embedding/projection | Yes | No |
 | Reaction-set SAB/BOS and branch query/key | Yes | No |
 | CE MLP | No | Yes |
-| Main-adduct/condition head banks | No | Yes |
+| Main-adduct Fragment Head | No | Yes |
+| Main-adduct State Head | No | Yes |
 | Chemistry relations, IDs and formula annotations | Not trainable | Not trainable |
 
 Freezing overrides updates for affected parameters. Spectrum gradients flow
@@ -702,8 +666,10 @@ learned proposal graphs.
 | `adduct_embedding_dim` | `--adduct-embedding-dim` | 32, branch only |
 | `collision_energy_dim` | `--collision-energy-feature-dim` | 16 |
 | `ce_fc_dims`, `ce_center`, `ce_scale` | `--ce-fc-dims`, `--ce-center`, `--ce-scale` | `[32]`, 0, 100 |
-| `transition_fc_dims` | `--transition-fc-dims` | `[128,64]`, per-condition GELU MLP |
-| `transition_dropout` | `--transition-dropout` | 0 |
+| `fragment_fc_dims` | `--fragment-fc-dims` | `[128,64]`, Fragment Head |
+| `fragment_dropout` | `--fragment-dropout` | 0 |
+| `state_fc_dims` | `--state-fc-dims` | `[128,64]`, State Head |
+| `state_dropout` | `--state-dropout` | 0 |
 | Spectrum `descriptors` | `--intensity-descriptors` | `[]` |
 | Branch / weak-negative / MIL temperature | `--branch-weight`, `--negative-weight`, `--branch-mil-temperature` | 1, 0.5, 0.1 |
 | Spectrum / cosine weights | `--intensity-loss-weight`, `--cosine-loss-weight` | 1, 1 |
@@ -716,7 +682,7 @@ for example the reaction API's state dropout defaults to 0, while the CLI sets
 external-feature data provider or dedicated training CLI flag.
 
 Workbench groups branch-adduct and CE settings in collapsed sections and exposes
-condition-head widths/dropout. Retired ion/shift embedding and ion-state-MLP
+Fragment/State Head widths and dropout. Retired ion/shift embedding and ion-state-MLP
 settings are removed. Old checkpoint compatibility is not implemented.
 
 Code: [CLI settings](training/fragment_tree_training/training.py),
@@ -732,7 +698,7 @@ Code: [CLI settings](training/fragment_tree_training/training.py),
 - Main-adduct banks and condition slices have independent parameters.
 - Parent ion condition has no additional learned input channel.
 - Formulas/masses annotate and supervise; they do not constrain learned transition topology.
-- Initialization is categorical main-adduct/zero-shift source-root initialization.
+- Initial fragment mass is 1 at each sample's original Source root.
 - Probabilities represent final Self mass after a single topological DAG pass.
 - Formula aggregation is post-propagation; display filtering does not restore discarded mass.
 - Spectrum supervision is limited to represented candidate formulas.
@@ -741,3 +707,5 @@ Code: [CLI settings](training/fragment_tree_training/training.py),
 Regression references: [condition-head and probability tests](../../tests/ml/reaction/test_competitive_spectrum.py),
 [training/structure tests](../../tests/ml/reaction/test_fragment_tree_model.py),
 [batch prediction tests](../../tests/ml/specgen/test_predict_source_msdataset.py).
+
+Old coupled Transition Head checkpoints are incompatible with the new banks and softmax definitions; retrain the model.

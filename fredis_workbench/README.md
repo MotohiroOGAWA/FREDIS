@@ -434,3 +434,10 @@ flow. This is contributed through the `fredis-workbench-file` language setting;
 ordinary text/source files keep their existing Auto Save behavior. An explicit
 user/workspace language override can still override this default. Reload the
 VS Code window after updating the extension to pick up the new contribution.
+
+Fragment and State Heads have separate architecture controls:
+`--fragment-fc-dims`, `--fragment-dropout`, `--state-fc-dims`, `--state-dropout`.
+Both default to hidden widths `128,64` and dropout `0`. Fragment Head normalizes
+Child/Self/Sink events per fragment; State Head normalizes ion/H-shift states
+after DAG propagation. Joint probabilities multiply the two distributions.
+Old coupled Transition Head checkpoints are incompatible and need retraining.

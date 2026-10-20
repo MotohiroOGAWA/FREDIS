@@ -34,7 +34,7 @@ def test_descriptors_only_affect_post_branch_intensity():
     assert not torch.equal(before.intensity,after.intensity)
     _,train=output(data)
     train.intensity.square().sum().backward()
-    grad=next(iter(generator.spectrum_model.transition_heads.values())).layers[0].weight.grad
+    grad=next(iter(generator.spectrum_model.fragment_heads.values())).layers[0].weight.grad
     assert grad.abs().sum()>0
 
 

@@ -13,7 +13,7 @@ from .TestReactionPipeline import config,chemistry
 def competitive_config():
     value=config()
     value['spectrum_model_params'].update(ce_fc_dims=[12,8],collision_energy_dim=8,ce_scale=100.,ce_center=0.,
-        transition_fc_dims=[16,8],transition_dropout=0.)
+        fragment_fc_dims=[16,8],fragment_dropout=0.,state_fc_dims=[16,8],state_dropout=0.)
     return value
 
 
@@ -52,22 +52,34 @@ def test_competitive_training_prediction_and_checkpoint():
     assert torch.isfinite(output.loss) and output.metrics['probability_mass_error']<1e-5
     output.loss.backward()
     assert any(p.grad is not None and p.grad.abs().sum()>0
-               for p in generator.spectrum_model.sink_logits.values())
+               for p in generator.spectrum_model.state_heads.parameters())
     retained = output.ion_probability.new_zeros(2).scatter_add_(
         0, output.sample_index, output.ion_probability
     )
     torch.testing.assert_close(retained + output.sink_probability, torch.ones(2))
     sink_events = output.transition_target_index == -1
-    leaves = output.transition_source_index[sink_events]
+    assert int(sink_events.sum()) == output.fragment_probability.numel()
+    has_child = torch.zeros_like(output.fragment_probability, dtype=torch.bool)
+    has_child[output.transition_source_index[output.transition_reaction_index >= 0]] = True
+    leaves = (~has_child).nonzero().flatten()
     self_events = output.transition_source_index == output.transition_target_index
     self_prob = output.transition_probability[self_events]
+    sink_prob = output.transition_probability[sink_events]
     assert leaves.numel() > 0
-    assert (self_prob[leaves] > 0).all() and (self_prob[leaves] < 1).all()
-    torch.testing.assert_close(
-        self_prob[leaves] + output.transition_probability[sink_events],
-        torch.ones(leaves.numel()),
+    assert (self_prob > 0).all() and (self_prob < 1).all()
+    torch.testing.assert_close(self_prob[leaves] + sink_prob[leaves], torch.ones(leaves.numel()))
+    assert ((self_prob + sink_prob)[has_child] < 1).all()
+    state_totals = output.state_probability.new_zeros(output.fragment_probability.numel()).scatter_add_(
+        0, output.state_fragment_index, output.state_probability
     )
-    assert next(iter(generator.spectrum_model.transition_heads.values())).layers[0].weight.grad.abs().sum()>0
+    torch.testing.assert_close(state_totals, torch.ones_like(state_totals))
+    torch.testing.assert_close(output.ion_probability,
+        output.fragment_probability[output.state_fragment_index] * output.state_probability)
+    fragment_totals = torch.zeros_like(output.fragment_probability).scatter_add_(
+        0, output.state_fragment_index, output.ion_probability
+    )
+    torch.testing.assert_close(fragment_totals, output.fragment_probability)
+    assert next(iter(generator.spectrum_model.fragment_heads.values())).layers[0].weight.grad.abs().sum()>0
     assert generator.feature_model.collision_energy_encoder.proj[0].weight.grad.abs().sum()>0
     assert any(p.grad is not None and p.grad.abs().sum()>0 for p in generator.feature_model.reaction_instance_encoder.parameters())
     restored=create_spectrum_generator(params).eval();restored.load_state_dict(generator.state_dict(),strict=True)
@@ -84,7 +96,7 @@ def test_competitive_training_prediction_and_checkpoint():
     torch.testing.assert_close(merged.ion_probability.sum(), pred.spectra.ion_probability[valid].sum())
     probabilities=pred.spectra.transition_probability
     sources=pred.spectra.transition_source_index
-    totals=probabilities.new_zeros(pred.spectra.intensity.numel()).scatter_add_(0,sources,probabilities)
+    totals=probabilities.new_zeros(pred.spectra.fragment_probability.numel()).scatter_add_(0,sources,probabilities)
     torch.testing.assert_close(totals,torch.ones_like(totals))
 
     assert not any('tree_encoder' in k for k in generator.spectrum_model.state_dict())
@@ -111,16 +123,17 @@ def test_mlp_cli_forwarding_and_configuration():
     parser=build_arg_parser()
     args=parser.parse_args(['--train-dir','train','--val-dir','val','--output-dir','out',
         '--ce-fc-dims','24,12','--ce-scale','50','--collision-energy-feature-dim','7',
-        '--transition-fc-dims','48,24'])
+        '--fragment-fc-dims','48,24','--state-fc-dims','32,16','--state-dropout','0.2'])
     forwarded=parser.parse_args(namespace_argv(parser,args))
     cfg=training_model_config(forwarded)['spectrum_model_params']
     assert cfg['ce_fc_dims']==[24,12] and cfg['collision_energy_dim']==7 and cfg['ce_scale']==50
-    assert cfg['transition_fc_dims']==[48,24]
+    assert cfg['fragment_fc_dims']==[48,24]
+    assert cfg['state_fc_dims']==[32,16] and cfg['state_dropout']==0.2
     assert 'propagation_steps' not in cfg
     with pytest.raises(SystemExit):
         parser.parse_args(['--train-dir','t','--val-dir','v','--output-dir','o',
                            '--propagation-steps','6'])
-    assert parser.parse_args(namespace_argv(parser,parser.parse_args(['--train-dir','t','--val-dir','v','--output-dir','o','--transition-fc-dims','']))).transition_fc_dims==[]
+    assert parser.parse_args(namespace_argv(parser,parser.parse_args(['--train-dir','t','--val-dir','v','--output-dir','o','--fragment-fc-dims','']))).fragment_fc_dims==[]
 
 
 
@@ -166,13 +179,13 @@ def test_main_adduct_condition_banks_have_independent_weights():
     sodium['fragment_ion_adducts'] = ['[M+Na]+', '[M+H]+']
     generator = create_spectrum_generator(params).eval()
     model = generator.spectrum_model
-    na = model.transition_heads[model.head_index['[M+Na]+']]
-    proton = model.transition_heads[model.head_index['[M+H]+']]
-    assert na.layers[0].weight.shape == (12, 16, 64)
+    na = model.state_heads[model.head_index['[M+Na]+']]
+    proton = model.state_heads[model.head_index['[M+H]+']]
+    assert na.layers[0].weight.shape == (12, 16, 48)
     assert na.layers[0].bias.shape == (12, 16)
     assert na.layers[-1].weight.shape == (12, 1, 16)
     assert isinstance(na.activation, torch.nn.GELU)
-    x = torch.randn(2, 64)
+    x = torch.randn(2, 48)
     ids = torch.tensor([0, 1])
     before = proton(x, ids).detach().clone()
     with torch.no_grad():
@@ -208,7 +221,7 @@ def test_inference_annotates_full_condition_grid_after_scoring(monkeypatch):
     generator = create_spectrum_generator(config()).eval()
     model = generator.spectrum_model
     scored = []
-    hook = next(iter(model.transition_heads.values())).register_forward_hook(lambda *args: scored.append(True))
+    hook = next(iter(model.fragment_heads.values())).register_forward_hook(lambda *args: scored.append(True))
     original = batches.annotate_ion_conditions
     def annotate(data, tensorizer):
         assert scored, 'Formula annotations must follow neural scoring'
@@ -235,7 +248,7 @@ def test_mixed_main_adduct_batch_routes_to_separate_banks():
     sodium['fragment_ion_adducts'] = ['[M+Na]+', '[M+H]+']
     generator = create_spectrum_generator(params).eval()
     called = []
-    hooks = [generator.spectrum_model.transition_heads[generator.spectrum_model.head_index[main]].register_forward_hook(
+    hooks = [generator.spectrum_model.fragment_heads[generator.spectrum_model.head_index[main]].register_forward_hook(
         lambda module, args, output, main=main: called.append(main))
         for main in ('[M+H]+', '[M+Na]+')]
     source = Compound.from_smiles('CCO')
@@ -403,3 +416,92 @@ def test_disconnected_samples_and_multiple_initial_states_conserve_mass():
     torch.testing.assert_close(total, torch.ones(2))
     torch.testing.assert_close(final, torch.tensor([.3, .35, .5, .25]))
     torch.testing.assert_close(sink, torch.tensor([0., .35, 0., .25]))
+
+
+def test_state_head_is_shared_normalized_and_cannot_change_fragment_flow():
+    generator = create_spectrum_generator(competitive_config()).eval()
+    model = generator.spectrum_model
+    with torch.no_grad():
+        for head in (*model.fragment_heads.values(), *model.state_heads.values()):
+            for parameter in head.parameters():
+                parameter.zero_()
+    source, adduct = Compound.from_smiles('CCO'), Adduct.parse('[M+H]+')
+    before = generator.predict([source], [adduct], [20.]).spectra
+    condition_count = len(model.main_adduct_conditions['[M+H]+'])
+    torch.testing.assert_close(before.state_probability,
+        torch.full_like(before.state_probability, 1 / condition_count))
+    event_count = torch.bincount(before.transition_source_index)
+    torch.testing.assert_close(before.transition_probability,
+        1 / event_count[before.transition_source_index].float())
+    with torch.no_grad():
+        model.state_heads[model.head_index['[M+H]+']].layers[-1].bias[0].add_(2)
+    after = generator.predict([source], [adduct], [20.]).spectra
+    torch.testing.assert_close(before.fragment_probability, after.fragment_probability, rtol=0, atol=0)
+    torch.testing.assert_close(before.transition_probability, after.transition_probability, rtol=0, atol=0)
+    torch.testing.assert_close(before.sink_probability, after.sink_probability, rtol=0, atol=0)
+    assert not torch.equal(before.state_probability, after.state_probability)
+    assert not torch.equal(before.ion_probability, after.ion_probability)
+    totals = torch.zeros_like(after.fragment_probability).scatter_add_(
+        0, after.state_fragment_index, after.state_probability)
+    torch.testing.assert_close(totals, torch.ones_like(totals))
+
+
+def test_fragment_flow_has_no_autograd_dependency_on_state_head():
+    generator = create_spectrum_generator(competitive_config()).eval()
+    data, _ = ReactionStructureBuilder(generator).build(
+        Compound.from_smiles('CC(O)N'), [Adduct.parse('[M+H]+')], [20.],
+        [[18.033826, 44.049476]], [[.5, 1.]],
+    )
+    features = generator.feature_model(data, training_pool=True)
+    output = generator.spectrum_model(data.spectrum_batch, reaction_h=features.reaction_h,
+        collision_energy_h=features.collision_energy_h, source_embeddings=features.source_embeddings)
+    state_parameters = tuple(generator.spectrum_model.state_heads.parameters())
+    gradients = torch.autograd.grad(output.fragment_probability.sum(), state_parameters,
+                                    allow_unused=True, retain_graph=True)
+    assert all(gradient is None for gradient in gradients)
+    output.loss.backward()
+    for heads in (generator.spectrum_model.fragment_heads, generator.spectrum_model.state_heads):
+        assert any(parameter.grad is not None and torch.isfinite(parameter.grad).all()
+                   and parameter.grad.abs().sum() > 0 for parameter in heads.parameters())
+    # Sink is a separate learned event even for nonterminal fragments.
+    head = generator.spectrum_model.fragment_heads[generator.spectrum_model.head_index['[M+H]+']]
+    assert head.layers[-1].bias.grad[2].abs().sum() > 0
+
+
+def test_fragment_diamond_then_state_softmax_has_known_joint_probabilities():
+    from types import SimpleNamespace
+    from fredis.ml.specgen.competitive_spectrum_model import CompetitiveSpectrumModel
+    from fredis.ml.mol.formula_encoder import FormulaTensorizer
+    encoder = torch.nn.Identity(); encoder.graph_dim = 2
+    model = CompetitiveSpectrumModel(
+        encoder, 1, main_adduct_conditions={'[M+H]+': (('[M+H]+', -1), ('[M+H]+', 0))},
+        precursor_main_adducts={'[M+H]+': '[M+H]+'},
+        formula_tensorizer=FormulaTensorizer(('C',)), collision_energy_dim=1,
+        fragment_fc_dims=(), state_fc_dims=(),
+    )
+    with torch.no_grad():
+        for heads in (model.fragment_heads, model.state_heads):
+            for parameter in heads.parameters():
+                parameter.zero_()
+    data = SimpleNamespace(
+        decoded=SimpleNamespace(reaction_state_graph=True,
+            node_sample_index=torch.zeros(4, dtype=torch.long),
+            edge_index=torch.tensor([[2, 0, 1, 0], [3, 2, 3, 1]]),
+            edge_added_reaction_index=torch.zeros(4, dtype=torch.long)),
+        state_node_index=torch.arange(4).repeat_interleave(2),
+        state_sample_index=torch.zeros(8, dtype=torch.long),
+        state_adduct_index=torch.zeros(8, dtype=torch.long),
+        state_hydrogen_shift=torch.tensor([-1, 0] * 4),
+        state_formula_tensor=torch.tensor([[1., 1.]] * 8),
+        state_mz=torch.ones(8), ion_type_strs=('[M+H]+',),
+        precursor_adducts=('[M+H]+',), target_intensity=torch.zeros(8),
+    )
+    output = model(data, reaction_h=torch.ones(1, 1),
+        collision_energy_h=torch.ones(1, 1), molecular_embeddings=torch.ones(4, 2))
+    # Root has four events; middle nodes have three; leaf has Self and Sink.
+    expected = torch.tensor([1/4, 1/12, 1/12, 1/12])
+    torch.testing.assert_close(output.fragment_probability, expected)
+    torch.testing.assert_close(output.state_probability, torch.full((8,), .5))
+    torch.testing.assert_close(output.ion_probability, expected.repeat_interleave(2) * .5)
+    torch.testing.assert_close(output.sink_probability, torch.tensor([.5]))
+    torch.testing.assert_close(output.ion_probability.sum()+output.sink_probability.sum(), torch.tensor(1.))
