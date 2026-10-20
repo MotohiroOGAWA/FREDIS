@@ -36,7 +36,7 @@ def branch_mil_loss(
     data: object,
     inverse_reaction: Tensor,
     temperature: float = 0.1,
-    negative_weight: float = 0.2,
+    negative_weight: float = 0.5,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Return total, positive MIL, weak-negative loss and path log scores."""
     step_state = data.teacher_path_step_state_index
@@ -97,7 +97,7 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
     def __init__(
         self,
         feature_model: nn.Module,
-        negative_weight: float = 0.2,
+        negative_weight: float = 0.5,
         spectrum_model: nn.Module | None = None,
         branch_mil_temperature: float = 0.1,
         branch_weight: float = 1.0,

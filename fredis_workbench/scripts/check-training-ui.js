@@ -34,7 +34,34 @@ for(const name of ['weightDecay','gradientClip','branchWeight','negativeWeight',
 assert(!form.querySelector('[data-parameter-path$="loss_weight"]'));
 for(const key of ['branch_path_threshold','max_fragment_nodes','peak_intensity_threshold'])assert(form.querySelector('[data-parameter-path="generation_params.'+key+'"]'));
 assert.equal(form.elements.branchMilTemperature.value,'0.1');
-assert.equal(form.elements.negativeWeight.value,'0.2');
+assert.equal(form.elements.negativeWeight.value,'0.5');
+assert.equal(form.elements.cosineLossWeight.value,'1');
+for(const input of form.querySelectorAll('#trainingLossFields input')){
+ assert(input.closest('label').dataset.help.length>20, input.name+' has hover help');
+}
+const helpLabel=form.elements.negativeWeight.closest('label');
+helpLabel.dispatchEvent(new w.MouseEvent('mouseenter'));
+await new Promise(resolve=>setTimeout(resolve,550));
+assert.equal(d.getElementById('helpTooltip').textContent,helpLabel.dataset.help);
+assert(d.getElementById('helpTooltip').classList.contains('visible'));
+helpLabel.dispatchEvent(new w.MouseEvent('mouseleave'));
+assert(!d.getElementById('helpTooltip').classList.contains('visible'));
+// Wheel scrolling leaves values untouched and does not cancel page scrolling.
+const wheelInput=form.elements.negativeWeight;
+wheelInput.focus();
+assert.equal(d.activeElement,wheelInput);
+const wheel=new w.WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:100});
+wheelInput.dispatchEvent(wheel);
+assert.notEqual(d.activeElement,wheelInput);
+assert.equal(wheelInput.value,'0.5');
+assert.equal(wheel.defaultPrevented,false);
+wheelInput.value='0.6';wheelInput.focus();assert.equal(wheelInput.value,'0.6');
+wheelInput.value='0.5';
+// Delegation also covers numeric fields created after the page loads.
+const dynamicNumber=d.createElement('input');dynamicNumber.type='number';dynamicNumber.value='3';
+form.append(dynamicNumber);dynamicNumber.focus();
+dynamicNumber.dispatchEvent(new w.WheelEvent('wheel',{bubbles:true,deltaY:-100}));
+assert.notEqual(d.activeElement,dynamicNumber);assert.equal(dynamicNumber.value,'3');dynamicNumber.remove();
 assert(d.querySelector('#trainingLossSummary').textContent.includes('Branch MIL + Weak Negatives'));
 assert(d.querySelector('#trainingLossSummary').textContent.includes('Spectrum Intensity'));
 assert(d.querySelector('#trainingLossSummary').textContent.includes('Branch MIL'));

@@ -109,7 +109,7 @@ class SpectrumLossSettings:
     """Training objective of :class:`CompetitiveSpectrumModel`; not part of the architecture."""
 
     intensity_loss_weight: float = 1.0
-    cosine_loss_weight: float = 0.5
+    cosine_loss_weight: float = 1.0
 
     def __post_init__(self) -> None:
         for name in ("intensity_loss_weight", "cosine_loss_weight"):

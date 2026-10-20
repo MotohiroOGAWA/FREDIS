@@ -12,9 +12,9 @@ python -m fredis.cli train fragment-tree \
   --output-dir training/run \
   --node-dim 32 --graph-dim 128 \
   --epochs 20 --device cuda \
-  --branch-weight 1 --negative-weight 0.2 \
+  --branch-weight 1 --negative-weight 0.5 \
   --branch-mil-temperature 0.1 \
-  --intensity-loss-weight 1 --cosine-loss-weight 0.5 \
+  --intensity-loss-weight 1 --cosine-loss-weight 1 \
   --branch-path-threshold 0 --max-fragment-nodes 100
 ```
 

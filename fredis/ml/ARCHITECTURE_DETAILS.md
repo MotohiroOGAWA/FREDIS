@@ -606,8 +606,8 @@ L_negative = mean_weak_negatives softplus(negative_logit)
 L_branch = L_positive + negative_weight * L_negative
 ```
 
-Default `negative_weight=0.2`. For negative logits `[-1,0.5]`, negative loss is
-about 0.644, so the example branch loss is `0.980+0.2*0.644 ~ 1.109`.
+Default `negative_weight=0.5`. For negative logits `[-1,0.5]`, negative loss is
+about 0.644, so the example branch loss is `0.980+0.5*0.644 ~ 1.302`.
 Empty applicable loss terms are zero. These are teacher-peak/event means,
 not an additional per-molecule-balanced reduction.
 
@@ -639,7 +639,7 @@ state probabilities [0.2,0.3,0.1,0.4] -> P = [0.2,0.4,0.4]
 state targets       [20,100,100,0]     -> y = [20,100,0]
 w = [1/6,5/6,0]
 L_cross_entropy ~ 1.032; cosine ~ 0.719
-L_with_precursor ~ 1.032 + 0.5*(1-0.719) ~ 1.172
+L_with_precursor ~ 1.032 + 1*(1-0.719) ~ 1.313
 valid display intensities = [0.5,1,1]
 ```
 
@@ -663,7 +663,7 @@ L_total = branch_weight * (L_positive + negative_weight * L_negative)
         + L_spectrum
 ```
 
-Defaults: branch 1, negative 0.2, intensity 1, cosine 0.5. The two numerical
+Defaults: branch 1, negative 0.5, intensity 1, cosine 1. The two numerical
 examples above cover only the precursor-inclusive term; the total also adds
 the precursor-excluded term.
 
@@ -701,8 +701,8 @@ learned proposal graphs.
 | `transition_dropout` | `--transition-dropout` | 0 |
 | `propagation_steps` | `--propagation-steps` | 6 |
 | Spectrum `descriptors` | `--intensity-descriptors` | `[]` |
-| Branch / weak-negative / MIL temperature | `--branch-weight`, `--negative-weight`, `--branch-mil-temperature` | 1, 0.2, 0.1 |
-| Spectrum / cosine weights | `--intensity-loss-weight`, `--cosine-loss-weight` | 1, 0.5 |
+| Branch / weak-negative / MIL temperature | `--branch-weight`, `--negative-weight`, `--branch-mil-temperature` | 1, 0.5, 0.1 |
+| Spectrum / cosine weights | `--intensity-loss-weight`, `--cosine-loss-weight` | 1, 1 |
 | Search/output limits | `--branch-path-threshold`, `--max-fragment-nodes`, `--peak-intensity-threshold` | 0, 100, 0 |
 
 API constructor defaults and Workbench presets can differ from CLI defaults;

@@ -331,9 +331,11 @@ label for 500ms to see its description.
 The default CLI is `python -m fredis.cli train fragment-tree`; it jointly
 trains a newly initialized Mol Encoder. Training options include
 `--weight-decay`, `--gradient-clip`, `--branch-weight`, `--negative-weight`,
-`--branch-mil-temperature`, `--fragment-loss-weight`, `--state-loss-weight`,
-`--intensity-loss-weight`, `--cosine-loss-weight`, `--precursor-free-loss-weight`
-and `--intensity-power`, all in **Optimization and Loss**. Spectrum generation
+`--branch-mil-temperature`, `--intensity-loss-weight` and
+`--cosine-loss-weight`, all in **Optimization and Loss**. Weak negative reaction
+weight defaults to `0.5`; cosine loss weight defaults to `1`. Hover over each
+label for its description. Mouse-wheel scrolling does not change numeric input
+values; edit the field or use its step arrows. Spectrum generation
 settings (branch path threshold, fragment node budget, ion and peak thresholds)
 form their own **Generation Params** section, separate from the architecture.
 
