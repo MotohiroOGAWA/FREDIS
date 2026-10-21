@@ -157,7 +157,7 @@ assert.match(page, /evaluationReady/);
 const manifest = require('../package.json');
 const evaluationEditor = manifest.contributes.customEditors.find(item => item.viewType === 'fredis.evaluationConfigEditor');
 assert.deepEqual(evaluationEditor.selector.map(item => item.filenamePattern),
-  ['*.evalcol.pft', '*.evalgroup.pft']);
+  ['*.evaltrainable.pft', '*.evalcol.pft', '*.evalgroup.pft']);
 assert.match(fs.readFileSync(require.resolve('../src/extension'), 'utf8'), /evaluation\.register\(context, output, projectRoot\)/);
 const editorSource = fs.readFileSync(require.resolve('../src/features/evaluation/editor'), 'utf8');
 assert.match(editorSource, /FREDIS_PROGRESS/);
@@ -232,3 +232,92 @@ console.log('Evaluation webview and CLI argument checks passed.');
   assert.equal(panels.length, count);
   console.log('Standalone evaluation commands and initial tab selection checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Preparation evaluation opens first, and settings restore columns and tool rows.
+{
+  const {JSDOM} = require('jsdom');
+  const messages=[];
+  const dom=new JSDOM(page,{runScripts:'dangerously',beforeParse(window){window.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m)});}});
+  const w=dom.window, d=w.document;
+  assert.equal(d.getElementById('filteringEvaluation').hidden,false);
+  assert.equal(d.getElementById('columnEvaluation').hidden,true);
+  d.getElementById('filterAdd').click();
+  assert.equal(d.querySelectorAll('[data-tool]').length,2);
+  d.querySelector('[data-remove="1"]').click();
+  assert.equal(d.querySelectorAll('[data-tool]').length,1);
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringConfigLoaded',path:'/tmp/settings.evaltrainable.pft',config:{metadata:'/tmp/data.msds',idColumn:'SpecID',groupColumn:'Class',tools:[{name:'FREDIS',path:'/tmp/ids.txt',color:'#123456'}]}}}));
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringColumns',result:{columns:['SpecID','Class'],rows:4}}}));
+  assert.equal(w.evalFiltering.request().groupColumn,'Class');
+  assert.equal(w.evalFiltering.request().tools[0].name,'FREDIS');
+  d.getElementById('filterRun').click();
+  assert.equal(messages.at(-1).type,'filteringRun');
+  const beforeRestore=messages.length;
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringConfigLoaded',path:'/moved/settings.evaltrainable.pft',config:{metadata:'/missing/source.msds',idColumn:'SpecID',groupColumn:'Class',resultPath:'results.json',tools:[],view:{categories:['A'],tools:['Common'],showOverall:false}}}}));
+  assert.equal(messages.length,beforeRestore); // no metadata read on cached restore
+  const rows=[{scope:'category',category:'A',tool:'Common',totalN:2,retainedN:1,excludedN:1,retainedPercent:50}];
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringResult',restored:true,result:{rows,displayRows:rows,diagnostics:[],sourceN:2,title:'Cached',series:[{name:'Common',color:'#666666'}],png:''}}}));
+  assert.equal(d.getElementById('filterPresentation').hidden,false);
+  assert.equal(w.evalFiltering.request().view.showOverall,false);
+  for(const id of ['filterOverall','filterVisibleTools','filterMinN','filterCategories'])assert.equal(d.getElementById(id),null);
+  assert.equal(w.evalFiltering.request().view.minN,0);
+  assert(d.getElementById('filterGraphTab').compareDocumentPosition(d.getElementById('filterCommonColor')) & w.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert(!d.getElementById('filterClassificationColumns'));
+  assert.equal(d.getElementById('filterGraphPage').style.overflow,'auto');
+  assert.equal(d.getElementById('filterChart').style.maxWidth,'none');
+  // The list filter may show an unchecked category while a checked one is hidden.
+  const graphRows=[{scope:'category',category:'A',tool:'Common',totalN:2,retainedN:1,excludedN:1,retainedPercent:50}];
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringPresentation',result:{displayRows:graphRows,categoryRows:[{scope:'category',category:'A',totalN:2}],listRows:[{scope:'category',category:'B',totalN:1}],fields:[{id:'category',label:'Category',type:'text'},{id:'totalN',label:'Original N',type:'number'}],png:''}}}));
+  d.getElementById('filterUnselectShown').click();
+  assert.deepEqual(Array.from(w.evalFiltering.request().view.categories),['A']);
+  d.getElementById('filterSelectShown').click();
+  assert.deepEqual(Array.from(w.evalFiltering.request().view.categories),['A','B']);
+  const check=d.querySelector('[data-category-check]');
+  assert(check.checked);check.checked=false;check.dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.deepEqual(Array.from(w.evalFiltering.request().view.categories),['A']);
+  assert.match(d.getElementById('filterCategoryResults').textContent,/Distribution/);
+  d.getElementById('filterListTab').click();
+  assert.equal(d.getElementById('filterListPage').hidden,false);
+  assert.equal(d.getElementById('filterGraphPage').hidden,true);
+  d.getElementById('filterCommonHex').value='#abcdef';
+  d.getElementById('filterCommonHex').dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.equal(d.getElementById('filterCommonColor').value,'#abcdef');
+  assert.equal(w.evalFiltering.request().view.orientation,'vertical');
+  assert.equal(w.evalFiltering.request().view.colors.Common,'#abcdef');
+  d.getElementById('filterAddSort').click();
+  assert.equal(w.evalFiltering.request().view.sortRules.length,2);
+  d.getElementById('filterAddFilter').click();
+  assert.equal(w.evalFiltering.request().view.filters[0].field,'totalN');
+  const threshold=d.querySelector('#filterFilterRules [data-key="value"]');
+  threshold.value='10';threshold.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.equal(w.evalFiltering.request().view.filters[0].value,'10');
+  d.getElementById('filterExportTsv').click();
+  assert.equal(messages.at(-1).type,'filteringExport');
+  assert.equal(messages.at(-1).format,'tsv');
+  assert.deepEqual(Array.from(messages.at(-1).view.categories),['A']);
+  assert.equal(messages.at(-1).request,undefined); // exports never recalculate inputs
+  d.getElementById('filterExportSvg').click();
+  assert.equal(messages.at(-1).format,'svg');
+  d.getElementById('filterApply').click();
+  assert.equal(messages.at(-1).type,'filteringView');
+  d.getElementById('filterSave').click();
+  assert.deepEqual(Array.from(messages.at(-1).config.view.tools),['Common']);
+  d.querySelector('[data-eval-tab="column"]').click();
+  assert.equal(d.getElementById('filteringEvaluation').hidden,true);
+  assert.equal(d.getElementById('columnEvaluation').hidden,false);
+  dom.window.close();
+}
+
+// Saving repeatedly must keep exactly one evaluation extension.
+for (const [kind, suffix] of [['filtering','.evaltrainable.pft'],['column','.evalcol.pft'],['grouped','.evalgroup.pft']]) {
+  const expected='/tmp/m_h_plus.msds'+suffix;
+  let filename=expected;
+  for(let i=0;i<5;i++) {
+    filename=ensureEvaluationConfigSuffix(filename,kind);
+    assert.equal(filename,expected);
+  }
+  assert.equal(ensureEvaluationConfigSuffix(expected+suffix+suffix,kind),expected);
+  assert.equal(ensureEvaluationConfigSuffix('/tmp/result.evalcol.pft.evalgroup.pft',kind),'/tmp/result'+suffix);
+}
+assert.doesNotMatch(editorSource, /\[suffix\.slice\(1\)\]/);
+
+assert.equal(evaluationConfigSuffix('filtering'), '.evaltrainable.pft');

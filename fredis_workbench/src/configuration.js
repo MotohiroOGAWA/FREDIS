@@ -1,3 +1,4 @@
+const fileFormats = require('./file-formats');
 const vscode = require('vscode');
 
 const SCHEMA = 'fredis.workbench.configuration';
@@ -25,8 +26,7 @@ function parseConfiguration(value, expectedKind) {
 
 function configurationSuffix(defaultName) {
   const lowerDefaultName = defaultName.toLowerCase();
-  return lowerDefaultName.endsWith('.reaction-pattern-analysis.pft')
-    ? '.reaction-pattern-analysis.pft' : lowerDefaultName.endsWith('.pft') ? '.pft' : '.json';
+  return fileFormats.match(defaultName)?.suffix || (lowerDefaultName.endsWith('.pft') ? '.pft' : '.json');
 }
 
 async function saveConfiguration(kind, config, defaultName) {

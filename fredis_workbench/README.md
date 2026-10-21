@@ -441,3 +441,26 @@ Both default to hidden widths `128,64` and dropout `0`. Fragment Head normalizes
 Child/Self/Sink events per fragment; State Head normalizes ion/H-shift states
 after DAG propagation. Joint probabilities multiply the two distributions.
 Old coupled Transition Head checkpoints are incompatible and need retraining.
+
+### File format registry
+
+`../evaluation/file-formats.json` is the canonical, version 1 registry shared by
+Python result writers and the extension. Each `formats` entry has a unique `id`
+and `suffix`, plus `viewType`, `editorName`, `label`, and `description`.
+Evaluation entries additionally declare `evaluationKind`. Suffixes must be
+lowercase and start with a dot; match the longest suffix first. The generic
+`.pft` fallback is declared separately and never implies a dataset format.
+
+Add a format here, register its editor implementation if it is new, and run
+`npm run sync:file-formats`. This generates `src/file-formats.generated.json`,
+VS Code custom editor selectors, activation events, and language icon suffixes
+in `package.json`. Development startup and packaging run this automatically;
+`npm run check` detects stale generated files. Do not edit generated format
+contributions directly. Runtime editors use `file-formats.format(id)` for their
+suffixes and editor IDs. Python installations include the canonical registry
+as package data; packaged VS Code extensions include the generated copy.
+
+Unrecognized `.pft` filenames open the searchable File Formats catalogue,
+which lists every registered format automatically. Users can select an editor
+for the current file or open it as text. Selecting an editor does not rename,
+convert, or save the file; the editor validates the selected format's contents.

@@ -1,0 +1,65 @@
+const assert = require('assert/strict');
+const Module = require('module');
+const fs = require('fs');
+const path = require('path');
+const {JSDOM} = require('jsdom');
+const formats = require('../src/file-formats');
+const calls = [];
+const originalLoad = Module._load;
+Module._load = function(request,parent,isMain) {
+  if (request === 'vscode') return {commands:{executeCommand:async (...args)=>calls.push(args)}};
+  return originalLoad.call(this,request,parent,isMain);
+};
+const picker = require('../src/features/file-format-picker');
+const {ResultEditorProvider} = require('../src/extension');
+Module._load = originalLoad;
+
+async function main() {
+  assert.equal(formats.match('/tmp/unknown.pft'),undefined);
+  assert.equal(formats.match('/tmp/removed-format.pft'),undefined);
+  assert.equal(formats.match('/tmp/SETTINGS.EVALTRAINABLE.PFT').evaluationKind,'filtering');
+  assert.equal(formats.match('/tmp/training.pft').id,'training-report');
+  assert.equal(formats.match('/tmp/result.reactionpatternanalysis.pft').id,'reaction-analysis-result');
+  const generated = formats.contributions();
+  const manifest = require('../package.json');
+  assert.deepEqual(manifest.contributes.customEditors,generated.customEditors);
+  assert.deepEqual(manifest.contributes.languages[0].extensions,generated.extensions);
+  assert.equal(new Set(formats.formats.map(f=>f.id)).size,formats.formats.length);
+  assert.equal(new Set(formats.formats.map(f=>f.suffix)).size,formats.formats.length);
+  const provider = new ResultEditorProvider({},{});
+  let resultOpens=0;
+  provider.resolveResultEditor=async()=>{resultOpens++;};
+  let handler;
+  const panel={webview:{options:{},onDidReceiveMessage(fn){handler=fn;return {dispose(){}};},postMessage:async()=>{}}};
+  const uri={fsPath:'/does-not-exist/unknown.<script>.pft'};
+  await provider.resolveCustomEditor({uri},panel);
+  assert.equal(resultOpens,0,'unknown formats must not open training dataset results');
+  assert.match(panel.webview.html,/FREDIS File Formats/);
+  assert.doesNotMatch(panel.webview.html,/<script>\.pft/);
+  await handler({type:'format/open',id:'evaluation-trainable'});
+  assert.deepEqual(calls.pop(),['vscode.openWith',uri,'fredis.evaluationConfigEditor']);
+  await handler({type:'format/text'});
+  assert.deepEqual(calls.pop(),['vscode.openWith',uri,'default']);
+  await handler({type:'format/open',id:'training-data'});
+  assert.equal(resultOpens,1,'explicit result selection opens the selected viewer');
+  await provider.resolveCustomEditor({uri:{fsPath:'/tmp/settings.evalcol.pft'}},panel);
+  assert.equal(calls.pop()[2],'fredis.evaluationConfigEditor');
+  await provider.resolveCustomEditor({uri:{fsPath:'/tmp/fragment-tree.training-data.pft'}},panel);
+  assert.equal(resultOpens,2);
+  // Adding one registry entry automatically expands catalogue and contributions.
+  formats.formats.push({id:'future-test',suffix:'.future.pft',viewType:'fredis.futureEditor',editorName:'Future Editor',label:'Future Format',description:'New format'});
+  assert.equal(formats.match('/tmp/example.future.pft').id,'future-test');
+  assert(formats.contributions().customEditors.some(e=>e.viewType==='fredis.futureEditor'));
+  const messages=[];
+  const dom=new JSDOM(picker.html('/tmp/unknown.pft'),{runScripts:'dangerously',beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m)});}});
+  assert.equal(dom.window.document.querySelectorAll('[data-format]').length,formats.formats.length);
+  dom.window.document.querySelector('[data-format="future-test"]').click();
+  assert.equal(messages.at(-1).id,'future-test');
+  const search=dom.window.document.getElementById('search');
+  search.value='evaltrainable';search.dispatchEvent(new dom.window.Event('input'));
+  assert.equal([...dom.window.document.querySelectorAll('tbody tr')].filter(row=>!row.hidden).length,1);
+  dom.window.close();
+  formats.formats.pop();
+  console.log('File format registry, generated associations, unknown-file picker, routing and automatic catalogue expansion passed.');
+}
+main().catch(error=>{console.error(error);process.exitCode=1;});

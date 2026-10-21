@@ -1,3 +1,5 @@
+const fileFormats = require('../../file-formats');
+const { filteringHtml, filteringClient } = require('./filtering');
 const whiteLightTheme=require('../../light-theme').css;
 const vscode = require('vscode');
 const { spawn } = require('child_process');
@@ -5,11 +7,11 @@ const path = require('path');
 const { groupedArgs, groupedHtml, groupedClient } = require('./grouped-boxplot');
 const pathDrop = require('../../webview-path-drop');
 
-const VIEW_TYPE = 'fredis.evaluationConfigEditor';
+const VIEW_TYPE = fileFormats.format('evaluation-trainable').viewType;
 // .pft (not .json) so VS Code's language-icon fallback actually shows the
 // FREDIS icon: virtually every icon theme already claims plain .json, which
 // always wins over a contributed language icon, but no theme claims .pft.
-const CONFIG_SUFFIXES = { column: '.evalcol.pft', grouped: '.evalgroup.pft' };
+const CONFIG_SUFFIXES = Object.fromEntries(fileFormats.formats.filter(item=>item.evaluationKind).map(item=>[item.evaluationKind,item.suffix]));
 
 function evaluationConfigSuffix(kind) {
   const suffix = CONFIG_SUFFIXES[kind];
@@ -19,12 +21,14 @@ function evaluationConfigSuffix(kind) {
 
 function ensureEvaluationConfigSuffix(filePath, kind) {
   const suffix = evaluationConfigSuffix(kind);
-  if (filePath.toLowerCase().endsWith(suffix)) return filePath;
-  const lower = filePath.toLowerCase();
-  const existingSuffix = Object.values(CONFIG_SUFFIXES).find(value => lower.endsWith(value));
-  const stem = existingSuffix
-    ? filePath.slice(0, -existingSuffix.length)
-    : (lower.endsWith('.json') ? filePath.slice(0, -5) : filePath);
+  let stem = filePath;
+  // Strip all trailing evaluation suffixes, including names produced by
+  // native save dialogs that append their selected extension automatically.
+  let existingSuffix;
+  while ((existingSuffix = Object.values(CONFIG_SUFFIXES).find(value => stem.toLowerCase().endsWith(value)))) {
+    stem = stem.slice(0, -existingSuffix.length);
+  }
+  if (stem === filePath && stem.toLowerCase().endsWith('.json')) stem = stem.slice(0, -5);
   return stem + suffix;
 }
 
@@ -37,7 +41,7 @@ function configFileStem(value, fallback) {
   return stem || fallback;
 }
 
-function runCli(context, projectRoot, args, output, onProgress) {
+function runCli(context, projectRoot, args, output, onProgress, inputData) {
   return new Promise((resolve, reject) => {
     const root = projectRoot(context);
     const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
@@ -47,6 +51,10 @@ function runCli(context, projectRoot, args, output, onProgress) {
       cwd: root,
       env: { ...process.env, PYTHONPATH: ['.', process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) }
     });
+    if (inputData !== undefined) {
+      child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
+      child.stdin.end(JSON.stringify(inputData));
+    }
     let stdout = '', stderr = '', stderrBuffer = '';
     child.stdout.on('data', chunk => { stdout += chunk.toString(); });
     const consumeStderrLine = line => {
@@ -117,7 +125,7 @@ function summaryArgs(request, outputImage) {
 }
 
 function evaluationConfigDocument(kind, config) {
-  if (!['column', 'grouped'].includes(kind) || !config || typeof config !== 'object' || Array.isArray(config)) {
+  if (!['filtering', 'column', 'grouped'].includes(kind) || !config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('Invalid evaluation configuration.');
   }
   return { schema: 'fredis.evaluation.config', schemaVersion: 1, kind, config };
@@ -146,6 +154,33 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
   panel.webview.html = html();
   pathDrop.attach(panel);
   const reportProgress = type => progress => panel.webview.postMessage({ type, ...progress });
+  let filteringResult = null, filteringResultFile = null, filteringRevision = 0;
+  let filteringConfigPath = initialDocument?.kind === 'filtering' ? initialDocument.path : null;
+  const filteringDirectory = () => filteringConfigPath ? path.dirname(filteringConfigPath) : projectRoot(context);
+  const restoreFiltering = async (config, configPath) => {
+    ++filteringRevision;
+    filteringConfigPath = configPath;
+    filteringResult = null; filteringResultFile = null;
+    if (!config.resultPath) return;
+    const resultFile = path.resolve(path.dirname(configPath), config.resultPath);
+    try {
+      const raw = await vscode.workspace.fs.readFile(vscode.Uri.file(resultFile));
+      const cached = JSON.parse(Buffer.from(raw).toString('utf8'));
+      const rendered = await runCli(context, projectRoot, ['filtering-view','--request-json','-'], output, undefined, {result:cached,view:config.view,metadataConfig:config});
+      filteringResult = rendered.updatedResult || cached; filteringResultFile = resultFile;
+      if(rendered.updatedResult) await vscode.workspace.fs.writeFile(vscode.Uri.file(resultFile),Buffer.from(JSON.stringify(filteringResult),'utf8'));
+      await panel.webview.postMessage({type:'filteringResult',result:{...filteringResult,...rendered},restored:true});
+    } catch (error) {
+      await panel.webview.postMessage({type:'filteringError',message:'Saved results could not be loaded: '+error.message+' · Evaluate to calculate again.'});
+    }
+  };
+  const configForTarget = (document, target) => {
+    if (document.kind !== 'filtering') return document;
+    const config = {...document.config};
+    delete config.resultPath;
+    if (filteringResultFile) config.resultPath = path.relative(path.dirname(target), filteringResultFile);
+    return {...document,config};
+  };
   panel.webview.onDidReceiveMessage(async message => {
     try {
       if (message.type === 'evaluationReady') {
@@ -160,6 +195,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           type: `${initialDocument.kind}ConfigLoaded`, config: initialDocument.config,
           path: initialDocument.path
         });
+        if (initialDocument.kind === 'filtering') await restoreFiltering(initialDocument.config, initialDocument.path);
       } else if (message.type === 'saveEvaluationConfig') {
         const configDocument = evaluationConfigDocument(message.kind, message.config);
         const suffix = evaluationConfigSuffix(message.kind);
@@ -167,16 +203,19 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           ? configFileStem(message.config.title || message.config.groupColumn, 'evaluation')
           : configFileStem(message.config.title, 'evaluation');
         const selected = await vscode.window.showSaveDialog({
-          filters: { 'FREDIS evaluation configuration': [suffix.slice(1)] },
-          defaultUri: initialDocument && initialDocument.kind === message.kind
+          filters: { 'FREDIS evaluation configuration': ['pft'] },
+          defaultUri: message.kind === 'filtering' && filteringConfigPath
+            ? vscode.Uri.file(filteringConfigPath)
+            : initialDocument && initialDocument.kind === message.kind
             ? vscode.Uri.file(initialDocument.path)
             : vscode.Uri.file(ensureEvaluationConfigSuffix(suggestedName, message.kind))
         });
         if (selected) {
           const target = vscode.Uri.file(ensureEvaluationConfigSuffix(selected.fsPath, message.kind));
           await vscode.workspace.fs.writeFile(
-            target, Buffer.from(JSON.stringify(configDocument, null, 2) + '\n', 'utf8')
+            target, Buffer.from(JSON.stringify(configForTarget(configDocument, target.fsPath), null, 2) + '\n', 'utf8')
           );
+          if (message.kind === 'filtering') filteringConfigPath = target.fsPath;
           panel.webview.postMessage({ type: `${message.kind}ConfigSaved`, path: target.fsPath });
           vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
         }
@@ -189,7 +228,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
             ? configFileStem(message.config.title || message.config.groupColumn, 'evaluation')
             : configFileStem(message.config.title, 'evaluation');
           const selected = await vscode.window.showSaveDialog({
-            filters: { 'FREDIS evaluation configuration': [suffix.slice(1)] },
+            filters: { 'FREDIS evaluation configuration': ['pft'] },
             defaultUri: initialDocument && initialDocument.kind === message.kind
               ? vscode.Uri.file(initialDocument.path)
               : vscode.Uri.file(ensureEvaluationConfigSuffix(suggestedName, message.kind))
@@ -199,8 +238,9 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
         }
         const target = vscode.Uri.file(ensureEvaluationConfigSuffix(targetPath, message.kind));
         await vscode.workspace.fs.writeFile(
-          target, Buffer.from(JSON.stringify(configDocument, null, 2) + '\n', 'utf8')
+          target, Buffer.from(JSON.stringify(configForTarget(configDocument, target.fsPath), null, 2) + '\n', 'utf8')
         );
+        if (message.kind === 'filtering') filteringConfigPath = target.fsPath;
         panel.webview.postMessage({ type: `${message.kind}ConfigSaved`, path: target.fsPath });
         vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
       } else if (message.type === 'loadEvaluationConfig') {
@@ -215,7 +255,65 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           panel.webview.postMessage({
             type: `${message.kind}ConfigLoaded`, config, path: selected[0].fsPath
           });
+          if (message.kind === 'filtering') await restoreFiltering(config, selected[0].fsPath);
         }
+      } else if (message.type === 'filteringPick') {
+        const picked = await vscode.window.showOpenDialog({ canSelectMany: false, defaultUri:vscode.Uri.file(filteringDirectory()) });
+        if (picked && picked[0]) panel.webview.postMessage({type:'filteringPicked',metadata:message.metadata,index:message.index,path:picked[0].fsPath});
+      } else if (['filteringInspect','filteringRun'].includes(message.type)) {
+        let directory;
+        if (message.type === 'filteringRun') {
+          ++filteringRevision;
+          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,defaultUri:vscode.Uri.file(filteringDirectory()),openLabel:'Save evaluation here'});
+          if (!picked || !picked[0]) return;
+          directory = picked[0].fsPath;
+        }
+        panel.webview.postMessage({type:'filteringBusy',message:directory?'Calculating and saving evaluation…':'Loading metadata columns…'});
+        const args = ['filtering','--request-json',JSON.stringify(message.request)];
+        if (message.type === 'filteringInspect') args.push('--inspect');
+        if (directory) args.push('--output-dir',directory);
+        const result = await runCli(context, projectRoot, args, output);
+        if (directory) {
+          filteringResult = {...result};
+          for(const key of ['png','displayRows','categoryRows','listRows','listToolRows','fields','outputDir','settingsPath'])delete filteringResult[key];
+          filteringResultFile = path.join(directory,'results.json');
+          filteringConfigPath = result.settingsPath || filteringConfigPath;
+        }
+        panel.webview.postMessage({type:message.type === 'filteringInspect'?'filteringColumns':'filteringResult',result});
+      } else if (['filteringView','filteringExport'].includes(message.type)) {
+        if (!filteringResult) throw new Error('Evaluate or load saved results first.');
+        const revision = ++filteringRevision;
+        const args = ['filtering-view','--request-json','-'];
+        let directory, outputFile;
+        if (message.type === 'filteringExport') {
+          if (!['tsv','png','svg'].includes(message.format)) throw new Error('Select TSV, PNG, or SVG.');
+          if (message.format === 'tsv') {
+            const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,defaultUri:vscode.Uri.file(filteringDirectory()),openLabel:'Export TSV here'});
+            if (!picked || !picked[0]) return;
+            directory = picked[0].fsPath;
+            args.push('--output-dir',directory);
+          } else {
+            const picked = await vscode.window.showSaveDialog({
+              defaultUri:vscode.Uri.file(path.join(filteringDirectory(),'retention.'+message.format)),
+              filters:{[message.format.toUpperCase()+' image']:[message.format]},saveLabel:'Export '+message.format.toUpperCase()
+            });
+            if (!picked) return;
+            outputFile = picked.fsPath;
+            if (!outputFile.toLowerCase().endsWith('.'+message.format)) outputFile += '.'+message.format;
+            args.push('--output-file',outputFile);
+          }
+          args.push('--format',message.format);
+        }
+        panel.webview.postMessage({type:'filteringBusy',message:directory||outputFile?'Exporting displayed results…':'Updating display…'});
+        const rendered = await runCli(context, projectRoot, args, output, undefined, {result:filteringResult,view:message.view,metadataConfig:message.metadataConfig});
+        if(revision !== filteringRevision) return;
+        if(rendered.updatedResult){
+          filteringResult = {...rendered.updatedResult};
+          for(const key of ['png','displayRows','categoryRows','listRows','listToolRows','fields','outputDir','settingsPath'])delete filteringResult[key];
+          if(filteringResultFile)await vscode.workspace.fs.writeFile(vscode.Uri.file(filteringResultFile),Buffer.from(JSON.stringify(filteringResult),'utf8'));
+          rendered.updatedResult=filteringResult;
+        }
+        panel.webview.postMessage({type:'filteringPresentation',result:rendered,exported:outputFile||directory});
       } else if (message.type === 'pickGroupedInput') {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Similarity result': ['mssim'] } });
         if (picked && picked[0]) panel.webview.postMessage({
@@ -278,7 +376,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
       const grouped = ['pickGroupedInput', 'groupedSummarize', 'saveGroupedImage'].includes(message.type)
         || (['saveEvaluationConfig', 'loadEvaluationConfig'].includes(message.type)
           && message.kind === 'grouped');
-      panel.webview.postMessage({ type: grouped ? 'groupedError' : 'error', message: String(error.message || error) });
+      panel.webview.postMessage({ type: message.type.startsWith('filtering') || message.kind === 'filtering' ? 'filteringError' : grouped ? 'groupedError' : 'error', message: String(error.message || error) });
     }
   });
 }
@@ -290,7 +388,7 @@ function register(context, output, projectRoot) {
       try {
         const value = JSON.parse(document.getText());
         const kind = value && value.kind;
-        if (!['column', 'grouped'].includes(kind)) throw new Error('Evaluation configuration kind must be column or grouped.');
+        if (!['filtering', 'column', 'grouped'].includes(kind)) throw new Error('Evaluation configuration kind must be column or grouped.');
         initialDocument = {
           kind, config: parseEvaluationConfig(value, kind), path: document.uri.fsPath
         };
@@ -309,7 +407,7 @@ function register(context, output, projectRoot) {
 function html() {
   return `<!doctype html><html><head><meta charset="UTF-8"><style>${whiteLightTheme}
   :root{color-scheme:light dark;--accent:#36c5a2;--border:color-mix(in srgb,var(--vscode-editor-foreground) 18%,transparent);--panel:color-mix(in srgb,var(--vscode-editor-background) 90%,var(--vscode-editor-foreground))}
-  *{box-sizing:border-box}body{margin:0;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}main{max-width:1400px;margin:auto;padding:28px}header{display:flex;justify-content:space-between;align-items:start;margin-bottom:20px}h1{margin:3px 0;font-size:28px}h2{font-size:16px;margin:0 0 14px}.eyebrow{font-size:11px;letter-spacing:.14em;font-weight:700;color:var(--accent)}.muted{opacity:.65;margin:4px 0}.layout{display:grid;grid-template-columns:minmax(430px,500px) minmax(0,1fr);gap:16px}.grouped-layout{display:grid;grid-template-columns:340px minmax(0,1fr);gap:16px}.panel{padding:18px;border:1px solid var(--border);border-radius:9px;background:var(--panel);margin-bottom:14px}label{font-size:12px;display:block;margin:11px 0}input,select,textarea{width:100%;display:block;margin-top:5px;padding:8px;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,var(--border));border-radius:5px}textarea{min-height:110px;resize:vertical;font-family:var(--vscode-editor-font-family),monospace}.path{display:flex;gap:6px}.path input{flex:1}.path button{margin-top:5px}button{font:inherit;color:inherit;background:var(--vscode-button-secondaryBackground);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer}.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground);font-weight:600}.actions{display:flex;gap:7px;flex-wrap:wrap}.check,.radio-option{display:flex;align-items:center;gap:7px}.check input,.radio-option input{width:auto;margin:0}.transform-options{border:1px solid var(--border);border-radius:6px;margin:12px 0;padding:8px 10px}.transform-options legend{font-size:12px;padding:0 4px}.radio-option{margin:7px 0}.category-tools{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:7px;margin-bottom:8px}.category-tools input,.category-tools select{margin:0}.category-selection{font-size:11px;margin:7px 0}.category-list{max-height:520px;overflow:auto;border:1px solid var(--border);border-radius:6px}.category-head,.category{display:grid;grid-template-columns:22px minmax(90px,1fr) 46px 52px 92px 27px 27px;align-items:center;gap:6px;padding:6px;border-bottom:1px solid var(--border)}.category-head{position:sticky;top:0;z-index:1;background:var(--panel);font-size:10px;font-weight:700}.category input{width:auto;margin:0}.category button{padding:2px 5px}.category-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.category-stat{text-align:right;font-variant-numeric:tabular-nums}.category-density{width:92px;height:28px}.category-density .area{fill:color-mix(in srgb,var(--accent) 24%,transparent);stroke:var(--accent);stroke-width:1}.category-density .median{stroke:var(--vscode-editor-foreground);stroke-width:1}.chart{overflow:auto;min-height:260px;border:1px dashed var(--border);border-radius:7px;display:grid;place-items:center}.chart svg{max-width:100%;height:auto}.status{font-weight:600}.error{color:var(--vscode-errorForeground)}.eval-progress{width:100%;height:7px;margin:10px 0 2px;accent-color:var(--accent)}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px}th,td{text-align:left;padding:7px;border-bottom:1px solid var(--border)}.size-row{display:grid;grid-template-columns:1fr 1fr;gap:9px}.eval-tabs{display:flex;gap:8px;margin-bottom:22px;border-bottom:1px solid var(--border);padding-bottom:10px}.eval-tabs button.active{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}.edit-list{display:grid;gap:7px;margin-bottom:10px}.edit-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:5px;align-items:center}.edit-row input{margin:0}.edit-row button{padding:6px 8px}.series-row{grid-template-columns:minmax(0,1fr) 40px auto auto auto}.series-row input[type=color]{height:34px;padding:3px}.result-matrix-scroll{overflow:auto}.result-matrix{min-width:700px}.result-matrix td:nth-child(3){min-width:330px}.series-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px}.save-toast{position:fixed;top:14px;right:18px;background:var(--accent);color:#0b1f19;padding:8px 14px;border-radius:7px;font-size:12px;font-weight:700;opacity:0;transform:translateY(-6px);pointer-events:none;transition:opacity .2s ease,transform .2s ease;z-index:1000;box-shadow:0 4px 14px rgba(0,0,0,.28)}.save-toast.show{opacity:1;transform:translateY(0)}${pathDrop.css()}@media(max-width:900px){.layout,.grouped-layout{grid-template-columns:1fr}}
+  *{box-sizing:border-box}body{margin:0;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}main{max-width:1400px;margin:auto;padding:28px}header{display:flex;justify-content:space-between;align-items:start;margin-bottom:20px}h1{margin:3px 0;font-size:28px}h2{font-size:16px;margin:0 0 14px}.eyebrow{font-size:11px;letter-spacing:.14em;font-weight:700;color:var(--accent)}.muted{opacity:.65;margin:4px 0}.layout{display:grid;grid-template-columns:minmax(430px,500px) minmax(0,1fr);gap:16px}.grouped-layout{display:grid;grid-template-columns:340px minmax(0,1fr);gap:16px}.panel{padding:18px;border:1px solid var(--border);border-radius:9px;background:var(--panel);margin-bottom:14px}label{font-size:12px;display:block;margin:11px 0}input,select,textarea{width:100%;display:block;margin-top:5px;padding:8px;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,var(--border));border-radius:5px}textarea{min-height:110px;resize:vertical;font-family:var(--vscode-editor-font-family),monospace}.path{display:flex;gap:6px}.path input{flex:1}.path button{margin-top:5px}button{font:inherit;color:inherit;background:var(--vscode-button-secondaryBackground);border:1px solid var(--border);border-radius:6px;padding:7px 11px;cursor:pointer}.primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground);font-weight:600}.actions{display:flex;gap:7px;flex-wrap:wrap}.check,.radio-option{display:flex;align-items:center;gap:7px}.check input,.radio-option input{width:auto;margin:0}.transform-options{border:1px solid var(--border);border-radius:6px;margin:12px 0;padding:8px 10px}.transform-options legend{font-size:12px;padding:0 4px}.radio-option{margin:7px 0}.category-tools{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:7px;margin-bottom:8px}.category-tools input,.category-tools select{margin:0}.category-selection{font-size:11px;margin:7px 0}.category-list{max-height:520px;overflow:auto;border:1px solid var(--border);border-radius:6px}.category-head,.category{display:grid;grid-template-columns:22px minmax(90px,1fr) 46px 52px 92px 27px 27px;align-items:center;gap:6px;padding:6px;border-bottom:1px solid var(--border)}.category-head{position:sticky;top:0;z-index:1;background:var(--panel);font-size:10px;font-weight:700}.category input{width:auto;margin:0}.category button{padding:2px 5px}.category-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.category-stat{text-align:right;font-variant-numeric:tabular-nums}.category-density{width:92px;height:28px}.category-density .area{fill:color-mix(in srgb,var(--accent) 24%,transparent);stroke:var(--accent);stroke-width:1}.category-density .median{stroke:var(--vscode-editor-foreground);stroke-width:1}.chart{overflow:auto;min-height:260px;border:1px dashed var(--border);border-radius:7px;display:grid;place-items:center}.chart svg{max-width:100%;height:auto}.status{font-weight:600}.error{color:var(--vscode-errorForeground)}.eval-progress{width:100%;height:7px;margin:10px 0 2px;accent-color:var(--accent)}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px}th,td{text-align:left;padding:7px;border-bottom:1px solid var(--border)}.size-row{display:grid;grid-template-columns:1fr 1fr;gap:9px}main:has(#filteringEvaluation:not([hidden])){max-width:none}#filterPresentation button[aria-pressed="true"]{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:2px solid var(--vscode-focusBorder);font-weight:700}.eval-tabs{display:flex;gap:8px;margin-bottom:22px;border-bottom:1px solid var(--border);padding-bottom:10px}.eval-tabs button.active{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}.edit-list{display:grid;gap:7px;margin-bottom:10px}.edit-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:5px;align-items:center}.edit-row input{margin:0}.edit-row button{padding:6px 8px}.series-row{grid-template-columns:minmax(0,1fr) 40px auto auto auto}.series-row input[type=color]{height:34px;padding:3px}.result-matrix-scroll{overflow:auto}.result-matrix{min-width:700px}.result-matrix td:nth-child(3){min-width:330px}.series-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px}.save-toast{position:fixed;top:14px;right:18px;background:var(--accent);color:#0b1f19;padding:8px 14px;border-radius:7px;font-size:12px;font-weight:700;opacity:0;transform:translateY(-6px);pointer-events:none;transition:opacity .2s ease,transform .2s ease;z-index:1000;box-shadow:0 4px 14px rgba(0,0,0,.28)}.save-toast.show{opacity:1;transform:translateY(0)}${pathDrop.css()}@media(max-width:900px){.layout,.grouped-layout{grid-template-columns:1fr}}
   </style></head><body><div id="saveToast" class="save-toast" role="status" aria-live="polite"></div><script>
   window.showSaveToast=function(text){
     var toast=document.getElementById('saveToast');
@@ -318,7 +416,7 @@ function html() {
     clearTimeout(window.showSaveToast._t);
     window.showSaveToast._t=setTimeout(function(){toast.classList.remove('show')},1600);
   };
-  </script><main><nav class="eval-tabs"><button class="active" data-eval-tab="column">Column Evaluation</button><button data-eval-tab="grouped">Grouped Box Plot</button></nav><section id="columnEvaluation"><header><div><span class="eyebrow">FREDIS EVALUATION</span><h1>Column Evaluation</h1><p class="muted">Group a result table by categories or numeric ranges.</p></div><div class="actions"><button id="loadColumnConfig">Load Settings</button><button id="saveColumnConfig">Save Settings</button><button id="saveImage" disabled>Save SVG</button></div></header>
+  </script><main><nav class="eval-tabs"><button class="active" data-eval-tab="filtering">Training Data Filtering</button><button data-eval-tab="column">Column Evaluation</button><button data-eval-tab="grouped">Grouped Box Plot</button></nav>${filteringHtml()}<section id="columnEvaluation" hidden><header><div><span class="eyebrow">FREDIS EVALUATION</span><h1>Column Evaluation</h1><p class="muted">Group a result table by categories or numeric ranges.</p></div><div class="actions"><button id="loadColumnConfig">Load Settings</button><button id="saveColumnConfig">Save Settings</button><button id="saveImage" disabled>Save SVG</button></div></header>
   <div class="layout"><aside>
     <section class="panel"><h2>Dataset</h2><label>Similarity result (.mssim)<div class="path"><input id="input" data-path-kind="file" placeholder="results.mssim"><button id="browse">Browse</button></div></label><label>Metadata source (.msds or table)<div class="path"><input id="metadata" data-path-kind="file" placeholder="metadata.msds"><button data-browse-metadata>Browse</button></div></label><div class="size-row"><label>Result join column<input id="joinColumn" placeholder="Auto: SourceSpecID"></label><label>Metadata join column<input id="metadataJoinColumn" placeholder="Auto"></label></div><p class="muted">Column names may differ. Auto prefers SourceSpecID → SourceSpecID when available, then SourceSpecID → SpecID.</p><button id="load" class="primary">Load columns</button><p id="datasetInfo" class="muted"></p></section>
     <section class="panel"><h2>Grouping</h2><label>Column<select id="groupColumn" disabled></select></label><fieldset class="transform-options"><legend>Value conversion</legend><label class="radio-option"><input type="radio" name="transform" value="none" checked>None</label><label class="radio-option"><input type="radio" name="transform" value="collision-energy">Collision Energy parser</label><label class="radio-option"><input type="radio" name="transform" value="chemical">SMILES chemical information</label><label class="radio-option"><input type="radio" name="transform" value="smarts">SMARTS substructure matching</label></fieldset><div id="ceOptions" hidden><label>Precursor m/z column<input id="precursorMzColumn" value="PrecursorMZ"></label><label>Instrument column (optional)<input id="instrumentColumn"></label></div><div id="smilesOptions" hidden><label>SMILES column<input id="smilesColumn" value="SMILES"></label></div><div id="chemicalOptions" hidden><label>Chemical descriptor<select id="chemicalDescriptor"><option>HeavyAtomCount</option><option>ExactMolWt</option><option>TPSA</option><option>MolLogP</option><option>NumHAcceptors</option><option>NumHDonors</option><option>NumRotatableBonds</option><option>RingCount</option><option>NumAromaticRings</option><option>NumAliphaticRings</option><option>FractionCSP3</option><option>NumHeteroatoms</option><option>FormalCharge</option><option>BertzCT</option></select></label></div><div id="smartsOptions" hidden><label>SMARTS queries<textarea id="smartsQueries" spellcheck="false" placeholder="Alcohol = [OX2H]&#10;Aromatic ring = c1ccccc1"></textarea><small class="muted">One query per line. Use “label = SMARTS” (spaces around =), or enter only SMARTS. Groups may overlap.</small></label></div><label>Mode<select id="mode"><option value="auto">Auto</option><option value="categorical">Category</option><option value="numeric">Numeric ranges</option></select></label><label id="binsLabel" hidden>Range boundaries<input id="bins" value="0,10,20" placeholder="0,10,20" disabled><small class="muted">0,10,20 creates [0,10), [10,20), [20,~).</small></label><p class="muted">Changes are applied only when Generate plot is pressed.</p><button id="generate" class="primary" disabled>Generate plot</button></section>
@@ -392,7 +490,8 @@ function html() {
     if(m.type==='error'){pendingColumnConfig=null;pendingAppliedRequest=null;document.getElementById('generate').disabled=!group.value;setStatus(m.message,true)}
   });
   </script></section>${groupedHtml()}<script>
-  document.querySelectorAll('[data-eval-tab]').forEach(button=>button.onclick=()=>{const grouped=button.dataset.evalTab==='grouped';document.getElementById('columnEvaluation').hidden=grouped;document.getElementById('groupedEvaluation').hidden=!grouped;document.querySelectorAll('[data-eval-tab]').forEach(item=>item.classList.toggle('active',item===button))});
+  document.querySelectorAll('[data-eval-tab]').forEach(button=>button.onclick=()=>{const kind=button.dataset.evalTab;for(const k of ['filtering','column','grouped'])document.getElementById(k+'Evaluation').hidden=k!==kind;document.querySelectorAll('[data-eval-tab]').forEach(item=>item.classList.toggle('active',item===button))});
+  (${filteringClient.toString()})();
   (${groupedClient.toString()})();
   window.addEventListener('message',event=>{if(['evaluationConfigOpened','evaluationTabSelected'].includes(event.data.type)){const tab=document.querySelector('[data-eval-tab="'+event.data.kind+'"]');if(tab)tab.click()}});
   document.addEventListener('keydown',e=>{
@@ -400,11 +499,12 @@ function html() {
     if(!(e.ctrlKey||e.metaKey)||e.shiftKey||e.altKey||key!=='s')return;
     e.preventDefault();
     const grouped=!document.getElementById('groupedEvaluation').hidden;
-    const api=grouped?window.evalGrouped:window.evalColumn;
+    const filtering=!document.getElementById('filteringEvaluation').hidden;
+    const api=filtering?window.evalFiltering:grouped?window.evalGrouped:window.evalColumn;
     if(!api)return;
-    vscode.postMessage({type:'quickSaveEvaluationConfig',kind:grouped?'grouped':'column',config:api.request(),path:api.getPath()});
+    vscode.postMessage({type:'quickSaveEvaluationConfig',kind:filtering?'filtering':grouped?'grouped':'column',config:api.request(),path:api.getPath()});
   });
-  ${pathDrop.script({host:true})}
+  ${pathDrop.script({host:true,compact:true})}
   vscode.postMessage({type:'evaluationReady'});
   </script></main></body></html>`;
 }

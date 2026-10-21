@@ -114,3 +114,85 @@ Grouped settings saved by the Workbench can also be passed directly to
   "config": {}
 }
 ```
+
+### Training Data Filtering (first Evaluation tab)
+
+Specify metadata (`.msds`, CSV, TSV, JSON, JSONL, or Parquet), load its
+columns, and select the SpecID and classification columns (for example `Class`,
+`Superclass`, or `Subclass`). Add or remove tools with a name, a text-file path
+(one SpecID per line), and a color. Evaluate shows overall and per-category
+retention counts, percentages, exclusions, and a PNG chart.
+
+All percentages use the metadata SpecIDs in that category as denominator.
+`Common` is the intersection across every configured tool. Missing categories
+appear as `(Missing)`. Metadata IDs must be nonempty and unique; duplicate IDs
+in tool lists are counted once. Diagnostics report duplicate list entries and
+IDs absent from metadata. This audits retention patterns, not the reasons each
+tool excluded a spectrum.
+
+Click Evaluate and choose a directory to save the evaluation. This writes
+`results.json` (all computed counts) and `settings.evaltrainable.pft`, whose
+`resultPath` is relative to the settings file. Moving the directory keeps this
+link valid. Opening the settings file loads the cached counts automatically,
+without reading metadata or tool ID lists. If the result is missing or unreadable,
+the settings remain available and the UI reports the problem.
+
+Save Settings writes only the configuration file, display options, and a relative
+reference to the existing result, when available. It does not calculate or copy
+results. Save settings again after changing display options to preserve them.
+
+Result display has Graph and Data list pages. The list can be filtered by
+metadata, N, per-tool retention/counts, or all-tool statistics. Filtering only
+narrows the list; it never changes which categories are checked for the graph.
+Each list row starts with a Show checkbox, category name, original N, and a
+small per-tool retention distribution. Select/Unselect all in filtered list only
+changes currently visible rows; selections hidden by a filter remain intact.
+The checkbox selection and sort order drive graphs and exports. Overall has a
+separate visibility checkbox. Settings preserve selections, filters, sort
+priorities, and the active page.
+
+The default chart places categories side by side on the x-axis with grouped
+vertical bars; horizontal bars remain available. Common's color can be changed
+with its palette or HEX input. Charts expand as the number of categories grows,
+keeping readable bar/label sizes in a scrollable viewport rather than shrinking
+the entire chart to fit the page width.
+
+Sort priorities can directly reference any metadata column independently of the
+Category column: for example Kingdom ascending, Superclass ascending, then N
+descending. There is no metadata-column preselection. New sort/filter columns
+are loaded from the metadata source when needed and added to the saved result
+cache; tool lists and retention calculations are not rerun. Cached columns work
+without the original source. Loading a new column requires the source and
+verifies its SpecIDs and category assignments against the evaluation fingerprint.
+For older caches, use Load columns to refresh the list of available column names.
+
+Sort rules apply from top to bottom and can be added, removed, or reordered.
+A header click replaces the sort order; Shift-click appends a priority. Filters
+combine with AND. Apply display refreshes the list and the checked graph.
+Fields include original N, each tool's retained/excluded N and retention rate,
+and the minimum/maximum/mean/median rate across actual tools. These are retention
+percentages, not prediction accuracy. All-tool statistics exclude Common and
+include hidden tools. Common remains the intersection of all evaluated tools.
+Overall stays first when shown. Missing sort values go last; tied priorities
+use category names as a stable tie-breaker. Multiple metadata values per category
+appear joined with ` | `.
+
+Export TSV, Export PNG, and Export SVG independently write the selected view to
+a chosen directory. TSV writes per-tool `retention.tsv`, category-oriented
+`categories.tsv` (checked categories with Data list columns), and full `id_diagnostics.tsv`.
+PNG writes `retention.png`; SVG writes `retention.svg`. Exports never read source
+data or recalculate retention. Both graph formats preserve category order,
+selection, chart orientation, and colors; original denominators remain unchanged.
+
+The CLI exposes the same calculation:
+
+```sh
+python -m evaluation filtering --request-json '{"metadata":"source.msds","idColumn":"SpecID","groupColumn":"Class","tools":[{"name":"FREDIS","path":"trainable_spec_ids.txt","color":"#36c5a2"}]}' --output-dir audit
+```
+
+Rendering and export can also use a cached result through `filtering-view`:
+
+```sh
+python -m evaluation filtering-view --request-json '{"result":{"rows":[],"diagnostics":[],"series":[]},"view":{"showOverall":false}}' --output-dir figures --format png
+```
+

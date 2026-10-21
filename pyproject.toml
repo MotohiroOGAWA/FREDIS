@@ -16,6 +16,7 @@ dependencies = [
     "tqdm",
     "numpy",
     "pandas",
+    "matplotlib>=3.7",
     "h5py",
     "pyarrow",
     "tensorboard>=2.14",
@@ -55,3 +56,6 @@ testpaths = ["tests"]
 line-length = 88
 target-version = ["py310"]
 extend-exclude = '/fredis/libs/'
+
+[tool.setuptools.package-data]
+evaluation = ["file-formats.json"]

@@ -289,7 +289,7 @@ function installFileDropGuard(doc = document) {
   }
 }
 
-function installPathDrop() {
+function installPathDrop(options = {}) {
   window.installFileDropGuard = installFileDropGuard;
   installFileDropGuard(document);
   function decorate() {
@@ -315,10 +315,15 @@ function installPathDrop() {
       const picker = host && [...host.querySelectorAll('button')].find(button => /browse/i.test(button.textContent));
       if (!input.dataset.pathDropInstalled) {
         input.dataset.pathDropInstalled = 'true';
-        installPathInputDrop(input, { picker });
+        installPathInputDrop(input, { picker, requireShift: options.compact === true });
       }
       if (!picker || picker.dataset.pathDropInstalled) continue;
       picker.dataset.pathDropInstalled = 'true';
+      if (options.compact) {
+        picker.title = 'Browse files, or hold Shift and drop a file onto the path field';
+        installPathInputDrop(input, { element: picker, picker, requireShift: true });
+        continue;
+      }
       picker.dataset.pathDropZone = '';
       picker.classList.add('file-drop-zone');
       if (/^Browse[.…]*$/i.test(picker.textContent.trim())) picker.textContent = `Drop ${input.dataset.pathKind === 'folder' ? 'a folder' : 'a file'} here or click to Browse`;
@@ -375,7 +380,7 @@ function script(options = {}) {
     pickedMessageFor,
     installPathInputDrop,
     installFileDropGuard
-  ].map(value => value.toString()).join('') + `const PATH_DROP_READ_ERROR=${JSON.stringify(PATH_DROP_READ_ERROR)};window.fredisPathDropHost=${options.host === true};(${installPathDrop.toString()})();`;
+  ].map(value => value.toString()).join('') + `const PATH_DROP_READ_ERROR=${JSON.stringify(PATH_DROP_READ_ERROR)};window.fredisPathDropHost=${options.host === true};(${installPathDrop.toString()})(${JSON.stringify({compact: options.compact === true})});`;
 }
 
 function css() {

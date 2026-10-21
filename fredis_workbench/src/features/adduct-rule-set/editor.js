@@ -1,3 +1,4 @@
+const fileFormats = require('../../file-formats');
 const vscode=require('vscode');
 const fs=require('fs');
 const path=require('path');
@@ -8,7 +9,7 @@ const host=require('../reaction-pattern-set/host');
 // .pft (not .json) so VS Code's contributed language icon actually shows:
 // every icon theme already claims plain .json, which always wins over a
 // contributed language icon, but no theme claims .pft.
-const VIEW_TYPE='fredis.adductRuleSetEditor',RULE_VIEW_TYPE='fredis.adductRuleEditor',FILE_SUFFIX='.adductset.pft',RULE_SUFFIX='.adduct.pft';
+const VIEW_TYPE=fileFormats.format('adduct-set').viewType,RULE_VIEW_TYPE=fileFormats.format('adduct').viewType,FILE_SUFFIX=fileFormats.format('adduct-set').suffix,RULE_SUFFIX=fileFormats.format('adduct').suffix;
 function normalizeRule(value){if(!value||typeof value!=='object'||Array.isArray(value)||'fragment_ion_adduct_rule_set'in value)throw new Error('The JSON must contain one fragment ion adduct rule.');if(!Array.isArray(value.fragment_ion_adducts))throw new Error('A fragment ion adduct rule must contain a fragment_ion_adducts list.');const source=value.fragment_ion_adducts;return {name:String(value.name||''),adduct_type:String(value.adduct_type||''),fragment_ion_adducts:[...new Set(source.map(String).filter(Boolean))]};}
 function normalizeDocument(value){if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('The JSON root must be an object.');const set=value.fragment_ion_adduct_rule_set;if(!set||typeof set!=='object'||Array.isArray(set))throw new Error('The JSON must contain a fragment_ion_adduct_rule_set object.');let minimum=Number(set.hydrogen_shift_min??-5),maximum=Number(set.hydrogen_shift_max??0);if(!Number.isInteger(minimum)||!Number.isInteger(maximum)||minimum>maximum)throw new Error('Hydrogen shift min/max must be integers and min must not exceed max.');return {fragment_ion_adduct_rule_set:{name:String(set.name||''),hydrogen_shift_min:minimum,hydrogen_shift_max:maximum,adduct_rules:Array.isArray(set.adduct_rules)?set.adduct_rules.map(normalizeRule):[]}};}
 class Provider{

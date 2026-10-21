@@ -5,7 +5,7 @@ const clone=value=>JSON.parse(JSON.stringify(value));
 function merge(base,update){const result=clone(base);for(const [key,value]of Object.entries(update)){if(['__proto__','constructor','prototype'].includes(key))throw new Error('Invalid configuration key.');result[key]=value&&typeof value==='object'&&!Array.isArray(value)&&result[key]&&typeof result[key]==='object'&&!Array.isArray(result[key])?merge(result[key],value):clone(value);}return result;}
 function unpackFragmenter(value){if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Fragmenter config must be a JSON object.');if(value.params||value.model_config||value.mol_encoder_params||value.reaction_model_params||value.spectrum_model_params)throw new Error('Select a fragmenter config JSON, not a model config.');if(value.fragmenter_params){if(Object.keys(value).some(key=>key!=='fragmenter_params'))throw new Error('Select a fragmenter config JSON, not a model config.');value=value.fragmenter_params;}if(value.reaction_pattern_set||value.fragment_ion_adduct_rule_set)value={fragment_ion_tree_builder:value};if(!value.fragment_ion_tree_builder||typeof value.fragment_ion_tree_builder!=='object')throw new Error('The JSON does not contain fragmenter parameters.');return value;}
 // Same suffix as the dedicated Fragmenter editor (features/fragmenter/editor.js).
-const FRAGMENTER_SUFFIX='.fragmenter.pft';
+const FRAGMENTER_SUFFIX=require('../file-formats').format('fragmenter').suffix;
 // Data-side defaults only: the Fragmenter and atom-feature symbols of prepared
 // data. Model architecture is chosen at training time.
 const DEFAULT_FRAGMENTER='fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft';

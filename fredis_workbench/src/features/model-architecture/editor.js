@@ -1,8 +1,9 @@
+const fileFormat = require('../../file-formats').format('architecture');
 const vscode=require('vscode'),fs=require('fs');
 const parameters=require('../../workbench/parameter-editor');
 const fields=require('../../workbench/mol-encoder-fields'),descriptors=require('../../workbench/mol-descriptors');
 const {commonCss,formCss}=require('../reaction-pattern-set/styles');
-const FILE_SUFFIX='.architecture.pft',VIEW_TYPE='fredis.modelArchitectureEditor';
+const FILE_SUFFIX=fileFormat.suffix,VIEW_TYPE=fileFormat.viewType;
 const KEYS=['mol_encoder_params','reaction_model_params','spectrum_model_params'];
 function normalizeDocument(value){
  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected a model architecture object.');

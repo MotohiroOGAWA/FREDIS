@@ -20,7 +20,8 @@ const extendCli=editor.args({...cliConfig,extend:true});assert(extendCli.include
 assert(source.includes("reactionPatternAnalysis/query"));
 assert(source.includes("reactionPatternAnalysis/ready"));
 assert(String(editor.attach).includes('stopQueryBackend'));
-assert(String(editor.attach).includes('config.reaction-pattern-analysis.pft'));
+assert.equal(require('../src/file-formats').format('reaction-analysis-config').suffix,'.reaction-pattern-analysis.pft');
+assert(String(editor.attach).includes("fileFormats.format('reaction-analysis-config').suffix"));
 assert(String(editor.attach).includes('reactionPatternAnalysis/progress'));
 assert(editor.hydrateAnalysisConfiguration.toString().includes('inspectSource'));
 assert(String(editor.attach).includes('Delete directory and overwrite'));
