@@ -118,3 +118,24 @@ def test_category_selection_keeps_image_size_and_cached_counts(result):
     assert len(full['categoryRows']) == 30
     assert len(small['categoryRows']) == 1
     assert small['displayRows'] == [row for row in full['displayRows'] if row['category'] == 'Category 00']
+
+
+@pytest.mark.parametrize('orientation', ['vertical', 'horizontal'])
+def test_group_pixel_width_and_text_visibility(result, tmp_path, orientation):
+    import base64
+    import struct
+    view = dict(groupWidth=100, paddingWidth=20, height=500, orientation=orientation,
+                title='Custom chart title', titleSize=23, categoryLabelSize=12,
+                tickLabelSize=13, axisTitleSize=14, valueLabelSize=9, legendSize=15)
+    shown = present(result, view, tmp_path/'shown', ['svg'])
+    count = len(shown['categoryRows'])
+    assert struct.unpack('>II', base64.b64decode(shown['png'])[16:24]) == (100*count+20*(count+1), 500)
+    assert 'Custom chart title' in (tmp_path/'shown'/'retention.svg').read_text()
+    hidden = {**view, **{key: False for key in ['showTitle','showCategoryLabels',
+              'showTickLabels','showAxisTitle','showValues','showLegend','showCounts']}}
+    present(result, hidden, tmp_path/'hidden', ['svg'])
+    svg = (tmp_path/'hidden'/'retention.svg').read_text()
+    for text in ['Custom chart title', 'Retained spectra', 'Common', '(N=', '(100.0%)']:
+        assert text not in svg
+    with pytest.raises(ValueError, match='Calculated image width'):
+        present(result, {**view, 'groupWidth':12000, 'paddingWidth':12000})

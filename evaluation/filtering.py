@@ -103,33 +103,58 @@ def present(result, view=None, output_dir=None, formats=()):
     metadata_fields = {rule.get('field') for rule in [*view.get('sortRules', []), *view.get('filters', [])]}
     visible_fields = [f for f in fields if (not f['id'].startswith('metadata:') or f['id'] in metadata_fields) and f.get('cached', True) and (not f['id'].startswith('tool:') or any(f['id'] == 'tool:'+s['name']+':'+metric for s in series for metric in ['retainedPercent','retainedN','excludedN']))]
     vertical = view.get('orientation', 'vertical') == 'vertical'
-    width_px, height_px = view.get('width', 1200), view.get('height', 700)
-    for dimension in (width_px, height_px):
-        if isinstance(dimension, bool) or not isinstance(dimension, (int, float)) or not 200 <= dimension <= 12000 or int(dimension) != dimension:
-            raise ValueError('Image width and height must be whole pixels between 200 and 12000.')
+    def number(key, default, minimum, maximum):
+        value = view.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not minimum <= value <= maximum:
+            raise ValueError(f'{key} must be between {minimum} and {maximum}.')
+        return value
+
+    group_width = number('groupWidth', 60, 1, 12000)
+    group_padding = number('paddingWidth', 16, 0, 12000)
+    group_count = len(category_rows)
+    # Older settings store a total width; retain it until group sizing is chosen.
+    width_px = view.get('width', 1200) if 'groupWidth' not in view else group_width*group_count + group_padding*(group_count+1)
+    width_px = max(1, width_px)
+    height_px = number('height', 700, 200, 12000)
+    if isinstance(width_px, bool) or not isinstance(width_px, (int, float)) or not 1 <= width_px < 65536:
+        raise ValueError('Calculated image width must be below 65536 px. Reduce group width, padding, or selected groups.')
+    title_size = number('titleSize', 14, 1, 96)
+    category_size = number('categoryLabelSize', 10, 1, 96)
+    tick_size = number('tickLabelSize', 10, 1, 96)
+    axis_size = number('axisTitleSize', 11, 1, 96)
+    value_size = number('valueLabelSize', 7, 1, 96)
+    legend_size = number('legendSize', 10, 1, 96)
     fig, ax = plt.subplots(figsize=(width_px/150, height_px/150), dpi=150)
-    width = .8/max(1,len(series))
+    group_span = group_width/(group_width+group_padding) if 'groupWidth' in view else .8
+    width = group_span/max(1,len(series))
     lookup = {(r['scope'], r['category'], r['tool']):r for r in rows}
     for j, item in enumerate(series):
         selected = [lookup[(g['scope'],g['category'],item['name'])] for g in category_rows]
-        positions = [i-.4+width/2+j*width for i in range(len(category_rows))]
+        positions = [i-group_span/2+width/2+j*width for i in range(len(category_rows))]
         color = view.get('colors', {}).get(item['name'], item['color'])
         values = [r['retainedPercent'] or 0 for r in selected]
         bars = ax.bar(positions, values, width=width, label=item['name'], color=color) if vertical else ax.barh(positions, values, height=width, label=item['name'], color=color)
-        ax.bar_label(bars, labels=[f"{r['retainedN']}/{r['totalN']} ({(r['retainedPercent'] or 0):.1f}%)" for r in selected], fontsize=7, padding=3, rotation=90 if vertical else 0)
-    labels = [f"{g['category']} (N={g['totalN']})" for g in category_rows]
+        if view.get('showValues', True):
+            ax.bar_label(bars, labels=[f"{r['retainedN']}/{r['totalN']} ({(r['retainedPercent'] or 0):.1f}%)" for r in selected], fontsize=value_size, padding=3, rotation=90 if vertical else 0)
+    labels = [(f"{g['category']} (N={g['totalN']})" if view.get('showCounts', True) else g['category'])
+              if view.get('showCategoryLabels', True) else '' for g in category_rows]
     if vertical:
         ax.set_xticks(range(len(category_rows)), labels, rotation=60, ha='right')
         ax.set_ylim(0, 140)
-        ax.set_ylabel('Retained spectra (%)')
+        ax.set_ylabel('Retained spectra (%)' if view.get('showAxisTitle', True) else '', fontsize=axis_size)
     else:
         ax.set_yticks(range(len(category_rows)), labels)
         ax.invert_yaxis()
         ax.set_xlim(0, 135)
-        ax.set_xlabel('Retained spectra (%)')
-    ax.set_title(view.get('title') or result.get('title', 'Training data filtering audit'))
-    if series:
-        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax.set_xlabel('Retained spectra (%)' if view.get('showAxisTitle', True) else '', fontsize=axis_size)
+    ax.tick_params(axis='x' if vertical else 'y', labelsize=category_size)
+    ax.tick_params(axis='y' if vertical else 'x', labelsize=tick_size,
+                   labelleft=view.get('showTickLabels', True) if vertical else True,
+                   labelbottom=True if vertical else view.get('showTickLabels', True))
+    if view.get('showTitle', True):
+        ax.set_title(view.get('title') or result.get('title', 'Training data filtering audit'), fontsize=title_size)
+    if series and view.get('showLegend', True):
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=legend_size)
     fig.tight_layout()
     buffer = io.BytesIO()
     fig.savefig(buffer, format='png', dpi=150)
