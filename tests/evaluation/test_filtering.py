@@ -49,7 +49,28 @@ def test_retention_and_export(tmp_path):
     assert not (tmp_path/'svg-only'/'retention.png').exists()
     assert not (tmp_path/'svg-only'/'retention.tsv').exists()
     assert not present(cached,{'tools':[]})['displayRows']
-    assert not present(cached,{'minN':5})['displayRows']
+    filtered=present(cached,{'minN':5})
+    assert not filtered['listRows']
+    assert filtered['displayRows']  # list filtering never alters graph checkmarks
     pd.DataFrame({'SpecID':['001','001'],'Class':['A','B']}).to_json(tmp_path/'metadata.json',orient='records')
     with pytest.raises(ValueError,match='unique'):
         evaluate(config)
+
+
+@pytest.mark.parametrize('orientation', ['vertical', 'horizontal'])
+def test_many_categories_render_with_bounded_canvas(orientation):
+    import base64
+    import struct
+
+    # The vertical layout previously requested a 78,240 x 1,050 pixel image.
+    rows = [dict(scope='category', category=f'Class {i}', tool='A',
+                 totalN=1, retainedN=1, excludedN=0, retainedPercent=100)
+            for i in range(652)]
+    result = dict(rows=rows, series=[dict(name='A', color='#ff0000')],
+                  diagnostics=[], sourceN=652)
+    rendered = present(result, dict(orientation=orientation, showOverall=False, width=900, height=600))
+    png = base64.b64decode(rendered['png'])
+    width, height = struct.unpack('>II', png[16:24])
+    assert (width, height) == (900, 600)
+    assert len(rendered['categoryRows']) == 652
+    assert len(rendered['displayRows']) == 652

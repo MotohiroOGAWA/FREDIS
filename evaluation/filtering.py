@@ -3,6 +3,7 @@ from pathlib import Path
 import base64
 import io
 import json
+import hashlib
 import pandas as pd
 from .io import _plain_table
 
@@ -53,7 +54,20 @@ def evaluate(config, output_dir=None):
         for name, kept, _ in series:
             n = len(ids & kept)
             rows.append({'scope': 'overall' if index == 0 else 'category', 'category': category, 'tool': name, 'totalN': len(ids), 'retainedN': n, 'excludedN': len(ids)-n, 'retainedPercent': 100*n/len(ids) if ids else None})
-    result = {'rows': rows, 'diagnostics': diagnostics, 'sourceN': len(universe),
+    requested = [rule['field'][len('metadata:'):] for rule in [*config.get('view', {}).get('sortRules', []), *config.get('view', {}).get('filters', [])] if str(rule.get('field', '')).startswith('metadata:')]
+    metadata_columns = list(dict.fromkeys([c for c in ['Kingdom','Superclass','Class','Subclass','DirectParent',column] if c in frame] + requested))
+    if any(c not in frame for c in metadata_columns):
+        raise ValueError('A selected classification column is missing from metadata.')
+    grouped_metadata = {str(category): subset for category, subset in frame.groupby(column, sort=False)}
+    group_metadata = []
+    for index, (category, ids) in enumerate(groups):
+        values = {} if index == 0 else {
+            c: sorted(grouped_metadata[category][c].fillna('(Missing)').astype(str).unique().tolist())
+            for c in metadata_columns}
+        group_metadata.append({'scope':'overall' if index == 0 else 'category','category':category,'metadata':values})
+    result = {'availableMetadataColumns': [str(c) for c in frame.columns if c != key],
+              'metadataSource': {'metadata': str(source.resolve()), 'idColumn': key, 'groupColumn': column},
+              'metadataFingerprint': metadata_fingerprint(frame, key, column), 'groups': group_metadata, 'metadataColumns': metadata_columns, 'rows': rows, 'diagnostics': diagnostics, 'sourceN': len(universe),
               'series': [{'name': n, 'color': c} for n, _, c in series],
               'title': config.get('title') or 'Training data filtering audit'}
     if output_dir:
@@ -76,50 +90,104 @@ def present(result, view=None, output_dir=None, formats=()):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     view = view or {}
-    rows = list(result['rows'])
-    if 'categories' in view:
-        rows = [r for r in rows if r['scope'] == 'overall' or r['category'] in view['categories']]
-    if view.get('showOverall', True) is False:
-        rows = [r for r in rows if r['scope'] != 'overall']
-    if 'tools' in view:
-        rows = [r for r in rows if r['tool'] in view['tools']]
-    rows = [r for r in rows if r['totalN'] >= int(view.get('minN', 0))]
-    groups = list(dict.fromkeys((r['scope'], r['category']) for r in rows))
-    mode = view.get('sort', 'name')
-    def group_key(group):
-        subset = [r for r in rows if (r['scope'], r['category']) == group]
-        value = group[1] if mode == 'name' else (-subset[0]['totalN'] if mode == 'count' else min(r['retainedPercent'] or 0 for r in subset))
-        return (group[0] != 'overall', value, group[1])
-    groups.sort(key=group_key)
-    series = [s for s in result['series'] if any(r['tool'] == s['name'] for r in rows)]
-    lookup = {(r['scope'], r['category'], r['tool']): r for r in rows}
-    rows = [lookup[(*g, s['name'])] for g in groups for s in series]
-    fig, ax = plt.subplots(figsize=(12, max(4, len(groups)*max(1,len(series))*.18)))
+    from .filtering_view import select_view
+    # List filters narrow the working list; graph membership is exclusively
+    # controlled by category checkboxes (plus the independent Overall toggle).
+    graph_view = {**view, 'filters': [], 'minN': 0}
+    rows, category_rows, series, fields = select_view(result, graph_view)
+    if not series:
+        category_rows = []
+    list_view = dict(view)
+    list_view.pop('categories', None)
+    list_tool_rows, list_rows, _, _ = select_view(result, list_view)
+    visible_fields = [f for f in fields if f.get('cached', True) and (not f['id'].startswith('tool:') or any(f['id'] == 'tool:'+s['name']+':'+metric for s in series for metric in ['retainedPercent','retainedN','excludedN']))]
+    vertical = view.get('orientation', 'vertical') == 'vertical'
+    width_px, height_px = view.get('width', 1200), view.get('height', 700)
+    for dimension in (width_px, height_px):
+        if isinstance(dimension, bool) or not isinstance(dimension, (int, float)) or not 200 <= dimension <= 12000 or int(dimension) != dimension:
+            raise ValueError('Image width and height must be whole pixels between 200 and 12000.')
+    fig, ax = plt.subplots(figsize=(width_px/150, height_px/150), dpi=150)
     width = .8/max(1,len(series))
+    lookup = {(r['scope'], r['category'], r['tool']):r for r in rows}
     for j, item in enumerate(series):
-        selected = [lookup[(*g, item['name'])] for g in groups]
-        positions = [i-.4+width/2+j*width for i in range(len(groups))]
-        bars = ax.barh(positions, [r['retainedPercent'] or 0 for r in selected], height=width, label=item['name'], color=view.get('colors', {}).get(item['name'], item['color']))
-        ax.bar_label(bars, labels=[f"{r['retainedN']}/{r['totalN']} ({(r['retainedPercent'] or 0):.1f}%)" for r in selected], fontsize=7, padding=3)
-    ax.set_yticks(range(len(groups)), [f"{g[1]} (N={lookup[(*g,series[0]['name'])]['totalN']})" for g in groups])
-    ax.invert_yaxis()
-    ax.set_xlim(0, 135)
-    ax.set_xlabel('Retained spectra (%) — denominator: metadata SpecIDs in category')
+        selected = [lookup[(g['scope'],g['category'],item['name'])] for g in category_rows]
+        positions = [i-.4+width/2+j*width for i in range(len(category_rows))]
+        color = view.get('colors', {}).get(item['name'], item['color'])
+        values = [r['retainedPercent'] or 0 for r in selected]
+        bars = ax.bar(positions, values, width=width, label=item['name'], color=color) if vertical else ax.barh(positions, values, height=width, label=item['name'], color=color)
+        ax.bar_label(bars, labels=[f"{r['retainedN']}/{r['totalN']} ({(r['retainedPercent'] or 0):.1f}%)" for r in selected], fontsize=7, padding=3, rotation=90 if vertical else 0)
+    labels = [f"{g['category']} (N={g['totalN']})" for g in category_rows]
+    if vertical:
+        ax.set_xticks(range(len(category_rows)), labels, rotation=60, ha='right')
+        ax.set_ylim(0, 140)
+        ax.set_ylabel('Retained spectra (%)')
+    else:
+        ax.set_yticks(range(len(category_rows)), labels)
+        ax.invert_yaxis()
+        ax.set_xlim(0, 135)
+        ax.set_xlabel('Retained spectra (%)')
     ax.set_title(view.get('title') or result.get('title', 'Training data filtering audit'))
     if series:
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     fig.tight_layout()
     buffer = io.BytesIO()
-    fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+    fig.savefig(buffer, format='png', dpi=150)
     if output_dir:
         target = Path(output_dir).expanduser().resolve()
         target.mkdir(parents=True, exist_ok=True)
         if 'tsv' in formats:
             pd.DataFrame(rows, columns=['scope','category','tool','totalN','retainedN','excludedN','retainedPercent']).to_csv(target/'retention.tsv', sep='\t', index=False)
+            pd.DataFrame([{k: ' | '.join(v) if isinstance(v, list) else v for k,v in g.items() if k == 'scope' or k in {f['id'] for f in visible_fields}} for g in category_rows], columns=['scope']+[f['id'] for f in visible_fields]).to_csv(target/'categories.tsv', sep='\t', index=False)
             pd.DataFrame(result['diagnostics']).to_csv(target/'id_diagnostics.tsv', sep='\t', index=False)
         if 'png' in formats:
             (target/'retention.png').write_bytes(buffer.getvalue())
         if 'svg' in formats:
-            fig.savefig(target/'retention.svg', format='svg', bbox_inches='tight')
+            fig.savefig(target/'retention.svg', format='svg')
     plt.close(fig)
-    return {'displayRows': rows, 'png': base64.b64encode(buffer.getvalue()).decode('ascii')}
+    return {'displayRows': rows, 'categoryRows': category_rows, 'listRows': list_rows, 'listToolRows': list_tool_rows, 'fields': fields, 'png': base64.b64encode(buffer.getvalue()).decode('ascii')}
+
+
+def metadata_fingerprint(frame, key, column):
+    pairs = sorted(zip(frame[key].astype(str).str.strip(), frame[column].fillna('(Missing)').astype(str)))
+    return hashlib.sha256(json.dumps(pairs, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def enrich_metadata(result, view, metadata_config=None):
+    """Load only newly requested sort/filter columns, without recalculating retention."""
+    wanted = list(dict.fromkeys(rule['field'][len('metadata:'):] for rule in
+        [*view.get('sortRules', []), *view.get('filters', [])]
+        if str(rule.get('field', '')).startswith('metadata:')))
+    missing = [c for c in wanted if c not in result.get('metadataColumns', [])]
+    if not missing:
+        return result
+    source = metadata_config or result.get('metadataSource')
+    if not source or not source.get('metadata'):
+        raise ValueError('Load the metadata source to use this sort/filter column.')
+    path = Path(source['metadata']).expanduser()
+    frame = (pd.read_csv(path, sep='\t' if path.suffix.lower() == '.tsv' else ',', dtype=str)
+             if path.suffix.lower() in {'.csv','.tsv'} else _plain_table(path)).copy()
+    key, column = source.get('idColumn') or 'SpecID', source.get('groupColumn')
+    if any(c not in frame for c in [key, column, *missing]):
+        raise ValueError('A requested metadata column is missing from the metadata source.')
+    if frame[key].isna().any():
+        raise ValueError('Metadata contains missing SpecIDs.')
+    frame[key] = frame[key].astype(str).str.strip()
+    frame[column] = frame[column].fillna('(Missing)').astype(str)
+    if frame[key].eq('').any() or frame[key].duplicated().any():
+        raise ValueError('Metadata SpecIDs must be nonempty and unique.')
+    fingerprint = metadata_fingerprint(frame, key, column)
+    if result.get('metadataFingerprint') and fingerprint != result['metadataFingerprint']:
+        raise ValueError('Metadata SpecIDs or categories have changed. Evaluate again before using these columns.')
+    expected = {r['category']:r['totalN'] for r in result['rows'] if r['scope']=='category'}
+    grouped = {str(category):subset for category,subset in frame.groupby(column, sort=False)}
+    if len(frame) != result['sourceN'] or {name:len(f) for name,f in grouped.items()} != expected:
+        raise ValueError('Metadata categories do not match the saved evaluation. Evaluate again.')
+    old = {(g['scope'],g['category']):g.get('metadata',{}) for g in result.get('groups', [])}
+    groups = [{'scope':'overall','category':'All','metadata':old.get(('overall','All'),{})}]
+    for name, subset in grouped.items():
+        values = dict(old.get(('category',name),{}))
+        values.update({c:sorted(subset[c].fillna('(Missing)').astype(str).unique().tolist()) for c in missing})
+        groups.append({'scope':'category','category':name,'metadata':values})
+    return {**result, 'groups':groups, 'metadataColumns':list(dict.fromkeys([*result.get('metadataColumns',[]),*missing])),
+            'availableMetadataColumns':[str(c) for c in frame.columns if c!=key],
+            'metadataSource':{**source,'metadata':str(path.resolve())},'metadataFingerprint':fingerprint}

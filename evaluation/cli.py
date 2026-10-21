@@ -157,9 +157,13 @@ def execute(
     progress: Callable[[int, str], None] | None = None,
 ) -> dict:
     if args.command == 'filtering-view':
-        from .filtering import present
+        from .filtering import present, enrich_metadata
         payload = json.load(sys.stdin) if args.request_json == '-' else json.loads(args.request_json)
-        return present(payload['result'], payload.get('view'), args.output_dir, [args.format] if args.format else [])
+        enriched = enrich_metadata(payload['result'], payload.get('view') or {}, payload.get('metadataConfig'))
+        rendered = present(enriched, payload.get('view'), args.output_dir, [args.format] if args.format else [])
+        if enriched is not payload['result']:
+            rendered['updatedResult'] = enriched
+        return rendered
     if args.command == "filtering":
         from .filtering import evaluate, inspect_metadata
         config = json.loads(args.request_json)

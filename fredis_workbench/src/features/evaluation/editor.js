@@ -154,17 +154,19 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
   panel.webview.html = html();
   pathDrop.attach(panel);
   const reportProgress = type => progress => panel.webview.postMessage({ type, ...progress });
-  let filteringResult = null, filteringResultFile = null;
+  let filteringResult = null, filteringResultFile = null, filteringRevision = 0;
   const restoreFiltering = async (config, configPath) => {
+    ++filteringRevision;
     filteringResult = null; filteringResultFile = null;
     if (!config.resultPath) return;
     const resultFile = path.resolve(path.dirname(configPath), config.resultPath);
     try {
       const raw = await vscode.workspace.fs.readFile(vscode.Uri.file(resultFile));
       const cached = JSON.parse(Buffer.from(raw).toString('utf8'));
-      const rendered = await runCli(context, projectRoot, ['filtering-view','--request-json','-'], output, undefined, {result:cached,view:config.view});
-      filteringResult = cached; filteringResultFile = resultFile;
-      await panel.webview.postMessage({type:'filteringResult',result:{...cached,...rendered},restored:true});
+      const rendered = await runCli(context, projectRoot, ['filtering-view','--request-json','-'], output, undefined, {result:cached,view:config.view,metadataConfig:config});
+      filteringResult = rendered.updatedResult || cached; filteringResultFile = resultFile;
+      if(rendered.updatedResult) await vscode.workspace.fs.writeFile(vscode.Uri.file(resultFile),Buffer.from(JSON.stringify(filteringResult),'utf8'));
+      await panel.webview.postMessage({type:'filteringResult',result:{...filteringResult,...rendered},restored:true});
     } catch (error) {
       await panel.webview.postMessage({type:'filteringError',message:'Saved results could not be loaded: '+error.message+' · Evaluate to calculate again.'});
     }
@@ -254,6 +256,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
       } else if (['filteringInspect','filteringRun'].includes(message.type)) {
         let directory;
         if (message.type === 'filteringRun') {
+          ++filteringRevision;
           const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Save evaluation here'});
           if (!picked || !picked[0]) return;
           directory = picked[0].fsPath;
@@ -265,12 +268,13 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
         const result = await runCli(context, projectRoot, args, output);
         if (directory) {
           filteringResult = {...result};
-          delete filteringResult.png; delete filteringResult.displayRows;
+          for(const key of ['png','displayRows','categoryRows','listRows','listToolRows','fields','outputDir','settingsPath'])delete filteringResult[key];
           filteringResultFile = path.join(directory,'results.json');
         }
         panel.webview.postMessage({type:message.type === 'filteringInspect'?'filteringColumns':'filteringResult',result});
       } else if (['filteringView','filteringExport'].includes(message.type)) {
         if (!filteringResult) throw new Error('Evaluate or load saved results first.');
+        const revision = ++filteringRevision;
         const args = ['filtering-view','--request-json','-'];
         let directory;
         if (message.type === 'filteringExport') {
@@ -281,7 +285,14 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           args.push('--output-dir',directory,'--format',message.format);
         }
         panel.webview.postMessage({type:'filteringBusy',message:directory?'Exporting displayed results…':'Updating display…'});
-        const rendered = await runCli(context, projectRoot, args, output, undefined, {result:filteringResult,view:message.view});
+        const rendered = await runCli(context, projectRoot, args, output, undefined, {result:filteringResult,view:message.view,metadataConfig:message.metadataConfig});
+        if(revision !== filteringRevision) return;
+        if(rendered.updatedResult){
+          filteringResult = {...rendered.updatedResult};
+          for(const key of ['png','displayRows','categoryRows','listRows','listToolRows','fields','outputDir','settingsPath'])delete filteringResult[key];
+          if(filteringResultFile)await vscode.workspace.fs.writeFile(vscode.Uri.file(filteringResultFile),Buffer.from(JSON.stringify(filteringResult),'utf8'));
+          rendered.updatedResult=filteringResult;
+        }
         panel.webview.postMessage({type:'filteringPresentation',result:rendered,exported:directory});
       } else if (message.type === 'pickGroupedInput') {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Similarity result': ['mssim'] } });
