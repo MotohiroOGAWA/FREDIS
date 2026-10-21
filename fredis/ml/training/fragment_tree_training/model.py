@@ -1,7 +1,7 @@
 """Prepared-tensor branch MIL and physical-ion intensity training."""
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 import torch
 from torch import Tensor, nn
@@ -10,24 +10,18 @@ from ...specgen.components.reaction.reaction_decoder import ReactionPool
 from ...specgen.fragment_spectrum_model import SpectrumLossSettings
 
 
-def smooth_max_mil(
-    path_scores: Tensor, peak_path_ptr: Tensor, temperature: float = 0.1
-) -> Tensor:
+def smooth_max_mil(path_scores: Tensor, peak_path_ptr: Tensor, temperature: float = 0.1) -> Tensor:
     """Normalized smooth maximum for alternative teacher paths of each peak."""
     if not 0 < temperature or not math.isfinite(temperature):
         raise ValueError("branch_mil_temperature must be positive and finite")
     counts = peak_path_ptr[1:] - peak_path_ptr[:-1]
     if torch.any(counts <= 0):
         raise ValueError("Every supervised peak needs at least one candidate path")
-    owner = torch.repeat_interleave(
-        torch.arange(counts.numel(), device=path_scores.device), counts
-    )
+    owner = torch.repeat_interleave(torch.arange(counts.numel(), device=path_scores.device), counts)
     scaled = path_scores / temperature
     maximum = scaled.new_full((counts.numel(),), -torch.inf)
     maximum.scatter_reduce_(0, owner, scaled, reduce="amax", include_self=True)
-    total = scaled.new_zeros(counts.numel()).scatter_add_(
-        0, owner, (scaled - maximum[owner]).exp()
-    )
+    total = scaled.new_zeros(counts.numel()).scatter_add_(0, owner, (scaled - maximum[owner]).exp())
     return temperature * (maximum + total.log() - counts.to(path_scores.dtype).log())
 
 
@@ -39,38 +33,34 @@ def branch_mil_loss(
     negative_weight: float = 0.5,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Return total, positive MIL, weak-negative loss and path log scores."""
-    step_state = data.teacher_path_step_state_index
-    step_reaction = data.teacher_path_step_reaction_index
+    step_state = data.teacher.path_step_state_index
+    step_reaction = data.teacher.path_step_reaction_index
     if step_state.numel():
         owner = torch.repeat_interleave(
-            torch.arange(data.teacher_path_step_ptr.numel() - 1, device=logits.device),
-            data.teacher_path_step_ptr[1:] - data.teacher_path_step_ptr[:-1],
+            torch.arange(data.teacher.path_step_ptr.numel() - 1, device=logits.device),
+            data.teacher.path_step_ptr[1:] - data.teacher.path_step_ptr[:-1],
         )
-        group = data.teacher_node_branch_group_index[step_state]
+        group = data.states.branch_group_index[step_state]
         local = inverse_reaction[group, step_reaction]
         if torch.any(local < 0):
-            raise ValueError(
-                "Prepared positive reaction is absent from its branch group"
-            )
+            raise ValueError("Prepared positive reaction is absent from its branch group")
         step_log_probability = F.logsigmoid(logits[step_state, local])
-        path_scores = logits.new_zeros(
-            data.teacher_path_step_ptr.numel() - 1
-        ).scatter_add_(0, owner, step_log_probability)
-        positive = -smooth_max_mil(
-            path_scores, data.teacher_peak_path_ptr, temperature
-        ).mean()
+        path_scores = logits.new_zeros(data.teacher.path_step_ptr.numel() - 1).scatter_add_(
+            0, owner, step_log_probability
+        )
+        positive = -smooth_max_mil(path_scores, data.teacher.peak_path_ptr, temperature).mean()
     else:
         path_scores = logits.new_empty(0)
         positive = logits.sum() * 0
     negative_counts = (
-        data.weak_negative_reaction_ptr[1:] - data.weak_negative_reaction_ptr[:-1]
+        data.teacher.negative_reaction_ptr[1:] - data.teacher.negative_reaction_ptr[:-1]
     )
     negative_owner = torch.repeat_interleave(
         torch.arange(negative_counts.numel(), device=logits.device), negative_counts
     )
     if negative_owner.numel():
-        group = data.teacher_node_branch_group_index[negative_owner]
-        local = inverse_reaction[group, data.weak_negative_reaction_index]
+        group = data.states.branch_group_index[negative_owner]
+        local = inverse_reaction[group, data.teacher.negative_reaction_index]
         valid = local >= 0
         negative = (
             F.softplus(logits[negative_owner[valid], local[valid]]).mean()
@@ -133,25 +123,18 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             1, ids, torch.arange(pool.valid.shape[1], device=ids.device).expand_as(ids)
         )
         inverse[:, reactions] = -1
-        state_count = data.teacher_node_branch_group_index.numel()
-        owners = data.teacher_node_branch_group_index
-        counts = (
-            data.teacher_node_reaction_ptr[1:] - data.teacher_node_reaction_ptr[:-1]
-        )
-        row = torch.repeat_interleave(
-            torch.arange(state_count, device=ids.device), counts
-        )
-        position = (
-            torch.arange(row.numel(), device=ids.device)
-            - data.teacher_node_reaction_ptr[row]
-        )
+        state_count = data.states.branch_group_index.numel()
+        owners = data.states.branch_group_index
+        counts = data.states.reaction_ptr[1:] - data.states.reaction_ptr[:-1]
+        row = torch.repeat_interleave(torch.arange(state_count, device=ids.device), counts)
+        position = torch.arange(row.numel(), device=ids.device) - data.states.reaction_ptr[row]
         state = torch.full(
             (state_count, self.feature_model.max_reaction_count),
             -1,
             dtype=torch.long,
             device=ids.device,
         )
-        local = inverse[owners[row], data.teacher_node_reaction_index]
+        local = inverse[owners[row], data.states.reaction_index]
         if torch.any(local < 0):
             raise ValueError("Prepared state reaction is absent from its branch group")
         state[row, position] = local
@@ -166,16 +149,13 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
         )
         positive = torch.zeros_like(logits, dtype=torch.bool)
         next_counts = (
-            data.teacher_positive_reaction_ptr[1:]
-            - data.teacher_positive_reaction_ptr[:-1]
+            data.teacher.positive_reaction_ptr[1:] - data.teacher.positive_reaction_ptr[:-1]
         )
         next_owner = torch.repeat_interleave(
             torch.arange(state_count, device=ids.device), next_counts
         )
         if next_owner.numel():
-            next_local = inverse[
-                owners[next_owner], data.teacher_positive_reaction_index
-            ]
+            next_local = inverse[owners[next_owner], data.teacher.positive_reaction_index]
             positive[next_owner, next_local] = True
         predicted = (logits.sigmoid() >= 0.5) & torch.isfinite(logits)
         metrics = {
@@ -186,12 +166,12 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             "num_teacher_paths": logits.new_tensor(float(path_scores.numel())),
         }
         max_depth = (
-            int(data.teacher_node_reaction_count.max().item())
-            if data.teacher_node_reaction_count.numel()
+            int(data.states.reaction_count.max().item())
+            if data.states.reaction_count.numel()
             else -1
         )
         for depth in range(max_depth + 1):
-            mask = data.teacher_node_reaction_count == depth
+            mask = data.states.reaction_count == depth
             metrics[f"branch_recall_depth_{depth}"] = (
                 predicted[mask] & positive[mask]
             ).sum() / positive[mask].sum().clamp_min(1)
@@ -200,11 +180,14 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
         loss = self.branch_weight * branch_loss
         if self.spectrum_model is not None:
             if data.spectrum_batch is None:
-                raise ValueError(
-                    "Intensity training requires prepared physical-ion tensors"
+                raise ValueError("Intensity training requires prepared physical-ion tensors")
+            spectrum_batch = data.spectrum_batch
+            if data.annotations is not None:
+                spectrum_batch = replace(
+                    spectrum_batch, target_intensity=data.teacher.spectrum_targets(data.annotations)
                 )
             spectrum_output = self.spectrum_model(
-                data.spectrum_batch,
+                spectrum_batch,
                 reaction_h=encoded.reaction_h,
                 collision_energy_h=encoded.collision_energy_h,
                 source_embeddings=encoded.source_embeddings,

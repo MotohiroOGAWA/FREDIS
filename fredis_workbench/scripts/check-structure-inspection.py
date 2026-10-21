@@ -20,18 +20,15 @@ reaction = ReactionInstance(0, 0, (1,), frozenset({1}), frozenset(), frozenset()
 sequence = ReactionSequence((reaction,))
 metadata = {'smiles': 'C', 'record_indexes': [7],
             'reaction_sequence_compounds': [(sequence, '[CH4:1]')]}
+from fredis.ml.input.reaction_state_data import ReactionStateData, TeacherData
 structure = SimpleNamespace(
-    num_samples=0, num_branch_groups=0, reaction_type=torch.empty(0),
-    condition_features=torch.empty((0, 2)), spectrum_batch=SimpleNamespace(
-        decoded=SimpleNamespace(trees=(), compounds=()), state_node_index=torch.empty(0),
-        state_adduct_index=torch.empty(0)),
-    **{name: torch.empty(0, dtype=torch.long) for name in (
-        'teacher_node_reaction_ptr', 'teacher_node_reaction_index',
-        'teacher_positive_reaction_ptr', 'teacher_positive_reaction_index',
-        'teacher_node_observed', 'teacher_node_branch_group_index',
-        'state_fragment_node_index', 'sample_branch_group_index',
-        'transition_parent_state_index', 'transition_child_state_index',
-        'transition_added_reaction_index')})
+    num_samples=0, num_branch_groups=0, sample_annotations=(),
+    reactions=SimpleNamespace(reaction_type=torch.empty((0,3))),
+    states=ReactionStateData(), teacher=TeacherData(),
+    condition_features=torch.empty((0,2)), sample_branch_group_index=torch.empty(0,dtype=torch.long),
+    spectrum_batch=SimpleNamespace(decoded=SimpleNamespace(trees=(),compounds=()),
+        state_node_index=torch.empty(0),state_adduct_index=torch.empty(0)),
+)
 with patch.object(backend.torch, 'load', return_value={'structure': structure, 'metadata': metadata}), \
      patch.object(backend, '_node_view', return_value=([], '', {}, None)):
     result = backend.inspect_structure(Path('fixture.preft.pt'))

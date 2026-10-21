@@ -391,7 +391,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             for left,right in zip(serial,parallel):
                 first=SourceReactionStructure.load(left);second=SourceReactionStructure.load(right)
                 self.assertTrue(torch.equal(first.condition_features,second.condition_features))
-                self.assertTrue(torch.equal(first.teacher_positive_reaction_index,second.teacher_positive_reaction_index))
+                self.assertTrue(torch.equal(first.teacher.positive_reaction_index, second.teacher.positive_reaction_index))
                 self.assertTrue(torch.equal(first.spectrum_batch.target_intensity,second.spectrum_batch.target_intensity))
             stats=json.loads((root/'parallel/reaction_statistics.json').read_text())
             self.assertEqual(stats['num_workers'],2)

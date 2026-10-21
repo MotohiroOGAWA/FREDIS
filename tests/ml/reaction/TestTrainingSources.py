@@ -207,8 +207,8 @@ class TestTrainingSources(unittest.TestCase):
         precursor_mz = Formula.parse('C2H7O+').exact_mass
         data, kept = builder.build(source, [adduct], [20.], [[precursor_mz]], [[1.]])
         filtered = select_samples(data, [0])
-        self.assertEqual(filtered.teacher_peak_branch_group_index.dtype, torch.long)
-        self.assertEqual(filtered.state_transition_next_state_index.dtype, torch.long)
+        self.assertEqual(filtered.teacher.peak_branch_group_index.dtype, torch.long)
+        self.assertEqual(filtered.states.next_state_index.dtype, torch.long)
         select_samples(filtered, [0])  # must not raise
 
 

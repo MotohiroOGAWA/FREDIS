@@ -101,7 +101,7 @@ def materialize_reaction_states(
         {} for _ in tree_by_sample
     ]
     state_node, sequences = {}, {}
-    index_by_state = [{} for _ in tree_by_sample]
+    index_by_smiles = [{sources[tree].smiles: 0} for tree in tree_by_sample]
     runs = failures = 0
     terminal_set = set(terminal)
     terminal_nodes: list[tuple[int, int]] = []
@@ -133,12 +133,12 @@ def materialize_reaction_states(
             compound = effects[effect]
             if compound is None:
                 continue
-            node = index_by_state[s].get(tuple(sorted(ids)))
+            node = index_by_smiles[s].get(compound.smiles)
             if node is None:
                 node = len(nodes_by_sample[s])
                 nodes_by_sample[s].append(FragmentNode(node, compound.smiles))
                 compounds_by_sample[s].append(compound)
-                index_by_state[s][tuple(sorted(ids))] = node
+                index_by_smiles[s][compound.smiles] = node
                 scores_by_sample[s].append(-float("inf"))
         state_node[row] = node
         scores_by_sample[s][node] = max(scores_by_sample[s][node], score[row])

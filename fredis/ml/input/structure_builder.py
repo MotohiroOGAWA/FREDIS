@@ -11,6 +11,7 @@ from .source_reaction_structure import (
     SourceReactionStructure,
     prepare_source_reactions,
     UnresolvedPrecursorError,
+    csr,
 )
 from ..specgen.source_anchored_spectrum_predictor import (
     SourceAnchoredFragmentSpectrumGenerator,
@@ -84,12 +85,10 @@ class ReactionStructureBuilder:
         nothing to supervise. The caller uses the returned indices to report
         which of its original records were actually kept.
         """
-        if not precursor_types or not len(precursor_types) == len(
-            collision_energy
-        ) == len(peaks_mz) == len(peaks_intensity):
-            raise ValueError(
-                "Every spectrum needs precursor, CE, peaks and intensities"
-            )
+        if not precursor_types or not len(precursor_types) == len(collision_energy) == len(
+            peaks_mz
+        ) == len(peaks_intensity):
+            raise ValueError("Every spectrum needs precursor, CE, peaks and intensities")
         for mz, intensity in zip(peaks_mz, peaks_intensity):
             if len(mz) != len(intensity):
                 raise ValueError("Peak m/z and intensity lengths differ")
@@ -108,9 +107,7 @@ class ReactionStructureBuilder:
             reactions = (
                 precomputed_reactions
                 if precomputed_reactions is not None
-                else fragmenter.fragment_ion_tree_builder.create_reaction_instances(
-                    source
-                )
+                else fragmenter.fragment_ion_tree_builder.create_reaction_instances(source)
             )
         else:
             added = (
@@ -190,9 +187,7 @@ class ReactionStructureBuilder:
             bool(fragmenter.resolve_precursor_reactions(tree, precursor_type))
             for precursor_type in precursor_types
         ]
-        kept = tuple(
-            index for index, reachable in enumerate(precursor_reachable) if reachable
-        )
+        kept = tuple(index for index, reachable in enumerate(precursor_reachable) if reachable)
         if not kept:
             raise UnresolvedPrecursorError(
                 "No sample in this group has a valid precursor reaction sequence from Source"
@@ -202,9 +197,7 @@ class ReactionStructureBuilder:
             collision_energy = [collision_energy[index] for index in kept]
             peaks_mz = [peaks_mz[index] for index in kept]
             peaks_intensity = [peaks_intensity[index] for index in kept]
-        assignments = fragmenter.annotate_peak_sets(
-            tree, zip(precursor_types, peaks_mz)
-        )
+        assignments = fragmenter.annotate_peak_sets(tree, zip(precursor_types, peaks_mz))
         transitions_by_sequence = _transitions_by_sequence(tree)
         teacher_paths = []
         for peak_annotations in assignments:
@@ -217,9 +210,7 @@ class ReactionStructureBuilder:
                     paths.extend(_transition_chains(transitions_by_sequence, sequence))
                 peaks.append(list(dict.fromkeys(paths)))
             teacher_paths.append(peaks)
-        mains = [
-            fragmenter._resolve_main_adduct_type(adduct) for adduct in precursor_types
-        ]
+        mains = [fragmenter._resolve_main_adduct_type(adduct) for adduct in precursor_types]
         conditions = torch.tensor(
             [
                 [generator.adduct_type_strs.index(str(main)), ce]
@@ -249,12 +240,10 @@ class ReactionStructureBuilder:
         # Materialization adds its own Source bookkeeping root. Teacher depth
         # zero is the shared empty reaction state for each branch group.
         rows = [
-            tuple(data.teacher_node_reaction_index[a:b].tolist())
-            for a, b in zip(
-                data.teacher_node_reaction_ptr[:-1], data.teacher_node_reaction_ptr[1:]
-            )
+            tuple(data.states.reaction_index[a:b].tolist())
+            for (a, b) in zip(data.states.reaction_ptr[:-1], data.states.reaction_ptr[1:])
         ]
-        samples = data.teacher_node_branch_group_index.tolist()
+        samples = data.states.branch_group_index.tolist()
         dense_rows = []
         dense_sample = []
         parents = []
@@ -272,12 +261,12 @@ class ReactionStructureBuilder:
             for node, (owner, ids) in enumerate(zip(samples, rows)):
                 if owner != sample:
                     continue
-                parent = int(data.teacher_node_parent_index[node])
+                parent = int(data.states.parent_index[node])
                 teacher_dense[node] = len(dense_rows)
                 dense_rows.append((*ids, *([-1] * (width - len(ids)))))
                 dense_sample.append(sample)
                 parents.append(teacher_dense[parent] if parent >= 0 else source_row)
-                added.append(int(data.teacher_node_added_reaction_index[node]))
+                added.append(int(data.states.added_reaction_index[node]))
                 terminal.append(True)
         # Competition must include unobserved alternatives as well as the
         # positive teacher paths. Use every exhaustively enumerated state.
@@ -313,9 +302,7 @@ class ReactionStructureBuilder:
             torch.tensor(parents),
             torch.tensor(added),
             SimpleNamespace(
-                reaction_index=torch.arange(len(reactions)).expand(
-                    data.num_branch_groups, -1
-                )
+                reaction_index=torch.arange(len(reactions)).expand(data.num_branch_groups, -1)
             ),
         )
         from ..specgen.components.reaction.reaction_decoder import (
@@ -346,10 +333,7 @@ class ReactionStructureBuilder:
             )
         }
         state_nodes = torch.tensor(
-            [
-                node_by_state.get((sample, tuple(row)), -1)
-                for sample, row in zip(samples, rows)
-            ],
+            [node_by_state.get((sample, tuple(row)), -1) for sample, row in zip(samples, rows)],
             dtype=torch.long,
         )
         annotations = []
@@ -379,10 +363,7 @@ class ReactionStructureBuilder:
                         branch_group,
                         (
                             tuple(
-                                sorted(
-                                    reactions.index(reaction)
-                                    for reaction in sequence.reactions
-                                )
+                                sorted(reactions.index(reaction) for reaction in sequence.reactions)
                             )
                             if sequence
                             else ()
@@ -396,9 +377,7 @@ class ReactionStructureBuilder:
                         smiles=annotation.smiles,
                         formula=str(formula),
                         theoreticalMz=float(formula.exact_mass),
-                        massErrorPpm=(float(mz) - formula.exact_mass)
-                        / formula.exact_mass
-                        * 1e6,
+                        massErrorPpm=(float(mz) - formula.exact_mass) / formula.exact_mass * 1e6,
                         adduct=str(annotation.adduct),
                         fragmentIonAdduct=str(annotation.fragment_ion_adduct),
                         hydrogenShift=annotation.hydrogen_shift,
@@ -407,25 +386,20 @@ class ReactionStructureBuilder:
                         (
                             item
                             for item in matches
-                            if {k: v for k, v in item.items() if k != "nodeIndices"}
-                            == match
+                            if {k: v for k, v in item.items() if k != "nodeIndices"} == match
                         ),
                         None,
                     )
                     if existing is None:
                         matches.append(dict(nodeIndices=[node], **match))
                     elif node not in existing["nodeIndices"]:
-                        existing["nodeIndices"] = sorted(
-                            (*existing["nodeIndices"], node)
-                        )
+                        existing["nodeIndices"] = sorted((*existing["nodeIndices"], node))
                 peaks.append(
                     dict(
                         index=peak_index,
                         mz=float(mz),
                         intensity=float(intensity),
-                        precursor=bool(
-                            fragmenter.mass_tolerance.within(float(mz), precursor_mz)
-                        ),
+                        precursor=bool(fragmenter.mass_tolerance.within(float(mz), precursor_mz)),
                         matches=matches,
                     )
                 )
@@ -433,8 +407,7 @@ class ReactionStructureBuilder:
             def score(selected):
                 total = sum(peak["intensity"] for peak in selected)
                 return (
-                    sum(peak["intensity"] for peak in selected if peak["matches"])
-                    / total
+                    sum(peak["intensity"] for peak in selected if peak["matches"]) / total
                     if total > 0
                     else None
                 )
@@ -461,11 +434,7 @@ class ReactionStructureBuilder:
             ion_type_strs=getattr(generator, "ion_type_strs", None),
         )
         target = []
-        valid_formulas = (
-            (spectrum_batch.state_formula_tensor[:, :-1] >= 0)
-            .all(1)
-            .tolist()
-        )
+        valid_formulas = (spectrum_batch.state_formula_tensor[:, :-1] >= 0).all(1).tolist()
         for sample, mz, valid_formula in zip(
             spectrum_batch.state_sample_index.tolist(),
             spectrum_batch.state_mz.tolist(),
@@ -473,21 +442,47 @@ class ReactionStructureBuilder:
         ):
             matches = [
                 float(intensity)
-                for observed, intensity in zip(
-                    peaks_mz[sample], peaks_intensity[sample]
-                )
-                if valid_formula
-                and mz > 0
-                and fragmenter.mass_tolerance.within(observed, mz)
+                for observed, intensity in zip(peaks_mz[sample], peaks_intensity[sample])
+                if valid_formula and mz > 0 and fragmenter.mass_tolerance.within(observed, mz)
             ]
             target.append(max(matches, default=0.0))
+        # The base state universe includes all materialized chemistry, not only
+        # paths selected by the teacher or its one-step negative continuations.
+        candidate_rows = [
+            tuple(data.states.candidate_reaction_index[a:b].tolist())
+            for a, b in zip(
+                data.states.candidate_reaction_ptr[:-1], data.states.candidate_reaction_ptr[1:]
+            )
+        ]
+        candidate_groups = data.states.candidate_branch_group_index.tolist()
+        known = set(zip(candidate_groups, candidate_rows))
+        for group, row in zip(dense_sample, dense_rows):
+            key = (group, tuple(i for i in row if i >= 0))
+            if key not in known and key in node_by_state:
+                known.add(key)
+                candidate_groups.append(group)
+                candidate_rows.append(key[1])
+        candidate_ptr, candidate_reactions = csr(candidate_rows)
+        candidate_nodes = torch.tensor(
+            [
+                node_by_state.get((group, row), -1)
+                for group, row in zip(candidate_groups, candidate_rows)
+            ],
+            dtype=torch.long,
+        )
         return (
             replace(
                 data,
-                state_fragment_node_index=state_nodes,
-                sample_annotations=tuple(annotations),
-                spectrum_batch=replace(
-                    spectrum_batch, target_intensity=torch.tensor(target)
+                formula_elements=tuple(generator.tensorizer.element_order),
+                observations=tuple(annotations),
+                spectrum_batch=replace(spectrum_batch, target_intensity=torch.tensor(target)),
+                states=replace(
+                    data.states,
+                    fragment_node_index=state_nodes,
+                    candidate_fragment_index=candidate_nodes,
+                    candidate_branch_group_index=torch.tensor(candidate_groups),
+                    candidate_reaction_ptr=candidate_ptr,
+                    candidate_reaction_index=candidate_reactions,
                 ),
             ),
             kept,

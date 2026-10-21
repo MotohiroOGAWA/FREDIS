@@ -21,7 +21,7 @@ def load_prepared_structure(file_path: str | Path):
         raise TypeError("This .preft.pt file has no saved structure.")
     structure = payload["structure"]
     required = (
-        "teacher_node_reaction_ptr",
+        "states",
         "sample_branch_group_index",
         "reactions",
     )
@@ -117,10 +117,10 @@ def state_reaction_combinations(
     structure,
 ) -> dict[tuple[int, int], list[tuple[int, ...]]]:
     """Map ``(branch group, fragment node)`` to every saved reaction combination."""
-    pointers = structure.teacher_node_reaction_ptr.tolist()
-    indexes = structure.teacher_node_reaction_index.tolist()
-    groups = structure.teacher_node_branch_group_index.tolist()
-    nodes = structure.state_fragment_node_index.tolist()
+    pointers = structure.states.candidate_reaction_ptr.tolist()
+    indexes = structure.states.candidate_reaction_index.tolist()
+    groups = structure.states.candidate_branch_group_index.tolist()
+    nodes = structure.states.candidate_fragment_index.tolist()
     result: dict[tuple[int, int], list[tuple[int, ...]]] = defaultdict(list)
     for row, (group, node) in enumerate(zip(groups, nodes)):
         if node < 0:
@@ -144,10 +144,7 @@ def iter_prepared_samples(
     if not reactions:
         reactions = restore_reaction_registry(structure, source_smiles, params)
     combinations = state_reaction_combinations(structure)
-    annotations = tuple(
-        getattr(structure, "sample_annotations", ())
-        or metadata.get("sample_annotations", ())
-    )
+    annotations = structure.sample_annotations
     record_indexes = list(metadata.get("record_indexes", range(len(annotations))))
     groups = structure.sample_branch_group_index.tolist()
     for sample_index, annotation in enumerate(annotations):

@@ -129,7 +129,8 @@ def default_model(chemistry):
         state_dropout=0.0,
     )
     model["spectrum_model_params"].update(
-        transition_fc_dims=[16],
+        fragment_fc_dims=[16],
+        state_fc_dims=[16],
         ce_fc_dims=[16],
         collision_energy_dim=16,
     )
