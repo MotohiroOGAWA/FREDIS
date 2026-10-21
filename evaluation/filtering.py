@@ -100,7 +100,8 @@ def present(result, view=None, output_dir=None, formats=()):
     list_view = dict(view)
     list_view.pop('categories', None)
     list_tool_rows, list_rows, _, _ = select_view(result, list_view)
-    visible_fields = [f for f in fields if f.get('cached', True) and (not f['id'].startswith('tool:') or any(f['id'] == 'tool:'+s['name']+':'+metric for s in series for metric in ['retainedPercent','retainedN','excludedN']))]
+    metadata_fields = {rule.get('field') for rule in [*view.get('sortRules', []), *view.get('filters', [])]}
+    visible_fields = [f for f in fields if (not f['id'].startswith('metadata:') or f['id'] in metadata_fields) and f.get('cached', True) and (not f['id'].startswith('tool:') or any(f['id'] == 'tool:'+s['name']+':'+metric for s in series for metric in ['retainedPercent','retainedN','excludedN']))]
     vertical = view.get('orientation', 'vertical') == 'vertical'
     width_px, height_px = view.get('width', 1200), view.get('height', 700)
     for dimension in (width_px, height_px):
