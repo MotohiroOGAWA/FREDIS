@@ -257,15 +257,16 @@ console.log('Evaluation webview and CLI argument checks passed.');
   const rows=[{scope:'category',category:'A',tool:'Common',totalN:2,retainedN:1,excludedN:1,retainedPercent:50}];
   w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringResult',restored:true,result:{rows,displayRows:rows,diagnostics:[],sourceN:2,title:'Cached',series:[{name:'Common',color:'#666666'}],png:''}}}));
   assert.equal(d.getElementById('filterPresentation').hidden,false);
-  assert.equal(d.getElementById('filterOverall').checked,false);
+  assert.equal(w.evalFiltering.request().view.showOverall,false);
+  for(const id of ['filterOverall','filterVisibleTools','filterMinN','filterCategories'])assert.equal(d.getElementById(id),null);
+  assert.equal(w.evalFiltering.request().view.minN,0);
+  assert(d.getElementById('filterGraphTab').compareDocumentPosition(d.getElementById('filterCommonColor')) & w.Node.DOCUMENT_POSITION_FOLLOWING);
   assert(!d.getElementById('filterClassificationColumns'));
   assert.equal(d.getElementById('filterGraphPage').style.overflow,'auto');
   assert.equal(d.getElementById('filterChart').style.maxWidth,'none');
   // The list filter may show an unchecked category while a checked one is hidden.
   const graphRows=[{scope:'category',category:'A',tool:'Common',totalN:2,retainedN:1,excludedN:1,retainedPercent:50}];
   w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringPresentation',result:{displayRows:graphRows,categoryRows:[{scope:'category',category:'A',totalN:2}],listRows:[{scope:'category',category:'B',totalN:1}],fields:[{id:'category',label:'Category',type:'text'},{id:'totalN',label:'Original N',type:'number'}],png:''}}}));
-  // Add B to the master list as an unchecked option.
-  const b=d.createElement('option');b.value=b.textContent='B';b.selected=false;d.getElementById('filterCategories').append(b);
   d.getElementById('filterUnselectShown').click();
   assert.deepEqual(Array.from(w.evalFiltering.request().view.categories),['A']);
   d.getElementById('filterSelectShown').click();
