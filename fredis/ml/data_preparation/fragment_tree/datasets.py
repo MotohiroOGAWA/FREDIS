@@ -58,14 +58,19 @@ def canonical_smiles(value: str) -> str:
     return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
 
 
-def canonical_keys(values):
+def canonical_keys(values, progress=None):
     cache = {}
     result = []
-    for value in values:
+    total = len(values)
+    if progress:
+        progress(0, total)
+    for index, value in enumerate(values):
         value = str(value)
         if value not in cache:
             cache[value] = canonical_smiles(value)
         result.append(cache[value])
+        if progress and ((index + 1) % max(1, total // 100) == 0 or index + 1 == total):
+            progress(index + 1, total)
     return result
 
 
@@ -82,7 +87,7 @@ def validate_split_ratios(validation_ratio, test_ratio):
         raise ValueError("Validation and test ratios must be finite, non-negative and sum to less than 1.")
 
 
-def split_assignments(values, validation_ratio=0.0, test_ratio=0.0, seed=0):
+def split_assignments(values, validation_ratio=0.0, test_ratio=0.0, seed=0, progress=None):
     """Return canonical keys and their deterministic, molecule-disjoint assignment.
 
     Fractions use the original molecule count. Round each held-out count, with
@@ -90,7 +95,7 @@ def split_assignments(values, validation_ratio=0.0, test_ratio=0.0, seed=0):
     """
     validate_split_ratios(validation_ratio, test_ratio)
     ratios = (validation_ratio, test_ratio)
-    keys = canonical_keys(values)
+    keys = canonical_keys(values, progress=progress)
     molecules = sorted(set(keys))
     counts = [max(1, round(len(molecules) * r)) if r else 0 for r in ratios]
     if len(molecules) < 1 + sum(r > 0 for r in ratios):
@@ -106,10 +111,10 @@ def split_assignments(values, validation_ratio=0.0, test_ratio=0.0, seed=0):
     return keys, assignments
 
 
-def split_dataset(dataset, column, validation_ratio=0.0, test_ratio=0.0, seed=0):
+def split_dataset(dataset, column, validation_ratio=0.0, test_ratio=0.0, seed=0, progress=None):
     import numpy as np
 
-    keys, assignments = split_assignments(dataset[column].astype(str), validation_ratio, test_ratio, seed)
+    keys, assignments = split_assignments(dataset[column].astype(str), validation_ratio, test_ratio, seed, progress=progress)
     labels = np.array([assignments[key] for key in keys])
     return {name: dataset[np.flatnonzero(labels == name)] for name in ("train", "validation", "test")}, assignments
 

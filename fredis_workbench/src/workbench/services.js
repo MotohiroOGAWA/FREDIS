@@ -1,16 +1,18 @@
 const fs=require('fs');
 const path=require('path');
 const crypto=require('crypto');
+const os=require('os');
 const vscode=require('vscode');
 const {spawn}=require('child_process');
 function backend(context,root,command,payload,options={}){return new Promise((resolve,reject)=>{
  const python=vscode.workspace.getConfiguration('fredis').get('pythonPath','python');
- const child=spawn(python,[path.join(context.extensionPath,'src/workbench/dataset_backend.py')],{cwd:root,env:{...process.env,PYTHONPATH:[root,process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)}});
+ const child=spawn(python,options.cliArgs||[path.join(context.extensionPath,'src/workbench/dataset_backend.py')],{cwd:root,env:{...process.env,PYTHONPATH:[root,process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)}});
+ options.onChild?.(child);
  let output='',errors='',progressBuffer='',settled=false;const finish=(error,result)=>{if(settled)return;settled=true;clearTimeout(timeout);error?reject(error):resolve(result);};
  const timeout=options.timeoutMs===0?null:setTimeout(()=>{child.kill();finish(new Error('Dataset inspection timed out. Inspect the Python environment.'));},options.timeoutMs||120000);
  child.stdout.on('data',data=>{output+=data.toString();if(output.length>8000000){child.kill();finish(new Error('Backend response exceeded the preview limit.'));}});child.stderr.on('data',data=>{const chunk=data.toString();errors=(errors+chunk.replace(/FREDIS_PROGRESS \{[^\r\n]+\}\r?\n?/g,'')).slice(-8000);if(options.onProgress){progressBuffer=(progressBuffer+chunk).slice(-4000);let consumed=0;for(const match of progressBuffer.matchAll(/FREDIS_PROGRESS (\{[^\r\n]+\})/g)){try{options.onProgress(JSON.parse(match[1]));}catch{}consumed=match.index+match[0].length;}if(consumed)progressBuffer=progressBuffer.slice(consumed);}});
  child.on('error',error=>finish(error));child.on('close',code=>{if(settled)return;try{const lines=output.trim().split('\n');const response=JSON.parse(lines.reverse().find(line=>line.startsWith('{'))||'');if(!response.ok)throw new Error(response.error);if(code!==0)throw new Error(errors||'Dataset backend failed.');finish(null,response.result);}catch(error){finish(new Error(error.message||errors));}});
- child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({command,payload}));
+ child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(options.cliArgs?payload:{command,payload}));
  });}
 async function inspectFiles(directory,extensions,limit,depth=5){
  const files=[];let directories=0;
@@ -43,9 +45,13 @@ async function openDocumentation(context,root){
  await render(index);
 }
 function attach(panel,context,projectRoot){
- const post=data=>panel.webview.postMessage(data),latest=new Map();
+ const post=data=>{if(!disposed)panel.webview.postMessage(data);},latest=new Map(),checkedSplits=new Map(),splitChildren=new Set();
+ const splitRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-checked-splits-'));let disposed=false;
+ const cleanup=()=>{if(disposed&&!splitChildren.size)fs.rmSync(splitRoot,{recursive:true,force:true});};
+ const onSplitChild=child=>{splitChildren.add(child);child.once('close',()=>{splitChildren.delete(child);cleanup();});};
+ panel.onDidDispose(()=>{disposed=true;for(const child of splitChildren)child.kill();cleanup();});
  panel.webview.onDidReceiveMessage(async message=>{
- if(!message||!['data/columns','data/preview','data/check','data/preflight','data/model','library/load','library/pick','library/copy','library/open','shell/document','shell/github','models/pick','models/inspect','models/export','models/patternPick'].includes(message.type))return;
+ if(!message||!['data/columns','data/preview','data/check','data/preflight','data/export-splits','data/model','library/load','library/pick','library/copy','library/open','shell/document','shell/github','models/pick','models/inspect','models/export','models/patternPick'].includes(message.type))return;
  try{
  const root=projectRoot(context);
  if(message.type==='models/patternPick'){try{const chosen=await vscode.window.showOpenDialog({canSelectMany:false,canSelectFiles:true,canSelectFolders:false,filters:{'Reaction pattern or pattern set':['pft']}});if(!chosen?.[0])return;const result=await backend(context,root,'pattern-definitions',{path:chosen[0].fsPath});post({type:'models/patterns',...result});}catch(error){post({type:'models/patterns',error:error.message});}return;}
@@ -83,7 +89,27 @@ function attach(panel,context,projectRoot){
    :await backend(context,root,'preview',{path:message.path,mapping:message.mapping,validateValues:message.type==='data/check',reportProgress:message.type==='data/check',fragmenterParams:message.fragmenterParams,symbols:message.symbols},message.type==='data/check'?{timeoutMs:0,onProgress:progress=>{if(latest.get(message.target)===message.requestId)post({type:'data/check-progress',target:message.target,requestId:message.requestId,...progress});}}:{});
  if(latest.get(message.target)===message.requestId)post({type:message.type,target:message.target,requestId:message.requestId,data});
  }
- if(message.type==='data/preflight')post({type:'data/preflight',requestId:message.requestId,...await backend(context,root,'validate',message.config,{timeoutMs:0})});
+ if(message.type==='data/preflight'){
+  latest.set('split',message.requestId);
+  if(Array.isArray(message.config?.datasets)){
+   const checkedId=crypto.randomUUID(),checkedPlan=path.join(splitRoot,checkedId+'.json');
+   const result=await backend(context,root,'split-datasets',message.config,{timeoutMs:0,onChild:onSplitChild,
+    cliArgs:['-m','fredis.cli','train','split-datasets','--config-stdin','--plan-output',checkedPlan],
+    onProgress:progress=>{if(latest.get('split')===message.requestId)post({type:'data/preflight-progress',requestId:message.requestId,...progress});}});
+   if(latest.get('split')===message.requestId&&!disposed){checkedSplits.set(checkedId,{checkedPlan,requestId:message.requestId});post({type:'data/preflight',requestId:message.requestId,checkedId,splits:result.splits,sources:result.sources,valid:true});}
+   else await fs.promises.unlink(checkedPlan).catch(()=>{});
+  }else post({type:'data/preflight',requestId:message.requestId,...await backend(context,root,'validate',message.config,{timeoutMs:0})});
+ }
+ if(message.type==='data/export-splits'){
+  const checked=checkedSplits.get(message.checkedId);
+  if(!checked||checked.requestId!==message.checkRequestId)throw new Error('Run Check Split Summary before exporting.');
+  const selected=await vscode.window.showOpenDialog({canSelectMany:false,canSelectFolders:true,canSelectFiles:false,openLabel:'Export Split Datasets'});
+  if(!selected?.[0]){post({type:'data/splits-export-cancelled',requestId:message.requestId});return;}
+  const result=await backend(context,root,'split-datasets',{}, {timeoutMs:0,onChild:onSplitChild,
+   cliArgs:['-m','fredis.cli','train','split-datasets','--checked-plan',checked.checkedPlan,'--output-dir',selected[0].fsPath],
+   onProgress:progress=>post({type:'data/splits-export-progress',requestId:message.requestId,...progress})});
+  post({type:'data/splits-exported',requestId:message.requestId,...result});
+ }
  }catch(error){post({type:'data/error',source:message.type,target:message.target,requestId:message.requestId,error:error.message});}
  });
 }

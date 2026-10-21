@@ -333,6 +333,43 @@ Overlap removal and shortfalls are reported as JSON events on stdout:
 `validation_overlap_removed`, `validation_below_target`, `validation_empty`.
 If separate validation ends up empty, CLI continues with training only.
 
+### Check and export split spectrum datasets
+
+**Check Split Summary** displays progress for each input's loading and record
+validation, followed by canonical molecule splitting. On success,
+**Export Split Datasets…** lets you select a destination directory and writes
+`train.msds`, `validation.msds`, and `test.msds` there. A split with zero records
+is omitted. `dataset_split_manifest.json` records the split assignments and
+source information. Existing split files are never overwritten.
+
+The export reuses the checked molecule assignments and eligible record indexes;
+it does not repeat metadata validation. If a source file changes after checking,
+check the split again. Editing the input list or configuration disables export
+until the new configuration has been checked. Checked plans are temporary and
+are removed when the Workbench closes. Both checking and exporting use the same
+CLI command as standalone workflows:
+
+```sh
+python -m fredis.cli train split-datasets \
+  --datasets-json '[{"path":"a.msds"},{"path":"b.msds"}]' \
+  --dataset-mode automatic --validation-ratio 0.1 --test-ratio 0.1 --seed 7 \
+  --params fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft \
+  --output-dir split-datasets
+```
+
+Use `--dataset-mode assigned` and each entry's `split` role to keep explicit
+assignments instead. Per-file `mapping` works as in data preparation.
+For separate checking and export, replace `--output-dir` with
+`--plan-output checked-split.json`, then run:
+
+```sh
+python -m fredis.cli train split-datasets \
+  --checked-plan checked-split.json --output-dir split-datasets
+```
+
+The CLI emits machine-readable `FREDIS_PROGRESS` events to stderr and one JSON
+result to stdout. `--config-stdin` accepts the Workbench configuration directly.
+
 ## Search limits
 
 Two per-source limits bound the cost of one molecule. Both default to `-1`

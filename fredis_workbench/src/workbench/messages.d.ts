@@ -45,8 +45,17 @@ export type PreparationInputs = {
 export type DataRequest =
   | { type: 'data/columns' | 'data/preview' | 'data/check'; target: 'train' | 'validation' | 'home' | 'prediction' | `dataset-${string}`; requestId: string; path: string; mapping?: Record<string, string>; fragmenterParams?: Record<string, unknown> }
   | { type: 'data/preflight'; requestId: string; config: Record<string, unknown> }
+  | { type: 'data/export-splits'; requestId: string; checkedId: string; checkRequestId: string }
   | { type: 'data/model'; requestId: string; path: string };
 export type DataProgressEvent = { type: 'data/check-progress'; target: 'train' | 'validation' | 'prediction' | `dataset-${string}`; requestId: string; current: number; total: number };
+export type SplitProgressEvent = {
+  type: 'data/preflight-progress' | 'data/splits-export-progress'; requestId: string;
+  stage: string; percent: number; current?: number; total?: number;
+  datasetIndex?: number; datasetsTotal?: number; split?: 'train' | 'validation' | 'test';
+};
+export type SplitExportEvent =
+  | { type: 'data/splits-exported'; requestId: string; outputDir: string; files: Record<string, string> }
+  | { type: 'data/splits-export-cancelled'; requestId: string };
 export type ResourceRequest =
   | { type: 'library/load' | 'shell/document' | 'shell/github' }
   | { type: 'library/copy' | 'library/open'; path: string }

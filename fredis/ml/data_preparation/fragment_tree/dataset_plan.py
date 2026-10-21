@@ -50,14 +50,25 @@ def validate_list_config(entries, mode, validation_ratio=0, test_ratio=0):
 
 
 def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_ratio=0, seed=0,
-                  invalid_detail_limit=None):
+                  invalid_detail_limit=None, progress=None):
     entries = validate_list_config(entries, mode, validation_ratio, test_ratio)
-    datasets, reports, sources = [], {}, []
-    for entry in entries:
+    datasets, reports, sources, valid_indexes = [], {}, [], {}
+    def notify(stage, percent, **details):
+        if progress:
+            progress(dict(stage=stage, percent=percent, **details))
+
+    for source_index, entry in enumerate(entries):
+        notify("loading", source_index * 70 / len(entries), datasetIndex=source_index + 1,
+               datasetsTotal=len(entries), path=entry["path"], current=0, total=0)
         data = load_spectrum_dataset(entry["path"])
+        def inspected(current, total):
+            notify("validating", (source_index + current / max(1, total)) * 70 / len(entries),
+                   datasetIndex=source_index + 1, datasetsTotal=len(entries),
+                   path=entry["path"], current=current, total=total)
         report = inspect_records(data, fragmenter, entry["mapping"], symbols=symbols,
-                                 invalid_detail_limit=invalid_detail_limit)
+                                 invalid_detail_limit=invalid_detail_limit, progress=inspected if progress else None)
         reports[entry["id"]] = report["invalidRecords"]
+        valid_indexes[entry["id"]] = report["validIndexes"]
         if not report["eligibleRecords"]:
             raise ValueError(f"{entry['path']}: no valid records to prepare.")
         # Materialize each filtered view, preserving peaks and unrelated metadata.
@@ -70,13 +81,16 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
         datasets.append(data)
         sources.append(dict(id=entry["id"], path=entry["path"], split=entry["split"],
                             records=len(data), excludedRecords=report["excludedRecords"]))
+    notify("combining", 72)
     combined = MSDataset.concat(datasets) if len(datasets) > 1 else datasets[0]
     if mode == "automatic":
-        splits, assignments = split_dataset(combined, "SMILES", validation_ratio, test_ratio, seed)
+        splits, assignments = split_dataset(combined, "SMILES", validation_ratio, test_ratio, seed,
+                                              progress=(lambda current, total: notify("splitting", 75 + current / max(1, total) * 24, current=current, total=total)) if progress else None)
     else:
         assignments, grouped = {}, {name: [] for name in SPLITS}
-        for entry, data in zip(entries, datasets):
-            for key in set(canonical_keys(data["SMILES"])):
+        for source_index, (entry, data) in enumerate(zip(entries, datasets)):
+            keys = canonical_keys(data["SMILES"], progress=(lambda current, total: notify("splitting", 75 + (source_index + current / max(1, total)) * 24 / len(entries), current=current, total=total)) if progress else None)
+            for key in set(keys):
                 if key in assignments and assignments[key] != entry["split"]:
                     raise ValueError(f"Canonical molecule {key} appears in both {assignments[key]} and {entry['split']}. Assign overlapping datasets to the same split or use automatic splitting.")
                 assignments[key] = entry["split"]
@@ -86,5 +100,6 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
                   for name, parts in grouped.items()}
     summary = {name: dict(molecules=sum(split == name for split in assignments.values()), records=len(data))
                for name, data in splits.items()}
+    notify("complete", 100)
     return dict(entries=entries, combined=combined, splits=splits, assignments=assignments,
-                reports=reports, sources=sources, summary=summary)
+                reports=reports, sources=sources, summary=summary, valid_indexes=valid_indexes)
