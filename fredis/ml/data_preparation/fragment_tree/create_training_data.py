@@ -25,7 +25,7 @@ from fredis.cli.chemistry_options import (
     resolve_chemistry_options,
 )
 from .pretrained_models import stage_pretrained_models, relocate_sources
-from .datasets import load_spectrum_dataset, split_by_smiles, dedupe_validation
+from .datasets import load_spectrum_dataset, split_dataset, canonical_keys, dedupe_validation
 from .record_validation import inspect_records
 
 # Fragment-tree search statistics copied from each source's search_stats into
@@ -188,11 +188,17 @@ def _prepare_group(task, builder, options):
         (sequence, compound.mapped_smiles)
         for sequence, compound in builder.last_reaction_sequence_compounds.items()
     ]
+    provenance = {}
+    if "_fredis_dataset_path" in dataset.columns and "_fredis_source_record" in dataset.columns:
+        paths, indexes = dataset["_fredis_dataset_path"], dataset["_fredis_source_record"]
+        provenance["source_records"] = [dict(path=str(paths.iloc[index]), record_index=int(indexes.iloc[index]))
+                                        for index in kept]
     save_fragment_tree_structure(
         structure=structure,
         output_file=path,
         metadata=dict(
             smiles=smiles,
+            **provenance,
             record_indexes=kept_rows,
             sample_annotations=structure.sample_annotations,
             search_stats=builder.last_search_stats,
@@ -818,7 +824,9 @@ def create_reaction_training_data(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True)
+    parser.add_argument("--input", help="Legacy single input; use --datasets-json for dataset lists.")
+    parser.add_argument("--datasets-json", help="JSON list of dataset paths, per-file mappings and split assignments.")
+    parser.add_argument("--dataset-mode", choices=("automatic", "assigned"), default="automatic")
     parser.add_argument("--output-dir", required=True, type=output_directory)
     configure_chemistry_options(parser)
     parser.add_argument(
@@ -876,6 +884,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         help="Split unique SMILES when validation input is omitted. With --validation-input, instead caps validation to this fraction of training's unique SMILES count after removing molecules shared with training.",
     )
+    parser.add_argument("--test-ratio", type=float, default=0.0, help="Fraction of input canonical molecules reserved for final testing; default 0.")
     parser.add_argument("--validation-seed", type=int, default=0)
     parser.add_argument("--minimum-relative-intensity", type=float, default=0.0)
     parser.add_argument(
@@ -890,6 +899,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
+    if not args.input and not args.datasets_json:
+        raise ValueError("Supply --datasets-json or --input.")
+    if args.datasets_json and (args.input or args.validation_input):
+        raise ValueError("Use dataset lists or legacy inputs, not both.")
     # Decide whether an existing destination may be replaced before loading or
     # validating either dataset; those checks can be expensive on large files.
     _confirm_existing_output(args)
@@ -916,47 +929,62 @@ def main(argv: list[str] | None = None) -> None:
 
         config = prepare_pattern_models(config, records)
     validate_limits(args.max_unique_fragment_smiles, args.max_reaction_combinations)
-    dataset = load_spectrum_dataset(args.input)
-    # Exclude invalid metadata before collecting adducts or splitting molecules.
-    validation_dataset = (
-        load_spectrum_dataset(args.validation_input) if args.validation_input else None
-    )
-    checker = create_preparation_context(config).fragmenter
-    mapping = dict(
-        smilesColumn=args.smiles_column,
-        adductTypeColumn=args.adduct_type_column,
-        collisionEnergyColumn=args.collision_energy_column,
-        precursorMzColumn=args.precursor_mz_column,
-    )
-    # Falls back to the training column name for anything not explicitly
-    # overridden; only takes effect when validation is a separate dataset
-    # (--validation-input) since an auto ratio split reuses the same columns.
-    validation_mapping = dict(
-        smilesColumn=args.validation_smiles_column or args.smiles_column,
-        adductTypeColumn=args.validation_adduct_type_column or args.adduct_type_column,
-        collisionEnergyColumn=args.validation_collision_energy_column
-        or args.collision_energy_column,
-        precursorMzColumn=args.validation_precursor_mz_column
-        or args.precursor_mz_column,
-    )
-    reports = {}
-    for name, data in (("train", dataset), ("validation", validation_dataset)):
-        if data is None:
-            continue
-        report = inspect_records(
-            data,
-            checker,
-            mapping if name == "train" else validation_mapping,
-            symbols=config["symbols"],
+    plan = None
+    if args.datasets_json:
+        from .dataset_plan import DEFAULT_MAPPING, plan_datasets
+
+        plan = plan_datasets(json.loads(args.datasets_json), args.dataset_mode,
+                             create_preparation_context(config).fragmenter, config["symbols"],
+                             args.validation_ratio or 0, args.test_ratio, args.validation_seed)
+        dataset = plan["combined"]
+        reports = plan["reports"]
+        validation_mapping = DEFAULT_MAPPING
+        args.smiles_column = "SMILES"
+        args.adduct_type_column = "AdductType"
+        args.collision_energy_column = "CollisionEnergy"
+        args.precursor_mz_column = "PrecursorMZ"
+    else:
+        dataset = load_spectrum_dataset(args.input)
+        # Exclude invalid metadata before collecting adducts or splitting molecules.
+        validation_dataset = (
+            load_spectrum_dataset(args.validation_input) if args.validation_input else None
         )
-        reports[name] = report["invalidRecords"]
-        filtered = data[report["validIndexes"]]
-        if not len(filtered):
-            raise ValueError(name + " dataset contains no valid records to prepare.")
-        if name == "train":
-            dataset = filtered
-        else:
-            validation_dataset = filtered
+        checker = create_preparation_context(config).fragmenter
+        mapping = dict(
+            smilesColumn=args.smiles_column,
+            adductTypeColumn=args.adduct_type_column,
+            collisionEnergyColumn=args.collision_energy_column,
+            precursorMzColumn=args.precursor_mz_column,
+        )
+        # Falls back to the training column name for anything not explicitly
+        # overridden; only takes effect when validation is a separate dataset
+        # (--validation-input) since an auto ratio split reuses the same columns.
+        validation_mapping = dict(
+            smilesColumn=args.validation_smiles_column or args.smiles_column,
+            adductTypeColumn=args.validation_adduct_type_column or args.adduct_type_column,
+            collisionEnergyColumn=args.validation_collision_energy_column
+            or args.collision_energy_column,
+            precursorMzColumn=args.validation_precursor_mz_column
+            or args.precursor_mz_column,
+        )
+        reports = {}
+        for name, data in (("train", dataset), ("validation", validation_dataset)):
+            if data is None:
+                continue
+            report = inspect_records(
+                data,
+                checker,
+                mapping if name == "train" else validation_mapping,
+                symbols=config["symbols"],
+            )
+            reports[name] = report["invalidRecords"]
+            filtered = data[report["validIndexes"]]
+            if not len(filtered):
+                raise ValueError(name + " dataset contains no valid records to prepare.")
+            if name == "train":
+                dataset = filtered
+            else:
+                validation_dataset = filtered
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     print(
@@ -988,6 +1016,7 @@ def main(argv: list[str] | None = None) -> None:
         input=args.input,
         validation_input=args.validation_input,
         validation_ratio=args.validation_ratio,
+        test_ratio=args.test_ratio,
         validation_seed=args.validation_seed,
         output_dir=args.output_dir,
         # Blank means "same as the training column"; only a real override is persisted,
@@ -999,6 +1028,8 @@ def main(argv: list[str] | None = None) -> None:
         validation_precursor_mz_column=args.validation_precursor_mz_column or "",
         **kwargs,
     )
+    if plan is not None:
+        preparation_config.update(datasets=plan["entries"], dataset_mode=args.dataset_mode)
     kwargs["preparation_config"] = preparation_config
     validation_kwargs = {
         **kwargs,
@@ -1007,61 +1038,70 @@ def main(argv: list[str] | None = None) -> None:
         "collision_energy_column": validation_mapping["collisionEnergyColumn"],
         "precursor_mz_column": validation_mapping["precursorMzColumn"],
     }
-    if args.validation_input:
-        train = dataset
-        # A model must not be scored on a molecule it trained on, so overlapping
-        # SMILES are always dropped from validation rather than failing the run;
-        # --validation-ratio (optional here) then caps validation to a size
-        # proportional to training instead of using every remaining record.
-        validation, overlap_report = dedupe_validation(
-            train,
-            validation_dataset,
-            args.smiles_column,
-            validation_mapping["smilesColumn"],
-            ratio=args.validation_ratio,
-            seed=args.validation_seed,
-        )
-        if overlap_report["removedOverlapRecords"]:
-            print(
-                json.dumps(dict(event="validation_overlap_removed", **overlap_report)),
-                flush=True,
-            )
-        if (
-            "targetSmiles" in overlap_report
-            and overlap_report["remainingSmiles"] < overlap_report["targetSmiles"]
-        ):
-            print(
-                json.dumps(
-                    dict(
-                        event="validation_below_target",
-                        **overlap_report,
-                        note="Validation has fewer molecule-disjoint SMILES than --validation-ratio requests; using all available records instead of failing.",
-                    )
-                ),
-                flush=True,
-            )
-        if not len(validation):
-            print(
-                json.dumps(
-                    dict(
-                        event="validation_empty",
-                        note="No validation records remain after removing molecules shared with training; continuing with training only.",
-                    )
-                ),
-                flush=True,
-            )
-            validation = None
-    elif args.validation_ratio is not None:
-        train, validation = split_by_smiles(
-            dataset, args.smiles_column, args.validation_ratio, args.validation_seed
-        )
+    if plan is not None:
+        assignments = plan["assignments"]
+        train, validation, test = (plan["splits"][name] for name in ("train", "validation", "test"))
+        validation = validation if len(validation) else None
     else:
-        train, validation = dataset, None
+        automatic, assignments = split_dataset(
+            dataset, args.smiles_column,
+            0.0 if args.validation_input else (args.validation_ratio or 0.0),
+            args.test_ratio, args.validation_seed,
+        )
+        train, test = automatic["train"], automatic["test"]
+        if args.validation_input:
+            # A model must not be scored on a molecule it trained on, so overlapping
+            # SMILES are always dropped from validation rather than failing the run;
+            # --validation-ratio (optional here) then caps validation to a size
+            # proportional to training instead of using every remaining record.
+            validation, overlap_report = dedupe_validation(
+                dataset,
+                validation_dataset,
+                args.smiles_column,
+                validation_mapping["smilesColumn"],
+                ratio=args.validation_ratio or None,
+                seed=args.validation_seed,
+            )
+            if overlap_report["removedOverlapRecords"]:
+                print(
+                    json.dumps(dict(event="validation_overlap_removed", **overlap_report)),
+                    flush=True,
+                )
+            if (
+                "targetSmiles" in overlap_report
+                and overlap_report["remainingSmiles"] < overlap_report["targetSmiles"]
+            ):
+                print(
+                    json.dumps(
+                        dict(
+                            event="validation_below_target",
+                            **overlap_report,
+                            note="Validation has fewer molecule-disjoint SMILES than --validation-ratio requests; using all available records instead of failing.",
+                        )
+                    ),
+                    flush=True,
+                )
+            if not len(validation):
+                print(
+                    json.dumps(
+                        dict(
+                            event="validation_empty",
+                            note="No validation records remain after removing molecules shared with training; continuing with training only.",
+                        )
+                    ),
+                    flush=True,
+                )
+                validation = None
+        else:
+            validation = automatic["validation"] if args.validation_ratio else None
+        if validation is not None:
+            for key in canonical_keys(validation[validation_mapping["smilesColumn"] if args.validation_input else args.smiles_column].astype(str)):
+                assignments[key] = "validation"
     if not args.overwrite and (
         list(output.rglob("*.preft.pt"))
         or any(
             list((output / name).rglob("*.preft.pt"))
-            for name in ("train_structures", "validation_structures")
+            for name in ("train_structures", "validation_structures", "test_structures")
         )
     ):
         raise FileExistsError(
@@ -1071,6 +1111,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if workbench_path.exists():
             previous = json.loads(workbench_path.read_text())
+        elif (output / "fragment-tree.training-data-config.pft").exists():
+            previous = json.loads((output / "fragment-tree.training-data-config.pft").read_text()).get(
+                "workbench_config", {}
+            )
         elif (output / "preparation_config.json").exists():
             previous = json.loads((output / "preparation_config.json").read_text()).get(
                 "workbench_config", {}
@@ -1093,7 +1137,8 @@ def main(argv: list[str] | None = None) -> None:
             bool(args.overwrite),
             [
                 value
-                for value in (args.input, args.validation_input, args.params)
+                for value in ([entry["path"] for entry in plan["entries"]] + [args.params]
+                              if plan is not None else (args.input, args.validation_input, args.params))
                 if value
             ],
         )
@@ -1104,6 +1149,8 @@ def main(argv: list[str] | None = None) -> None:
     aliases = {
         "validation_input": "validationInput",
         "validation_ratio": "validationRatio",
+        "test_ratio": "testRatio",
+        "dataset_mode": "datasetMode",
         "validation_seed": "validationSeed",
         "output_dir": "outputDir",
         "smiles_column": "smilesColumn",
@@ -1125,7 +1172,9 @@ def main(argv: list[str] | None = None) -> None:
         if key == "chemistry_config":
             continue
         if key == "validation_ratio" and value is None:
-            continue
+            if args.validation_input:
+                continue
+            value = 0
         restored[aliases.get(key, key)] = value
     restored.update(
         fragmenterParams=config["fragmenter_params"],
@@ -1134,14 +1183,28 @@ def main(argv: list[str] | None = None) -> None:
     )
     restored.pop("modelConfig", None)
     restored.pop("params", None)
+    if plan is not None:
+        for key in ("input", "trainInput", "validationInput"):
+            restored.pop(key, None)
+    else:
+        restored.pop("datasets", None)
+        restored.pop("datasetMode", None)
     preparation_config["workbench_config"] = restored
-    (output / "preparation_config.json").write_text(
-        json.dumps(preparation_config, indent=2)
-    )
+    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
+        (output / name).write_text(json.dumps(preparation_config, indent=2))
+    (output / "split_manifest.json").write_text(json.dumps({
+        "version": 1, "key": "rdkit-canonical-isomeric-smiles", "seed": args.validation_seed,
+        "validationRatio": args.validation_ratio, "testRatio": args.test_ratio,
+        "mode": args.dataset_mode if plan is not None else "legacy",
+        "sources": plan["sources"] if plan is not None else [],
+        "assignments": dict(sorted(assignments.items())),
+    }, indent=2))
     splits = [("train", train)]
+    if (plan is not None and len(test)) or (plan is None and args.test_ratio):
+        splits.append(("test", test))
     if validation is not None:
         splits.append(("validation", validation))
-    for name, split_dataset in splits:
+    for name, prepared_split in splits:
         directory = output / (name + "_structures")
         directory.mkdir(parents=True, exist_ok=True)
         split_chemistry = relocate_sources(config, output, directory)
@@ -1156,11 +1219,11 @@ def main(argv: list[str] | None = None) -> None:
         )
         # The split is newly empty after resetting Output Directory. Do not delete its configuration.
         create_reaction_training_data(
-            dataset=split_dataset,
+            dataset=prepared_split,
             output_dir=directory,
             split=name,
             **{
-                **(kwargs if name == "train" else validation_kwargs),
+                **(validation_kwargs if name == "validation" and args.validation_input else kwargs),
                 "chemistry_config": split_chemistry,
                 "overwrite": False,
             },
@@ -1171,9 +1234,8 @@ def main(argv: list[str] | None = None) -> None:
             json.dumps(split_config, indent=2)
         )
     (output / "invalid_records.json").write_text(json.dumps(reports, indent=2))
-    (output / "preparation_config.json").write_text(
-        json.dumps(preparation_config, indent=2)
-    )
+    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
+        (output / name).write_text(json.dumps(preparation_config, indent=2))
 
 
 if __name__ == "__main__":

@@ -30,8 +30,9 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
     // The host's fs.stat() check is covered by check-path-drop.js; here every path is accepted.
     const statKinds = [];
     w.validateDroppedPaths = (paths, kind) => { statKinds.push(kind); return paths; };
-    const drop = async (target, data = {}, files = []) => {
+    const drop = async (target, data = {}, files = [], shiftKey = target.matches('[data-file]')) => {
       const event = new w.Event('drop', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'shiftKey', { value: shiftKey });
       Object.defineProperty(event, 'dataTransfer', { value: { types: Object.keys(data), files, getData: type => data[type] || '' } });
       target.dispatchEvent(event);
       await settle();
@@ -42,12 +43,16 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
 
     // Data Preparation: dataset drop -> same 'picked' flow as Browse -> column detection / preview.
     const form = d.getElementById('form');
-    const datasetZone = d.querySelector('[data-dataset-drop=input]');
-    assert(datasetZone, 'Preparation dataset drop zone');
+    let datasetZone = d.querySelector('.preparation-dataset-card [data-file]');
+    assert(datasetZone, 'Preparation dataset path input');
+    assert.equal(d.querySelector('.preparation-dataset-card .dataset-drop'),null);
+    assert.equal(d.querySelector('.preparation-dataset-card [data-browse]').textContent,'Browse');
+    await drop(datasetZone, {'text/uri-list':'file:///ignored.msds'}, [], false);
+    assert.equal(datasetZone.value,'','file drop requires Shift');
     messages.length = 0;
     const event = await drop(datasetZone.querySelector('*') || datasetZone, { 'text/uri-list': 'vscode-remote://dev-container%2Babc/workspaces/FREDIS/data/train.msds' });
     assert(event.defaultPrevented);
-    assert.equal(form.elements.input.value, '/workspaces/FREDIS/data/train.msds');
+    assert.equal(d.querySelector('.preparation-dataset-card [data-file]').value, '/workspaces/FREDIS/data/train.msds');
     const inspections = messages.filter(message => /^data\/(columns|preview)$/.test(message.type));
     assert(inspections.length, 'a dropped dataset is inspected like a browsed one');
     assert(inspections.every(message => message.path === '/workspaces/FREDIS/data/train.msds'));
@@ -55,14 +60,17 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
     assert.equal(statKinds.at(-1), 'file');
 
     // The same flow from Browse produces the same inspection requests.
+    d.getElementById('addDataset').click();
+    const secondCard=d.querySelectorAll('.preparation-dataset-card')[1];
+    datasetZone=d.querySelector('.preparation-dataset-card [data-file]');
     messages.length = 0;
-    w.dispatchEvent(new w.MessageEvent('message', { data: { type: 'picked', form: 'data', field: 'validationInput', value: '/workspaces/FREDIS/data/val.msds' } }));
+    w.dispatchEvent(new w.MessageEvent('message', { data: { type: 'picked', form: 'data', field: secondCard.id, value: '/workspaces/FREDIS/data/val.msds' } }));
     await settle();
-    assert.equal(form.elements.validationInput.value, '/workspaces/FREDIS/data/val.msds');
+    assert.equal(secondCard.querySelector('[data-file]').value, '/workspaces/FREDIS/data/val.msds');
     const browsed = messages.filter(message => /^data\/(columns|preview)$/.test(message.type)).map(message => message.type);
     messages.length = 0;
-    await drop(d.querySelector('[data-dataset-drop=validationInput]'), { 'text/uri-list': 'file:///workspaces/FREDIS/data/val2.msds' });
-    assert.equal(form.elements.validationInput.value, '/workspaces/FREDIS/data/val2.msds');
+    await drop(secondCard.querySelector('[data-file]'), { 'text/uri-list': 'file:///workspaces/FREDIS/data/val2.msds' });
+    assert.equal(secondCard.querySelector('[data-file]').value, '/workspaces/FREDIS/data/val2.msds');
     assert.deepEqual(messages.filter(message => /^data\/(columns|preview)$/.test(message.type)).map(message => message.type), browsed, 'Drop and Browse trigger identical inspections');
 
     // OS drop without a path uploads the dataset and continues with the stored copy.
@@ -71,9 +79,9 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
     messages.length = 0;
     await drop(datasetZone, {}, [{ name: 'external.msds', size: 3 }]);
     assert.deepEqual(uploads, ['external.msds']);
-    assert.equal(form.elements.input.value, '/storage/datasets/upload.msds');
+    assert.equal(d.querySelector('.preparation-dataset-card [data-file]').value, '/storage/datasets/upload.msds');
     assert(messages.some(message => message.type === 'data/columns' && message.path === '/storage/datasets/upload.msds'));
-    assert.equal(datasetZone.textContent, 'Drop a dataset file here or click to Browse');
+    assert.equal(datasetZone.parentElement.querySelector('[data-browse]').textContent, 'Browse');
 
     // Fragment Tree Training: folder fields are validated as folders and follow the Browse flow.
     const trainingForm = d.getElementById('trainingForm');

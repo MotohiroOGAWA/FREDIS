@@ -208,6 +208,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(saved['maxUniqueFragmentSmiles'],100)
             self.assertEqual(saved['maxReactionCombinations'],200)
             prepared=json.loads((output/'preparation_config.json').read_text())
+            self.assertEqual(prepared,json.loads((output/'fragment-tree.training-data-config.pft').read_text()))
             self.assertEqual(prepared['max_unique_fragment_smiles'],100)
             self.assertEqual(prepared['max_reaction_combinations'],200)
             self.assertEqual(saved['minimumRelativeIntensity'],0.2)

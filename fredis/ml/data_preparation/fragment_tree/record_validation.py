@@ -155,6 +155,8 @@ def inspect_records(
             accepted.append(index)
         if progress and ((index + 1) % progress_step == 0 or index + 1 == total):
             progress(index + 1, total)
+    from .datasets import canonical_keys
+
     return {
         "validation": validation,
         "invalidRecords": invalid,
@@ -163,6 +165,6 @@ def inspect_records(
         "eligibleRecords": len(accepted),
         "excludedRecords": invalid_count,
         "eligibleUniqueSmiles": len(
-            {str(values["smilesColumn"][index]) for index in accepted}
+            set(canonical_keys({str(values["smilesColumn"][index]) for index in accepted}))
         ),
     }

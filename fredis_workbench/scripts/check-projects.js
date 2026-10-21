@@ -69,19 +69,19 @@ function makePanel(){const listeners=[],disposers=[],posted=[];return {posted,we
   const descriptor=store.describe(a);descriptor.name='<img src=x onerror=alert(1)>';
   post({type:'project/state',project:descriptor,recent:[{name:'Study B',path:b}],restore:true,drafts:values,outputs:{data:'/runs/data',training:'/runs/train',prediction:'/runs/predict'}});
   assert.equal(d.querySelector('#projectTitle img'),null);assert.equal(d.getElementById('projectTitle').textContent,descriptor.name);
-  assert.equal(d.getElementById('form').elements.input.value,'/dataset.msds');assert.equal(d.getElementById('trainingForm').elements.epochs.value,'9');assert.equal(d.getElementById('predictForm').elements.batchInput.value,'/batch.msds');assert.equal(d.getElementById('reactionPatternSetName').value,'Saved patterns');
+  assert.equal(d.querySelector('.preparation-dataset-card [data-file]').value,'/dataset.msds');assert.equal(d.getElementById('trainingForm').elements.epochs.value,'9');assert.equal(d.getElementById('predictForm').elements.batchInput.value,'/batch.msds');assert.equal(d.getElementById('reactionPatternSetName').value,'Saved patterns');
   const before=messages.filter(item=>item.type==='project/snapshot').length;
   await new Promise(resolve=>setTimeout(resolve,800));assert.equal(messages.filter(item=>item.type==='project/snapshot').length,before,'restoring does not create duplicate history');
-  const input=d.getElementById('form').elements.input;input.value='/new.msds';input.dispatchEvent(new w.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,850));
-  const draft=messages.filter(item=>item.type==='project/drafts').at(-1);assert.equal(draft.root,a);assert.equal(draft.drafts.data.input,'/new.msds');assert.equal(draft.drafts.prediction.smiles,'CCO');assert.equal(draft.drafts.prediction.adductType,'[M+H]+');
-  d.getElementById('projectSnapshotLabel').value='Baseline 30 eV';d.getElementById('projectSnapshot').click();assert.equal(messages.at(-1).type,'project/snapshot');assert.equal(messages.at(-1).config.input,'/new.msds');
+  const input=d.querySelector('.preparation-dataset-card [data-file]');input.value='/new.msds';input.dispatchEvent(new w.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,850));
+  const draft=messages.filter(item=>item.type==='project/drafts').at(-1);assert.equal(draft.root,a);assert.equal(draft.drafts.data.datasets[0].path,'/new.msds');assert.equal(draft.drafts.prediction.smiles,'CCO');assert.equal(draft.drafts.prediction.adductType,'[M+H]+');
+  d.getElementById('projectSnapshotLabel').value='Baseline 30 eV';d.getElementById('projectSnapshot').click();assert.equal(messages.at(-1).type,'project/snapshot');assert.equal(messages.at(-1).config.datasets[0].path,'/new.msds');
   d.getElementById('projectNotes').value='Not yet saved';d.getElementById('projectNotes').dispatchEvent(new w.Event('input',{bubbles:true}));d.getElementById('projectSearch').focus();post({type:'project/state',project:descriptor,recent:[],restore:false});assert.equal(d.getElementById('projectNotes').value,'Not yet saved');
   const runCount=messages.filter(item=>['run','runTraining','predictBatchRun','predictSpectrum'].includes(item.type)).length;
   post({type:'project/restore',workflow:'training',config:{modelConfig:preset,epochs:17,outputDir:'/new-output'},label:'Earlier training'});
   assert.equal(d.getElementById('trainingForm').elements.epochs.value,'17');assert(!d.getElementById('trainingForm').hidden);assert.equal(messages.filter(item=>['run','runTraining','predictBatchRun','predictSpectrum'].includes(item.type)).length,runCount);
   post({type:'project/restore',workflow:'prediction',config:{input:'/normalized.msds',outputDir:'/new-batch',modelPath:'/model.pt'},label:'Batch'});assert.equal(d.getElementById('predictForm').elements.batchInput.value,'/normalized.msds');
   d.getElementById('projectClose').click();assert.equal(messages.at(-1).type,'project/close');assert.equal(messages.at(-1).drafts.training.epochs,17);
-  post({type:'project/state',project:null,recent:[],restore:true});assert(d.getElementById('projectContent').hidden);assert.notEqual(d.getElementById('form').elements.input.value,'/new.msds');assert.deepEqual(errors,[]);
+  post({type:'project/state',project:null,recent:[],restore:true});assert(d.getElementById('projectContent').hidden);assert.notEqual(d.querySelector('.preparation-dataset-card [data-file]').value,'/new.msds');assert.deepEqual(errors,[]);
   await new Promise(resolve=>setTimeout(resolve,20));assert.deepEqual(errors,[]);
   console.log('Projects: durable snapshots/drafts, file changes/pins, comparison, safe restore, switching/stale messages, job isolation/completion, metadata protection and Home UI passed.');
  }finally{dom?.window.close();fs.rmSync(scratch,{recursive:true,force:true});}

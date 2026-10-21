@@ -114,24 +114,57 @@ def validate(payload: dict, *, check_datasets: bool = True) -> dict:
         if type(value) is not int or value<1: raise ValueError('Worker processes and chunk size must be positive integers.')
     minimum=float(payload.get('minimumRelativeIntensity',0))
     if not math.isfinite(minimum) or not 0<=minimum<=1: raise ValueError('Minimum relative intensity must be between 0 and 1.')
-    if not payload.get('validationInput'):
-        ratio=float(payload.get('validationRatio',0.1))
-        if not math.isfinite(ratio) or not 0<ratio<1: raise ValueError('Validation ratio must be between 0 and 1.')
+    if 'datasets' in payload:
+        from fredis.ml.data_preparation.fragment_tree.dataset_plan import plan_datasets, validate_list_config
+        mode=payload.get('datasetMode','automatic')
+        ratio=float(payload.get('validationRatio') or 0)
+        test_ratio=float(payload.get('testRatio') or 0)
+        seed=payload.get('validationSeed',0)
+        if type(seed) is not int: raise ValueError('Split seed must be an integer.')
+        entries=validate_list_config(payload['datasets'],mode,ratio,test_ratio)
+        if not check_datasets: return {'valid':True,'architecture':generator.architecture}
+        plan=plan_datasets(entries,mode,generator.fragmenter,config['symbols'],ratio,test_ratio,seed,invalid_detail_limit=5000)
+        import numpy as np
+        peaks=plan['combined'].peaks
+        if np.any(peaks.lengths==0): raise ValueError('Some spectra have no peaks.')
+        if not np.isfinite(peaks.mz).all() or np.any(peaks.mz<=0): raise ValueError('Peak m/z values must be finite and positive.')
+        if not np.isfinite(peaks.intensity).all() or np.any(peaks.intensity<0): raise ValueError('Peak intensities must be finite and non-negative.')
+        return {'valid':True,'architecture':generator.architecture,'splits':plan['summary'],'sources':plan['sources']}
+    from fredis.ml.data_preparation.fragment_tree.datasets import split_assignments, canonical_keys, validate_split_ratios
+    ratio=float(payload.get('validationRatio') or 0)
+    test_ratio=float(payload.get('testRatio') or 0)
+    seed=payload.get('validationSeed',0)
+    if type(seed) is not int: raise ValueError('Split seed must be an integer.')
+    if not math.isfinite(ratio) or not 0<=ratio<1: raise ValueError('Validation ratio must be between 0 and 1.')
+    # Validate fractions even when the configuration check skips dataset loading.
+    validate_split_ratios(0 if payload.get('validationInput') else ratio,test_ratio)
+    split_summary={}
     if check_datasets and payload.get('input'):
         train_mapping={key:payload.get(key,default) for key,default in DEFAULT_MAPPING.items()}
-        # Falls back to the training column for anything not explicitly overridden,
-        # matching buildArgs()'s --validation-*-column behavior on the CLI side.
         validation_mapping={key:payload.get('validation'+key[0].upper()+key[1:]) or value for key,value in train_mapping.items()}
         sources=[]
         for file,mapping in ((payload['input'],train_mapping),(payload.get('validationInput'),validation_mapping)):
             if not file: continue
-            result=preview({'path':file,'mapping':mapping,'limit':1,'_identifiers':True,'validateValues':True,'fragmenterParams':generator.fragmenter.to_dict()})
-            sources.append(set(result.pop('_smiles',[])))
+            result=preview({'path':file,'mapping':mapping,'limit':1,'_identifiers':True,'validateValues':True,'fragmenterParams':generator.fragmenter.to_dict(),'symbols':config['symbols']})
+            sources.append(result.pop('_smiles',[]))
             if result['errors']: raise ValueError('; '.join(result['errors']))
-            if not payload.get('validationInput') and len(sources[-1])<2:
-                raise ValueError('Automatic validation splitting requires at least two unique SMILES.')
-        if len(sources)==2 and sources[0] & sources[1]: raise ValueError('Training and validation datasets share SMILES. Choose molecule-disjoint datasets.')
-    return {'valid':True,'architecture':generator.architecture}
+        keys, assignments=split_assignments(sources[0],0 if payload.get('validationInput') else ratio,test_ratio,seed)
+        for name in ('train','validation','test'):
+            split_summary[name]={'molecules':sum(value==name for value in assignments.values()),'records':sum(assignments[key]==name for key in keys)}
+        if len(sources)==2:
+            remaining=canonical_keys(sources[1])
+            if set(remaining) & assignments.keys(): raise ValueError('Training and validation datasets share SMILES (RDKit canonical). Choose molecule-disjoint datasets.')
+            remaining=[key for key in remaining if key not in assignments]
+            available=list(dict.fromkeys(remaining))
+            if ratio:
+                import random
+                random.Random(seed).shuffle(available)
+                available=available[:max(1,round(len(assignments)*ratio))]
+            kept=set(available)
+            split_summary['validation']={'molecules':len(kept),'records':sum(key in kept for key in remaining)}
+    return {'valid':True,'architecture':generator.architecture,'splits':split_summary}
+
+
 
 def model(payload: dict) -> dict:
     import torch

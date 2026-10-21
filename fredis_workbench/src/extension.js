@@ -37,6 +37,7 @@ const reactionPatternHost = require('./features/reaction-pattern-set/host');
 const { projectRoot, isFredisRoot, runChemistryBackend, showElementPicker, readReactionPatternImport, safeFileStem, ensureFileSuffix } = reactionPatternHost;
 
 const RESULT_NAME = 'fragment-tree.training-data.pft';
+const PREPARATION_CONFIG_NAME = 'fragment-tree.training-data-config.pft';
 const REACTION_PATTERN_ANALYSIS_CONFIG_VIEW_TYPE = 'fredis.reactionPatternAnalysisConfigEditor';
 // result.reactionpatternanalysis.pft is binary HDF5; it opens in the Workbench, never as text.
 const REACTION_PATTERN_ANALYSIS_RESULT_VIEW_TYPE = 'fredis.reactionPatternAnalysisResultEditor';
@@ -53,6 +54,9 @@ function activate(context) {
     vscode.commands.registerCommand('fredis.openEvaluation', () => evaluation.open(context, output, projectRoot)),
     vscode.commands.registerCommand('fredis.openColumnEvaluation', () => evaluation.open(context, output, projectRoot, 'column')),
     vscode.commands.registerCommand('fredis.openGroupedEvaluation', () => evaluation.open(context, output, projectRoot, 'grouped')),
+    vscode.window.registerCustomEditorProvider('fredis.trainingDataConfigEditor', new TrainingDataConfigEditorProvider(context, output), {
+      webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true
+    }),
     vscode.window.registerCustomEditorProvider('fredis.resultViewer', provider, {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true
@@ -105,7 +109,7 @@ function defaultConfig(context) {
     application: 'fragment-tree-data-preparation', fragmenterParams: chemistry.fragmenter_params, symbols: chemistry.symbols,
     input: '', smilesColumn:'SMILES', adductTypeColumn:'AdductType', collisionEnergyColumn:'CollisionEnergy', precursorMzColumn:'PrecursorMZ',
     validationSmilesColumn:'', validationAdductTypeColumn:'', validationCollisionEnergyColumn:'', validationPrecursorMzColumn:'',
-    validationInput:'', validationRatio:0.1, validationSeed:0, minimumRelativeIntensity:0, overwrite:false, numWorkers:1, chunkSize:1,
+    datasets:[], datasetMode:'automatic', validationInput:'', validationRatio:0.1, testRatio:0, validationSeed:0, minimumRelativeIntensity:0, overwrite:false, numWorkers:1, chunkSize:1,
     outputDir: ''
   },root);
 }
@@ -138,7 +142,7 @@ function reactionPatternAnalysisUiSettings() {
   };
 }
 
-function resolveWorkbenchPanel(context, output, panel, initialPage = "home", initialReactionPatternDocument = null) {
+function resolveWorkbenchPanel(context, output, panel, initialPage = "home", initialReactionPatternDocument = null, initialPreparationDocument = null) {
   context = projects.createContext(context);
   spectrumViewer.configure(context, vscode);
   panel.webview.options = { enableScripts: true, localResourceRoots: [] };
@@ -159,10 +163,10 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
   });
   panel.onDidDispose(() => spectrumProvider.dispose());
   panel.onDidDispose(()=>{if(predictionProcess)workbench.stopChild(predictionProcess);});
-  const initialConfig = defaultConfig(context);
+  const initialConfig = initialPreparationDocument?normalizeConfig({...defaultConfig(context),...initialPreparationDocument.config}):defaultConfig(context);
   const initialTrainingConfig = defaultTrainingConfig(context);
   modelArchitecture.attachWorkbench(panel);
-  panel.webview.html = workbench.secure(workbenchHtml(initialConfig, initialTrainingConfig,workbenchDefaults.workflowDefaults('prediction',{},projectRoot(context)),reactionPatternAnalysisUiSettings(),workbenchDefaults.workflowDefaults('trainable',{},projectRoot(context))), panel.webview);
+  panel.webview.html = workbench.secure(workbenchHtml(initialConfig, initialTrainingConfig,workbenchDefaults.workflowDefaults('prediction',{},projectRoot(context)),reactionPatternAnalysisUiSettings(),workbenchDefaults.workflowDefaults('trainable',{},projectRoot(context)),initialPreparationDocument?.path), panel.webview);
   const panelContext = context;
   panel.webview.onDidReceiveMessage(async message => {
     if (message?.type === 'spectrumViewer') return;
@@ -175,8 +179,8 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
           panel.webview.postMessage({ type: 'picked', form: message.form, field: message.field, value: picked[0].fsPath });
         }
       } else if (message.type === 'saveConfig') {
-        const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS training dataset': ['training-data.pft'] }, defaultUri: vscode.Uri.file('fragment-tree.training-data.pft') });
-        if (target) {await fs.promises.writeFile(target.fsPath, JSON.stringify(normalizeConfig(message.config), null, 2) + '\n');projects.record(context,'data',message.config,{label:path.basename(target.fsPath),reason:'exported',sourcePath:target.fsPath,base:projectRoot(context)});}
+        const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS training data configuration': ['training-data-config.pft'] }, defaultUri: vscode.Uri.file(PREPARATION_CONFIG_NAME) });
+        if (target) {const file=ensureFileSuffix(target.fsPath,'.training-data-config.pft');await fs.promises.writeFile(file, JSON.stringify(normalizeConfig(message.config), null, 2) + '\n');projects.record(context,'data',message.config,{label:path.basename(file),reason:'exported',sourcePath:file,base:projectRoot(context)});}
       } else if (['loadConfig','loadConfigFile','loadConfigJSON'].includes(message.type)) {
         // Extension-agnostic: this always loads a data-preparation run
         // configuration by content (normalizeConfig), so any filename works.
@@ -351,7 +355,7 @@ function runSpectrumPredictionBackend(context, payload) {
 function normalizeConfig(config, baseDirectory) {
   const result={...config,...config.workbench_config};
   delete result.workbench_config;
-  const aliases={validation_input:'validationInput',validation_ratio:'validationRatio',validation_seed:'validationSeed',
+  const aliases={validation_input:'validationInput',validation_ratio:'validationRatio',test_ratio:'testRatio',dataset_mode:'datasetMode',validation_seed:'validationSeed',
     output_dir:'outputDir',smiles_column:'smilesColumn',adduct_type_column:'adductTypeColumn',collision_energy_column:'collisionEnergyColumn',
     precursor_mz_column:'precursorMzColumn',validation_smiles_column:'validationSmilesColumn',validation_adduct_type_column:'validationAdductTypeColumn',
     validation_collision_energy_column:'validationCollisionEnergyColumn',validation_precursor_mz_column:'validationPrecursorMzColumn',
@@ -364,6 +368,16 @@ function normalizeConfig(config, baseDirectory) {
   if(result.validationRatio==null)delete result.validationRatio;
   if(result.validationInput==null)result.validationInput='';
   result.input ||= result.trainInput;
+  if(!Array.isArray(result.datasets)){
+    const mapping=Object.fromEntries(['smilesColumn','adductTypeColumn','collisionEnergyColumn','precursorMzColumn'].filter(key=>result[key]).map(key=>[key,result[key]]));
+    result.datasets=[];
+    if(result.input)result.datasets.push({id:'dataset-1',path:result.input,split:'train',mapping});
+    if(result.validationInput){const overrides=Object.fromEntries(Object.entries(mapping).map(([key,value])=>[key,result['validation'+key[0].toUpperCase()+key.slice(1)]||value]));result.datasets.push({id:'dataset-2',path:result.validationInput,split:'validation',mapping:overrides});}
+    result.datasetMode ||= result.validationInput?'assigned':'automatic';
+  }
+  result.datasetMode ||= 'automatic';
+  if(baseDirectory&&result.outputDir)result.outputDir=path.resolve(baseDirectory,result.outputDir);
+  if(baseDirectory)result.datasets=result.datasets.map(entry=>({...entry,path:path.resolve(baseDirectory,entry.path)}));
   return result;
 }
 
@@ -396,7 +410,9 @@ async function runTraining(context, output, config, panel) {
 
 async function runFragmentTree(context, output, config, panel) {
   if (runningProcess) throw new Error('Another FREDIS process is already running.');
-  for (const key of ['input', 'outputDir']) if (!config[key]) throw new Error(`${key} is required.`);
+  if(!config.outputDir)throw new Error('outputDir is required.');
+  if(Array.isArray(config.datasets)){if(!config.datasets.length||config.datasets.some(entry=>!entry.path?.trim()))throw new Error('Select a file for each dataset.');}
+  else if(!config.input)throw new Error('input is required.');
   const root = projectRoot(context);
   const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
   const resultPath = path.join(config.outputDir, 'train_structures', 'fragment-tree.training-data.pft');
@@ -420,7 +436,7 @@ async function runFragmentTree(context, output, config, panel) {
     observed.finish({code,signal});
     const status = observed.job.status;
     if (code === 0) {
-      for(const split of ['train','validation']){
+      for(const split of ['train','validation','test']){
         const target=path.join(config.outputDir,split+'_structures','fragment-tree.training-data.pft');
         if(!fs.existsSync(target))continue;
         const saved=JSON.parse(await fs.promises.readFile(target,'utf8'));
@@ -428,26 +444,28 @@ async function runFragmentTree(context, output, config, panel) {
       }
     }
     panel.webview.postMessage({ type: 'status', status, text: signal ? 'Cancelled.' : code === 0 ? 'Completed.' : `Failed with exit code ${code}.`, resultPath });
-    if (code === 0) {const validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.training-data.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Validation Result'?validationPath:resultPath)); });}
+    if (code === 0) {const testPath=path.join(config.outputDir,'test_structures','fragment-tree.training-data.pft'),validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.training-data.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[]),...(fs.existsSync(testPath)?['Open Test Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Test Result'?testPath:choice==='Open Validation Result'?validationPath:resultPath)); });}
   });
 }
 
 function buildArgs(c) {
   const args=['-m', 'fredis.cli', 'train', 'create-fragment-tree-data',
-    '--input', c.input || c.trainInput, '--output-dir', c.outputDir];
+    '--output-dir', c.outputDir];
+  if(Array.isArray(c.datasets))args.push('--datasets-json',JSON.stringify(c.datasets),'--dataset-mode',c.datasetMode||'automatic');
+  else args.push('--input',c.input||c.trainInput);
   if(c.fragmenterParams) args.push('--params-json',JSON.stringify(c.fragmenterParams));
   if(c.reactionModels?.length)args.push('--reaction-models-json',JSON.stringify(c.reactionModels));
   if(c.symbols)args.push('--symbols-json',JSON.stringify(c.symbols));
   for(const [key,flag]of Object.entries({maxUniqueFragmentSmiles:'--max-unique-fragment-smiles',maxReactionCombinations:'--max-reaction-combinations'}))if(c[key]!==undefined)args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({smilesColumn:'--smiles-column',adductTypeColumn:'--adduct-type-column',collisionEnergyColumn:'--collision-energy-column',precursorMzColumn:'--precursor-mz-column'}))if(c[key])args.push(flag,c[key]);
   // Only emitted when the validation dataset genuinely needs a different column name than training.
-  if(c.validationInput)for(const [key,flag,trainKey] of [['validationSmilesColumn','--validation-smiles-column','smilesColumn'],['validationAdductTypeColumn','--validation-adduct-type-column','adductTypeColumn'],['validationCollisionEnergyColumn','--validation-collision-energy-column','collisionEnergyColumn'],['validationPrecursorMzColumn','--validation-precursor-mz-column','precursorMzColumn']])if(c[key]&&c[key]!==c[trainKey])args.push(flag,c[key]);
-  if(c.validationInput) args.push('--validation-input',c.validationInput);
+  if(!Array.isArray(c.datasets)&&c.validationInput)for(const [key,flag,trainKey] of [['validationSmilesColumn','--validation-smiles-column','smilesColumn'],['validationAdductTypeColumn','--validation-adduct-type-column','adductTypeColumn'],['validationCollisionEnergyColumn','--validation-collision-energy-column','collisionEnergyColumn'],['validationPrecursorMzColumn','--validation-precursor-mz-column','precursorMzColumn']])if(c[key]&&c[key]!==c[trainKey])args.push(flag,c[key]);
+  if(!Array.isArray(c.datasets)&&c.validationInput) args.push('--validation-input',c.validationInput);
   // With --validation-input this caps validation to this fraction of training's
   // unique SMILES after removing molecules shared with training, instead of
   // splitting a single dataset (which is what it does without --validation-input).
   if(c.validationRatio !== undefined && c.validationRatio !== '') args.push('--validation-ratio',String(c.validationRatio));
-  for(const [key,flag] of Object.entries({validationSeed:'--validation-seed',minimumRelativeIntensity:'--minimum-relative-intensity',numWorkers:'--num-workers',chunkSize:'--chunk-size'}))if(c[key] !== undefined && c[key] !== '')args.push(flag,String(c[key]));
+  for(const [key,flag] of Object.entries({testRatio:'--test-ratio',validationSeed:'--validation-seed',minimumRelativeIntensity:'--minimum-relative-intensity',numWorkers:'--num-workers',chunkSize:'--chunk-size'}))if(c[key] !== undefined && c[key] !== '')args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({overwrite:'--overwrite'}))if(c[key]!==undefined)args.push(flag,c[key]?'1':'0');
   return args;
 }
@@ -494,10 +512,26 @@ class ReactionPatternAnalysisConfigEditorProvider {
   }
 }
 
+class TrainingDataConfigEditorProvider {
+  constructor(context, output) { this.context=context;this.output=output; }
+  async openCustomDocument(uri) { return {uri,dispose(){}}; }
+  async resolveCustomEditor(document,panel) {
+    try {
+      const file=document.uri.fsPath,raw=JSON.parse(await fs.promises.readFile(file,'utf8'));
+      if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('Invalid training data configuration.');
+      const config=normalizeConfig(raw,path.dirname(file));
+      if(!config.fragmenterParams||typeof config.fragmenterParams!=='object')throw new Error('Training data configuration is missing Fragmenter settings.');
+      panel.title='FREDIS Workbench · Training Data';
+      return resolveWorkbenchPanel(this.context,this.output,panel,'data',null,{config,path:file});
+    }catch(error){panel.webview.options={enableScripts:true};panel.webview.html=errorHtml(error.message);}
+  }
+}
+
 class ResultEditorProvider {
   constructor(context, output) { this.context = context; this.output = output; }
   async openCustomDocument(uri) { return { uri, dispose() {} }; }
   async resolveCustomEditor(document, panel) {
+    if(document.uri.fsPath.toLowerCase().endsWith('.training-data-config.pft'))return new TrainingDataConfigEditorProvider(this.context,this.output).resolveCustomEditor(document,panel);
     // The generic *.pft viewer reads JSON; route HDF5 Reaction Pattern Analysis results to their Workbench page.
     if (reactionPatternAnalysisResultView.isResultPath(document.uri.fsPath)) {
       panel.title = 'FREDIS Workbench · Reaction Pattern Analysis';
@@ -602,7 +636,7 @@ async function readStructureManifests(root) {
       results.push({ directory: path.basename(root), relativeBase: '', rows });
     }
   }
-  for (const directory of ['train_structures', 'validation_structures']) {
+  for (const directory of ['train_structures', 'validation_structures', 'test_structures']) {
     const file = path.join(root, directory, 'manifest.tsv');
     if (!fs.existsSync(file)) continue;
     const lines = (await fs.promises.readFile(file, 'utf8')).trim().split(/\r?\n/);
@@ -618,7 +652,7 @@ async function readStructureManifests(root) {
     results.push({ directory, relativeBase: directory, rows });
   }
   // Older preparation outputs did not write manifest.tsv. Inspect their saved metadata.
-  for(const directory of ['', 'train_structures','validation_structures']){
+  for(const directory of ['', 'train_structures','validation_structures','test_structures']){
     if(results.some(item=>item.relativeBase===directory))continue;
     const folder=path.join(root,directory);if(!fs.existsSync(folder))continue;
     const locations=[folder,path.join(folder,'data')];let hasStructures=false;
@@ -779,7 +813,7 @@ const HELP = {
   ,modelPath: 'Trained fragment-tree model checkpoint (model.pt or a raw state_dict) used for spectrum prediction.'
 };
 
-function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPatternAnalysisUi = {}, trainableConfig = {}) {
+function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPatternAnalysisUi = {}, trainableConfig = {}, preparationDocument = null) {
   return `<!doctype html><html><head><meta charset="UTF-8"><style>${commonCss()}${formCss()}${trainingCss()}${trainingWorkbench.css()}${pathDrop.css()}${workbench.css()}${parameterEditor.css()}${fragmentTreeVisualization.css()}${spectrumViewer.css()}${reactionPatternAnalysis.css()}</style></head><body><main>
   ${layout.header()}
   ${workbench.html()}<nav id="appNavigation"><button class="tab" data-app="smarts">SMARTS Search</button><button class="tab" data-app="fragmentTree">Fragment Tree</button><button class="tab" data-app="reactionViewer">Reaction Viewer</button><button class="tab" data-app="reactionPatternAnalysis">Reaction Pattern Analysis</button><button class="tab" data-app="reactionPatterns">Reaction Pattern Set</button><button class="tab" data-app="adduct">Adduct Rule Set</button><button class="tab active" data-app="data">Data Preparation</button><button class="tab" data-app="training">Training</button><button class="tab" data-app="predict">Predict Spectrum</button></nav>
@@ -794,7 +828,7 @@ function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPa
   ${trainingWorkbench.html({pathField,field,optimization:workbench.trainingHtml(),parameters:parameterEditor.importHtml('training'),defaults:workbenchDefaults.html('training')})}
   <form id="predictForm" data-app-panel="predict" class="preparation-page prediction-page" novalidate hidden>
     ${spectrumPrediction.html()}${workbenchDefaults.html('prediction')}
-  </form><div id="helpTooltip" role="tooltip"></div><script>const vscode=acquireVsCodeApi();window.fredisMsentityBridge={postMessage:message=>vscode.postMessage({type:'spectrumViewer',message})}; const initial=${safeJson(config)}; const initialTraining=${safeJson(trainingConfig)};const initialPrediction=${safeJson(predictionConfig)};const initialTrainable=${safeJson(trainableConfig)}; ${pathDrop.script({host:true})}${webviewScript()}${reactionPatternVisualEditor.script()}${reactionPatternPreview.script()}${spectrumPrediction.script()}${workbench.script()}${parameterEditor.script()}${fragmentTreeVisualization.script()}${reactionPatternAnalysis.script(reactionPatternAnalysisUi)}${layout.script()}${datasetUpload.script()}${preparation.script()}${workbenchDefaults.script()}${trainingWorkbench.script()}${projects.script()}${spectrumViewer.script()}</script></main></body></html>`;
+  </form><div id="helpTooltip" role="tooltip"></div><script>const vscode=acquireVsCodeApi();window.fredisMsentityBridge={postMessage:message=>vscode.postMessage({type:'spectrumViewer',message})}; const initial=${safeJson(config)}; const initialTraining=${safeJson(trainingConfig)};const initialPrediction=${safeJson(predictionConfig)};const initialTrainable=${safeJson(trainableConfig)}; ${pathDrop.script({host:true})}${webviewScript()}${reactionPatternVisualEditor.script()}${reactionPatternPreview.script()}${spectrumPrediction.script()}${workbench.script()}${parameterEditor.script()}${fragmentTreeVisualization.script()}${reactionPatternAnalysis.script(reactionPatternAnalysisUi)}${layout.script()}${datasetUpload.script()}${preparation.script()}${workbenchDefaults.script()}${trainingWorkbench.script()}${projects.script()}${spectrumViewer.script()}${preparationDocument?`let preparationDocumentPending=true;const openPreparationDocument=()=>{window.dispatchEvent(new MessageEvent('message',{data:{type:'config',config:initial}}));window.dispatchEvent(new MessageEvent('message',{data:{type:'workbench/navigate',page:'data'}}));};window.addEventListener('message',event=>{if(preparationDocumentPending&&event.data.type==='project/state'&&event.data.restore){preparationDocumentPending=false;openPreparationDocument();}});openPreparationDocument();`:""}</script></main></body></html>`;
 }
 function pathField(name,label,kind,form='data') { return `<label data-help="${HELP[name] || ''}">${label}<div class="path"><input name="${name}" data-path-kind="${kind}"><button type="button" data-pick="${name}" data-kind="${kind}" data-form="${form}">Browse</button></div>${HELP[name]?`<small class="field-help">${HELP[name]}</small>`:''}</label>`; }
 function field(name,label,type,step='1') { return `<label data-help="${HELP[name] || ''}">${label}<input name="${name}" type="${type}"${type==='number'?` step="${step}"`:''}>${HELP[name]?`<small class="field-help">${HELP[name]}</small>`:''}</label>`; }
@@ -851,4 +885,4 @@ function trainingCss() { return `.model-map{background:color-mix(in srgb,var(--v
 
 
 function deactivate() {}
-module.exports = { ResultEditorProvider, activate, deactivate, buildArgs, normalizeConfig, buildTrainingArgs, normalizeTrainingConfig, resultHtml, workbenchHtml, ensureFileSuffix, reactionPatternSetSavePath, summarizeStructureManifests };
+module.exports = { TrainingDataConfigEditorProvider, ResultEditorProvider, activate, deactivate, buildArgs, normalizeConfig, buildTrainingArgs, normalizeTrainingConfig, resultHtml, workbenchHtml, ensureFileSuffix, reactionPatternSetSavePath, summarizeStructureManifests };
