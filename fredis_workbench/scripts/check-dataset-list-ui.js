@@ -1,0 +1,42 @@
+const assert=require('assert/strict'),{JSDOM,VirtualConsole}=require('jsdom'),Module=require('module');
+const load=Module._load;Module._load=function(name,...args){return name==='vscode'?{}:load.call(this,name,...args);};
+const ext=require('../src/extension'),fixtures=require('./fixtures');Module._load=load;
+const messages=[],errors=[],vc=new VirtualConsole();vc.on('jsdomError',error=>errors.push(error.message));
+const initial=ext.normalizeConfig({...fixtures.dataConfig,input:'/train.msds',validationInput:'/validation.msds'});
+const dom=new JSDOM(ext.workbenchHtml(initial,{modelConfig:fixtures.model}),{runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(JSON.parse(JSON.stringify(m))),getState:()=>({}),setState(){}});w.HTMLElement.prototype.scrollIntoView=function(){};w.ResizeObserver=class{observe(){}disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:s=>s};}});
+const w=dom.window,d=w.document,post=data=>w.dispatchEvent(new w.MessageEvent('message',{data}));
+const snapshot=()=>{d.getElementById('copyCommand').click();return messages.filter(m=>m.type==='copyCommand').at(-1).config;};
+(async()=>{
+ assert.deepEqual(errors,[]);
+ assert.equal(d.querySelectorAll('.preparation-dataset-card').length,2);
+ assert.equal(snapshot().datasetMode,'assigned');
+ for(const [index,entry] of initial.datasets.entries()){
+  const request=messages.filter(m=>m.type==='data/preview'&&m.target===entry.id).at(-1);
+  assert(request);
+  post({type:'data/preview',target:entry.id,requestId:request.requestId,data:{format:'MSDS',records:10+index,size:1024,columns:['SMILES','AdductType','CollisionEnergy','PrecursorMZ'],rows:[],validation:{},summary:{uniqueSmiles:5+index,adducts:{'[M+H]+':10},averagePeaks:4}}});
+  const card=d.getElementById(entry.id);
+  assert.match(card.querySelector('[data-summary-title]').textContent,index===0?/Train/:/Validation/);
+  assert.match(card.querySelector('[data-summary]').textContent,/Adduct types/);
+  assert.match(card.querySelector('[data-summary]').textContent,/Average peaks/);
+ }
+ d.getElementById('addDataset').click();let saved=snapshot();assert.equal(saved.datasets.length,3);
+ const added=saved.datasets[2];post({type:'picked',form:'data',field:added.id,value:'/test.msds'});
+ d.querySelector('#'+added.id+' input[value=test]').click();saved=snapshot();
+ assert.equal(saved.datasets[2].path,'/test.msds');assert.equal(saved.datasets[2].split,'test');
+ d.querySelector('input[name=datasetMode][value=automatic]').click();saved=snapshot();assert.equal(saved.datasetMode,'automatic');
+ assert([...d.querySelectorAll('[data-roles]')].every(field=>field.hidden));
+ assert(!d.getElementById('automaticSplitSettings').hidden);
+ const args=ext.buildArgs(saved);assert(args.includes('--datasets-json'));assert(!args.includes('--input'));assert(!args.includes('--validation-input'));
+ post({type:'config',config:{...saved,datasetMode:'assigned'}});await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(snapshot().datasetMode,'assigned');assert.equal(snapshot().datasets[2].split,'test');
+ d.getElementById('inputPreflight').click();const check=messages.filter(m=>m.type==='data/preflight').at(-1);
+ post({type:'data/preflight',requestId:check.requestId,splits:{train:{molecules:5,records:10},validation:{molecules:6,records:11},test:{molecules:3,records:4}}});
+ assert.equal(d.querySelectorAll('.split-summary-card').length,3);
+ d.querySelector('#'+added.id+' [data-remove]').click();assert.equal(snapshot().datasets.length,2);
+ assert(!d.querySelector('.split-summary-card'));
+ post({type:'data/preflight',requestId:check.requestId,splits:{train:{molecules:999,records:999}}});
+ assert(!d.querySelector('.split-summary-card'),'late preflight results cannot restore stale counts');
+ await new Promise(resolve=>setTimeout(resolve,50));
+ assert.deepEqual(errors,[]);
+ dom.window.close();console.log('Dataset cards, separate summaries, role radios, automatic mode, list persistence, preflight summaries and removal passed.');
+})().catch(error=>{dom.window.close();console.error(error);process.exitCode=1;});

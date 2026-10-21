@@ -162,16 +162,16 @@ function installFileDropZone(element, options = {}) {
     if (!value) depth = 0;
     element.classList.toggle('path-drop-active', value);
   };
-  const accepts = () => !element.disabled && options.disabled !== true;
+  const accepts = event => !element.disabled && options.disabled !== true && (!options.requireShift || event.shiftKey);
   listen('dragenter', event => {
-    if (!accepts()) return;
+    if (!accepts(event)) { highlight(false); return; }
     event.preventDefault();
     if (!event.shiftKey) event.stopPropagation();
     depth++;
     highlight(true);
   });
   listen('dragover', event => {
-    if (!accepts()) return;
+    if (!accepts(event)) { highlight(false); return; }
     event.preventDefault();
     if (!event.shiftKey) event.stopPropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
@@ -185,7 +185,7 @@ function installFileDropZone(element, options = {}) {
   });
   listen('dragend', () => highlight(false));
   listen('drop', async event => {
-    if (!accepts()) return;
+    if (!accepts(event)) { highlight(false); return; }
     event.preventDefault();
     event.stopPropagation();
     highlight(false);

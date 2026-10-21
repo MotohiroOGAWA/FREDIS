@@ -24,7 +24,7 @@ Contents:
 4. [Building the fragment tree](#building-the-fragment-tree)
 5. [Ions, precursor and peak assignment](#ions-precursor-and-peak-assignment)
 6. [Teacher structure](#teacher-structure)
-7. [Validation split](#validation-split)
+7. [Train / validation / test split](#train--validation--test-split)
 8. [Search limits](#search-limits)
 9. [Skip conditions](#skip-conditions)
 10. [Multiprocessing](#multiprocessing)
@@ -252,20 +252,86 @@ precursor adducts, intensity targets and peak annotations.
 The payload uses schema `fredis.fragment-tree-training`. No format conversion is provided;
 regenerate `.preft.pt` files after a format change.
 
-## Validation split
+## Train / validation / test split
 
-Molecules never cross splits, and splits compare exact SMILES strings.
+Workbench uses a **dataset list**. Add any number of files; each card has its
+own column mapping, file statistics, dataset summary, validation progress and
+preview. The summary heading includes its assigned role in assignment mode.
+
+- **Assign each dataset**: select Train, Validation or Test using the radios on
+  each card. Files with the same role are combined, and at least one Train
+  dataset is required. No ratio-based cap or automatic holdout is applied.
+  Canonical molecules shared across different roles cause an error before
+  preparation; overlapping spectra within one role are retained.
+- **Combine and split**: combine all files, ignoring their remembered roles,
+  then split the union by unique RDKit canonical SMILES. Duplicate molecules
+  across files stay in one split; spectra are retained. Validation and Test
+  fractions and the seed apply only to this mode.
+
+**Check Split Summary** on the input step and **Preflight Check** on the run
+step use the same plan as generation and show separate Train / Validation /
+Test molecule and spectrum counts. Each card's values can also be checked
+individually as part of **Validate Dataset Values**.
+
+The CLI accepts the same list using `--datasets-json` and `--dataset-mode`:
+
+```sh
+python -m fredis.cli train create-fragment-tree-data \
+  --datasets-json '[{"path":"a.msds","split":"train"},{"path":"b.msds","split":"validation"},{"path":"c.msds","split":"test"}]' \
+  --dataset-mode assigned --output-dir prepared \
+  --params fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft
+```
+
+Each list entry can include `id` and `mapping` with `smilesColumn`,
+`adductTypeColumn`, `collisionEnergyColumn`, and `precursorMzColumn`.
+`--dataset-mode automatic --validation-ratio 0.1 --test-ratio 0.1` instead
+splits the union approximately 80 / 10 / 10. Paths and per-file mappings are
+saved in preparation settings; original record positions and source paths
+are retained as metadata. Old single-input configurations open as a list;
+a separate validation input becomes an explicitly assigned Validation item.
+Legacy CLI flags below remain supported.
+
+
+Splits use **RDKit canonical isomeric SMILES**. Different SMILES spellings of
+one molecule stay together, across adducts and collision energies. Atom-map
+annotations are ignored; stereochemistry, isotopes and charge are preserved.
+This does not normalize tautomers or remove salts. Original input SMILES and
+spectra are retained.
 
 | Options | Behaviour |
 |---|---|
-| neither option | Training only; structures are written to `train_structures/`. |
-| `--validation-ratio r` | Unique training SMILES are shuffled with `--validation-seed` (default 0). `min(n−1, max(1, round(n·r)))` of them become validation. Needs at least 2 unique SMILES. |
-| `--validation-input` | Validation records whose SMILES appears in training are always removed. |
-| `--validation-input` + `--validation-ratio r` | Additionally caps validation at `max(1, round(training unique SMILES × r))` SMILES, chosen with the seed. |
+| neither ratio | Training only; structures are written to `train_structures/`. |
+| `--validation-ratio r` | Reserve a fraction of input canonical molecules for validation. |
+| `--test-ratio t` | Reserve a fraction of input canonical molecules for final testing (default 0). |
+| both ratios | Both fractions refer to the original input molecule count; train receives the remainder. For example, `--validation-ratio 0.1 --test-ratio 0.1` gives approximately 80 / 10 / 10. |
+| `--validation-input` | Use a separate validation dataset. CLI removes molecules also present in the original input, including those assigned to test. Workbench preflight rejects overlapping inputs. |
+| `--validation-input` + `--validation-ratio r` | Cap validation at `max(1, round(original input canonical molecule count × r))` molecules after overlap removal. A zero or omitted ratio means no cap. Test is still taken from the original input. |
+
+Ratios must be finite and in `[0, 1)`; automatic validation and test ratios
+must sum to less than 1. Zero disables an automatic split. Each enabled split
+gets at least one molecule; insufficient distinct canonical molecules is an
+error. Counts use Python `round(n * ratio)`; if rounding leaves no training
+molecule, the largest held-out count is reduced (validation first on a tie).
+
+Canonical keys are sorted before shuffling with `--validation-seed` (default 0),
+so the assignment is reproducible even if input records are reordered.
+`split_manifest.json` saves the canonical molecule-to-split mapping and seed.
+Settings, including `testRatio`, are restored from each split's
+`fragment-tree.training-data.pft`.
+
+Workbench's **Preflight Check** reports molecule and spectrum counts for each
+split after excluding invalid metadata, using the same assignment logic as
+preparation. Counts precede structure generation; molecules skipped during
+generation are reported by each split's existing statistics.
+
+Outputs are `train_structures/`, `validation_structures/` (when enabled), and
+`test_structures/` (when enabled). Train and validation remain the inputs to
+the training workflow. Reserve test for evaluation of the selected final
+model; it is not automatically passed to training or model selection.
 
 Overlap removal and shortfalls are reported as JSON events on stdout:
 `validation_overlap_removed`, `validation_below_target`, `validation_empty`.
-If validation ends up empty, the run continues with training only.
+If separate validation ends up empty, CLI continues with training only.
 
 ## Search limits
 

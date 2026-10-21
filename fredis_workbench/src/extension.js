@@ -105,7 +105,7 @@ function defaultConfig(context) {
     application: 'fragment-tree-data-preparation', fragmenterParams: chemistry.fragmenter_params, symbols: chemistry.symbols,
     input: '', smilesColumn:'SMILES', adductTypeColumn:'AdductType', collisionEnergyColumn:'CollisionEnergy', precursorMzColumn:'PrecursorMZ',
     validationSmilesColumn:'', validationAdductTypeColumn:'', validationCollisionEnergyColumn:'', validationPrecursorMzColumn:'',
-    validationInput:'', validationRatio:0.1, validationSeed:0, minimumRelativeIntensity:0, overwrite:false, numWorkers:1, chunkSize:1,
+    datasets:[], datasetMode:'automatic', validationInput:'', validationRatio:0.1, testRatio:0, validationSeed:0, minimumRelativeIntensity:0, overwrite:false, numWorkers:1, chunkSize:1,
     outputDir: ''
   },root);
 }
@@ -351,7 +351,7 @@ function runSpectrumPredictionBackend(context, payload) {
 function normalizeConfig(config, baseDirectory) {
   const result={...config,...config.workbench_config};
   delete result.workbench_config;
-  const aliases={validation_input:'validationInput',validation_ratio:'validationRatio',validation_seed:'validationSeed',
+  const aliases={validation_input:'validationInput',validation_ratio:'validationRatio',test_ratio:'testRatio',dataset_mode:'datasetMode',validation_seed:'validationSeed',
     output_dir:'outputDir',smiles_column:'smilesColumn',adduct_type_column:'adductTypeColumn',collision_energy_column:'collisionEnergyColumn',
     precursor_mz_column:'precursorMzColumn',validation_smiles_column:'validationSmilesColumn',validation_adduct_type_column:'validationAdductTypeColumn',
     validation_collision_energy_column:'validationCollisionEnergyColumn',validation_precursor_mz_column:'validationPrecursorMzColumn',
@@ -364,6 +364,15 @@ function normalizeConfig(config, baseDirectory) {
   if(result.validationRatio==null)delete result.validationRatio;
   if(result.validationInput==null)result.validationInput='';
   result.input ||= result.trainInput;
+  if(!Array.isArray(result.datasets)){
+    const mapping=Object.fromEntries(['smilesColumn','adductTypeColumn','collisionEnergyColumn','precursorMzColumn'].filter(key=>result[key]).map(key=>[key,result[key]]));
+    result.datasets=[];
+    if(result.input)result.datasets.push({id:'dataset-1',path:result.input,split:'train',mapping});
+    if(result.validationInput){const overrides=Object.fromEntries(Object.entries(mapping).map(([key,value])=>[key,result['validation'+key[0].toUpperCase()+key.slice(1)]||value]));result.datasets.push({id:'dataset-2',path:result.validationInput,split:'validation',mapping:overrides});}
+    result.datasetMode ||= result.validationInput?'assigned':'automatic';
+  }
+  result.datasetMode ||= 'automatic';
+  if(baseDirectory)result.datasets=result.datasets.map(entry=>({...entry,path:path.resolve(baseDirectory,entry.path)}));
   return result;
 }
 
@@ -396,7 +405,9 @@ async function runTraining(context, output, config, panel) {
 
 async function runFragmentTree(context, output, config, panel) {
   if (runningProcess) throw new Error('Another FREDIS process is already running.');
-  for (const key of ['input', 'outputDir']) if (!config[key]) throw new Error(`${key} is required.`);
+  if(!config.outputDir)throw new Error('outputDir is required.');
+  if(Array.isArray(config.datasets)){if(!config.datasets.length||config.datasets.some(entry=>!entry.path?.trim()))throw new Error('Select a file for each dataset.');}
+  else if(!config.input)throw new Error('input is required.');
   const root = projectRoot(context);
   const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
   const resultPath = path.join(config.outputDir, 'train_structures', 'fragment-tree.training-data.pft');
@@ -420,7 +431,7 @@ async function runFragmentTree(context, output, config, panel) {
     observed.finish({code,signal});
     const status = observed.job.status;
     if (code === 0) {
-      for(const split of ['train','validation']){
+      for(const split of ['train','validation','test']){
         const target=path.join(config.outputDir,split+'_structures','fragment-tree.training-data.pft');
         if(!fs.existsSync(target))continue;
         const saved=JSON.parse(await fs.promises.readFile(target,'utf8'));
@@ -428,26 +439,28 @@ async function runFragmentTree(context, output, config, panel) {
       }
     }
     panel.webview.postMessage({ type: 'status', status, text: signal ? 'Cancelled.' : code === 0 ? 'Completed.' : `Failed with exit code ${code}.`, resultPath });
-    if (code === 0) {const validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.training-data.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Validation Result'?validationPath:resultPath)); });}
+    if (code === 0) {const testPath=path.join(config.outputDir,'test_structures','fragment-tree.training-data.pft'),validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.training-data.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[]),...(fs.existsSync(testPath)?['Open Test Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Test Result'?testPath:choice==='Open Validation Result'?validationPath:resultPath)); });}
   });
 }
 
 function buildArgs(c) {
   const args=['-m', 'fredis.cli', 'train', 'create-fragment-tree-data',
-    '--input', c.input || c.trainInput, '--output-dir', c.outputDir];
+    '--output-dir', c.outputDir];
+  if(Array.isArray(c.datasets))args.push('--datasets-json',JSON.stringify(c.datasets),'--dataset-mode',c.datasetMode||'automatic');
+  else args.push('--input',c.input||c.trainInput);
   if(c.fragmenterParams) args.push('--params-json',JSON.stringify(c.fragmenterParams));
   if(c.reactionModels?.length)args.push('--reaction-models-json',JSON.stringify(c.reactionModels));
   if(c.symbols)args.push('--symbols-json',JSON.stringify(c.symbols));
   for(const [key,flag]of Object.entries({maxUniqueFragmentSmiles:'--max-unique-fragment-smiles',maxReactionCombinations:'--max-reaction-combinations'}))if(c[key]!==undefined)args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({smilesColumn:'--smiles-column',adductTypeColumn:'--adduct-type-column',collisionEnergyColumn:'--collision-energy-column',precursorMzColumn:'--precursor-mz-column'}))if(c[key])args.push(flag,c[key]);
   // Only emitted when the validation dataset genuinely needs a different column name than training.
-  if(c.validationInput)for(const [key,flag,trainKey] of [['validationSmilesColumn','--validation-smiles-column','smilesColumn'],['validationAdductTypeColumn','--validation-adduct-type-column','adductTypeColumn'],['validationCollisionEnergyColumn','--validation-collision-energy-column','collisionEnergyColumn'],['validationPrecursorMzColumn','--validation-precursor-mz-column','precursorMzColumn']])if(c[key]&&c[key]!==c[trainKey])args.push(flag,c[key]);
-  if(c.validationInput) args.push('--validation-input',c.validationInput);
+  if(!Array.isArray(c.datasets)&&c.validationInput)for(const [key,flag,trainKey] of [['validationSmilesColumn','--validation-smiles-column','smilesColumn'],['validationAdductTypeColumn','--validation-adduct-type-column','adductTypeColumn'],['validationCollisionEnergyColumn','--validation-collision-energy-column','collisionEnergyColumn'],['validationPrecursorMzColumn','--validation-precursor-mz-column','precursorMzColumn']])if(c[key]&&c[key]!==c[trainKey])args.push(flag,c[key]);
+  if(!Array.isArray(c.datasets)&&c.validationInput) args.push('--validation-input',c.validationInput);
   // With --validation-input this caps validation to this fraction of training's
   // unique SMILES after removing molecules shared with training, instead of
   // splitting a single dataset (which is what it does without --validation-input).
   if(c.validationRatio !== undefined && c.validationRatio !== '') args.push('--validation-ratio',String(c.validationRatio));
-  for(const [key,flag] of Object.entries({validationSeed:'--validation-seed',minimumRelativeIntensity:'--minimum-relative-intensity',numWorkers:'--num-workers',chunkSize:'--chunk-size'}))if(c[key] !== undefined && c[key] !== '')args.push(flag,String(c[key]));
+  for(const [key,flag] of Object.entries({testRatio:'--test-ratio',validationSeed:'--validation-seed',minimumRelativeIntensity:'--minimum-relative-intensity',numWorkers:'--num-workers',chunkSize:'--chunk-size'}))if(c[key] !== undefined && c[key] !== '')args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({overwrite:'--overwrite'}))if(c[key]!==undefined)args.push(flag,c[key]?'1':'0');
   return args;
 }
@@ -602,7 +615,7 @@ async function readStructureManifests(root) {
       results.push({ directory: path.basename(root), relativeBase: '', rows });
     }
   }
-  for (const directory of ['train_structures', 'validation_structures']) {
+  for (const directory of ['train_structures', 'validation_structures', 'test_structures']) {
     const file = path.join(root, directory, 'manifest.tsv');
     if (!fs.existsSync(file)) continue;
     const lines = (await fs.promises.readFile(file, 'utf8')).trim().split(/\r?\n/);
@@ -618,7 +631,7 @@ async function readStructureManifests(root) {
     results.push({ directory, relativeBase: directory, rows });
   }
   // Older preparation outputs did not write manifest.tsv. Inspect their saved metadata.
-  for(const directory of ['', 'train_structures','validation_structures']){
+  for(const directory of ['', 'train_structures','validation_structures','test_structures']){
     if(results.some(item=>item.relativeBase===directory))continue;
     const folder=path.join(root,directory);if(!fs.existsSync(folder))continue;
     const locations=[folder,path.join(folder,'data')];let hasStructures=false;

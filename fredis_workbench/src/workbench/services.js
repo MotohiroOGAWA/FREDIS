@@ -73,7 +73,7 @@ function attach(panel,context,projectRoot){
  }
  if(message.type==='data/model')post({type:'data/model',requestId:message.requestId,...await backend(context,root,'model',{path:message.path})});
  if(['data/columns','data/preview','data/check'].includes(message.type)){
- if(!['train','validation','home','prediction'].includes(message.target)||typeof message.path!=='string'||!message.path.trim())return;
+ if(!(['train','validation','home','prediction'].includes(message.target)||/^dataset-[a-zA-Z0-9_-]+$/.test(message.target))||typeof message.path!=='string'||!message.path.trim())return;
  latest.set(message.target,message.requestId);
  // data/columns is a fast, load-only column-existence check (no peak stats, adducts
  // or row preview) so Column Mapping can turn green/red before the slower data/preview

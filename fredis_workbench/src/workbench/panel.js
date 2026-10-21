@@ -24,7 +24,7 @@ function save(s,job){
       const paths=[job.outputDir,job.logPath,job.resultsPath].filter(Boolean);
       if(job.status!=='running'&&fs.statSync(job.outputDir,{throwIfNoEntry:false})?.isDirectory()){
         for(const entry of fs.readdirSync(job.outputDir,{withFileTypes:true}).slice(0,200)){
-          if((entry.isFile()&&/\.(json|pt|msds|log|csv)$/.test(entry.name))||(entry.isDirectory()&&['train_structures','validation_structures'].includes(entry.name)))paths.push(path.join(job.outputDir,entry.name));
+          if((entry.isFile()&&/\.(json|pt|msds|log|csv)$/.test(entry.name))||(entry.isDirectory()&&['train_structures','validation_structures','test_structures'].includes(entry.name)))paths.push(path.join(job.outputDir,entry.name));
         }
       }
       const workflow=job.type==='preparation'?'data':job.type.includes('prediction')?'prediction':'training';

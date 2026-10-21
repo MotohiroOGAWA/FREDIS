@@ -47,7 +47,7 @@ def dataset_chemistry_config(directory):
         directory = directory.parent
     candidates = []
     files = [(directory / "preparation_config.json", "preparation_config.json")]
-    if directory.name in ("train_structures", "validation_structures"):
+    if directory.name in ("train_structures", "validation_structures", "test_structures"):
         files.append(
             (directory.parent / "preparation_config.json", "../preparation_config.json")
         )

@@ -35,11 +35,18 @@ export type ParameterEvent =
   | { type: 'parameters/saved'; target: 'data' | 'trainable'; path: string }
   | { type: 'parameters/error'; target: 'data' | 'training' | 'trainable'; error: string };
 
+export type PreparationDataset = {
+  id: string; path: string; split: 'train' | 'validation' | 'test'; mapping?: Record<string, string>;
+};
+export type PreparationInputs = {
+  datasets: PreparationDataset[]; datasetMode: 'assigned' | 'automatic';
+  validationRatio?: number; testRatio?: number; validationSeed?: number;
+};
 export type DataRequest =
-  | { type: 'data/columns' | 'data/preview' | 'data/check'; target: 'train' | 'validation' | 'home' | 'prediction'; requestId: string; path: string; mapping?: Record<string, string>; fragmenterParams?: Record<string, unknown> }
+  | { type: 'data/columns' | 'data/preview' | 'data/check'; target: 'train' | 'validation' | 'home' | 'prediction' | `dataset-${string}`; requestId: string; path: string; mapping?: Record<string, string>; fragmenterParams?: Record<string, unknown> }
   | { type: 'data/preflight'; requestId: string; config: Record<string, unknown> }
   | { type: 'data/model'; requestId: string; path: string };
-export type DataProgressEvent = { type: 'data/check-progress'; target: 'train' | 'validation' | 'prediction'; requestId: string; current: number; total: number };
+export type DataProgressEvent = { type: 'data/check-progress'; target: 'train' | 'validation' | 'prediction' | `dataset-${string}`; requestId: string; current: number; total: number };
 export type ResourceRequest =
   | { type: 'library/load' | 'shell/document' | 'shell/github' }
   | { type: 'library/copy' | 'library/open'; path: string }
