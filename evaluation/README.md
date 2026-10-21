@@ -114,3 +114,29 @@ Grouped settings saved by the Workbench can also be passed directly to
   "config": {}
 }
 ```
+
+### Training Data Filtering (first Evaluation tab)
+
+Specify metadata (`.msds`, CSV, TSV, JSON, JSONL, or Parquet), load its
+columns, and select the SpecID and classification columns (for example `Class`,
+`Superclass`, or `Subclass`). Add or remove tools with a name, a text-file path
+(one SpecID per line), and a color. Evaluate shows overall and per-category
+retention counts, percentages, exclusions, and a PNG chart.
+
+All percentages use the metadata SpecIDs in that category as denominator.
+`Common` is the intersection across every configured tool. Missing categories
+appear as `(Missing)`. Metadata IDs must be nonempty and unique; duplicate IDs
+in tool lists are counted once. Diagnostics report duplicate list entries and
+IDs absent from metadata. This audits retention patterns, not the reasons each
+tool excluded a spectrum.
+
+Export to a selected directory writes `retention.csv`, `id_diagnostics.csv`,
+`retention.png`, and `settings.evalfilter.pft`. Open the settings file to restore
+the Evaluation tab and inputs; click Evaluate to rerun. Settings can also be
+saved and loaded independently. Exported settings contain absolute input paths.
+
+The CLI exposes the same calculation:
+
+```sh
+python -m evaluation filtering --request-json '{"metadata":"source.msds","idColumn":"SpecID","groupColumn":"Class","tools":[{"name":"FREDIS","path":"trainable_spec_ids.txt","color":"#36c5a2"}]}' --output-dir audit
+```

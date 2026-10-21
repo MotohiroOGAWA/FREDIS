@@ -16,6 +16,7 @@ dependencies = [
     "tqdm",
     "numpy",
     "pandas",
+    "matplotlib>=3.7",
     "h5py",
     "pyarrow",
     "tensorboard>=2.14",

@@ -157,7 +157,7 @@ assert.match(page, /evaluationReady/);
 const manifest = require('../package.json');
 const evaluationEditor = manifest.contributes.customEditors.find(item => item.viewType === 'fredis.evaluationConfigEditor');
 assert.deepEqual(evaluationEditor.selector.map(item => item.filenamePattern),
-  ['*.evalcol.pft', '*.evalgroup.pft']);
+  ['*.evalfilter.pft', '*.evalcol.pft', '*.evalgroup.pft']);
 assert.match(fs.readFileSync(require.resolve('../src/extension'), 'utf8'), /evaluation\.register\(context, output, projectRoot\)/);
 const editorSource = fs.readFileSync(require.resolve('../src/features/evaluation/editor'), 'utf8');
 assert.match(editorSource, /FREDIS_PROGRESS/);
@@ -232,3 +232,40 @@ console.log('Evaluation webview and CLI argument checks passed.');
   assert.equal(panels.length, count);
   console.log('Standalone evaluation commands and initial tab selection checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Preparation evaluation opens first, and settings restore columns and tool rows.
+{
+  const {JSDOM} = require('jsdom');
+  const messages=[];
+  const dom=new JSDOM(page,{runScripts:'dangerously',beforeParse(window){window.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m)});}});
+  const w=dom.window, d=w.document;
+  assert.equal(d.getElementById('filteringEvaluation').hidden,false);
+  assert.equal(d.getElementById('columnEvaluation').hidden,true);
+  d.getElementById('filterAdd').click();
+  assert.equal(d.querySelectorAll('[data-tool]').length,2);
+  d.querySelector('[data-remove="1"]').click();
+  assert.equal(d.querySelectorAll('[data-tool]').length,1);
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringConfigLoaded',path:'/tmp/settings.evalfilter.pft',config:{metadata:'/tmp/data.msds',idColumn:'SpecID',groupColumn:'Class',tools:[{name:'FREDIS',path:'/tmp/ids.txt',color:'#123456'}]}}}));
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringColumns',result:{columns:['SpecID','Class'],rows:4}}}));
+  assert.equal(w.evalFiltering.request().groupColumn,'Class');
+  assert.equal(w.evalFiltering.request().tools[0].name,'FREDIS');
+  d.getElementById('filterRun').click();
+  assert.equal(messages.at(-1).type,'filteringRun');
+  d.querySelector('[data-eval-tab="column"]').click();
+  assert.equal(d.getElementById('filteringEvaluation').hidden,true);
+  assert.equal(d.getElementById('columnEvaluation').hidden,false);
+  dom.window.close();
+}
+
+// Saving repeatedly must keep exactly one evaluation extension.
+for (const [kind, suffix] of [['filtering','.evalfilter.pft'],['column','.evalcol.pft'],['grouped','.evalgroup.pft']]) {
+  const expected='/tmp/m_h_plus.msds'+suffix;
+  let filename=expected;
+  for(let i=0;i<5;i++) {
+    filename=ensureEvaluationConfigSuffix(filename,kind);
+    assert.equal(filename,expected);
+  }
+  assert.equal(ensureEvaluationConfigSuffix(expected+suffix+suffix,kind),expected);
+  assert.equal(ensureEvaluationConfigSuffix('/tmp/result.evalcol.pft.evalgroup.pft',kind),'/tmp/result'+suffix);
+}
+assert.doesNotMatch(editorSource, /\[suffix\.slice\(1\)\]/);

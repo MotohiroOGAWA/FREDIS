@@ -1,3 +1,4 @@
+const { filteringHtml, filteringClient } = require('./filtering');
 const whiteLightTheme=require('../../light-theme').css;
 const vscode = require('vscode');
 const { spawn } = require('child_process');
@@ -9,7 +10,7 @@ const VIEW_TYPE = 'fredis.evaluationConfigEditor';
 // .pft (not .json) so VS Code's language-icon fallback actually shows the
 // FREDIS icon: virtually every icon theme already claims plain .json, which
 // always wins over a contributed language icon, but no theme claims .pft.
-const CONFIG_SUFFIXES = { column: '.evalcol.pft', grouped: '.evalgroup.pft' };
+const CONFIG_SUFFIXES = { filtering: '.evalfilter.pft', column: '.evalcol.pft', grouped: '.evalgroup.pft' };
 
 function evaluationConfigSuffix(kind) {
   const suffix = CONFIG_SUFFIXES[kind];
@@ -19,12 +20,14 @@ function evaluationConfigSuffix(kind) {
 
 function ensureEvaluationConfigSuffix(filePath, kind) {
   const suffix = evaluationConfigSuffix(kind);
-  if (filePath.toLowerCase().endsWith(suffix)) return filePath;
-  const lower = filePath.toLowerCase();
-  const existingSuffix = Object.values(CONFIG_SUFFIXES).find(value => lower.endsWith(value));
-  const stem = existingSuffix
-    ? filePath.slice(0, -existingSuffix.length)
-    : (lower.endsWith('.json') ? filePath.slice(0, -5) : filePath);
+  let stem = filePath;
+  // Strip all trailing evaluation suffixes, including names produced by
+  // native save dialogs that append their selected extension automatically.
+  let existingSuffix;
+  while ((existingSuffix = Object.values(CONFIG_SUFFIXES).find(value => stem.toLowerCase().endsWith(value)))) {
+    stem = stem.slice(0, -existingSuffix.length);
+  }
+  if (stem === filePath && stem.toLowerCase().endsWith('.json')) stem = stem.slice(0, -5);
   return stem + suffix;
 }
 
@@ -117,7 +120,7 @@ function summaryArgs(request, outputImage) {
 }
 
 function evaluationConfigDocument(kind, config) {
-  if (!['column', 'grouped'].includes(kind) || !config || typeof config !== 'object' || Array.isArray(config)) {
+  if (!['filtering', 'column', 'grouped'].includes(kind) || !config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('Invalid evaluation configuration.');
   }
   return { schema: 'fredis.evaluation.config', schemaVersion: 1, kind, config };
@@ -167,7 +170,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           ? configFileStem(message.config.title || message.config.groupColumn, 'evaluation')
           : configFileStem(message.config.title, 'evaluation');
         const selected = await vscode.window.showSaveDialog({
-          filters: { 'FREDIS evaluation configuration': [suffix.slice(1)] },
+          filters: { 'FREDIS evaluation configuration': ['pft'] },
           defaultUri: initialDocument && initialDocument.kind === message.kind
             ? vscode.Uri.file(initialDocument.path)
             : vscode.Uri.file(ensureEvaluationConfigSuffix(suggestedName, message.kind))
@@ -189,7 +192,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
             ? configFileStem(message.config.title || message.config.groupColumn, 'evaluation')
             : configFileStem(message.config.title, 'evaluation');
           const selected = await vscode.window.showSaveDialog({
-            filters: { 'FREDIS evaluation configuration': [suffix.slice(1)] },
+            filters: { 'FREDIS evaluation configuration': ['pft'] },
             defaultUri: initialDocument && initialDocument.kind === message.kind
               ? vscode.Uri.file(initialDocument.path)
               : vscode.Uri.file(ensureEvaluationConfigSuffix(suggestedName, message.kind))
@@ -216,6 +219,22 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
             type: `${message.kind}ConfigLoaded`, config, path: selected[0].fsPath
           });
         }
+      } else if (message.type === 'filteringPick') {
+        const picked = await vscode.window.showOpenDialog({ canSelectMany: false });
+        if (picked && picked[0]) panel.webview.postMessage({type:'filteringPicked',metadata:message.metadata,index:message.index,path:picked[0].fsPath});
+      } else if (['filteringInspect','filteringRun','filteringExport'].includes(message.type)) {
+        let directory;
+        if (message.type === 'filteringExport') {
+          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Export here'});
+          if (!picked || !picked[0]) return;
+          directory = picked[0].fsPath;
+        }
+        panel.webview.postMessage({type:'filteringBusy',message:'Auditing SpecID retention…'});
+        const args = ['filtering','--request-json',JSON.stringify(message.request)];
+        if (message.type === 'filteringInspect') args.push('--inspect');
+        if (directory) args.push('--output-dir',directory);
+        const result = await runCli(context, projectRoot, args, output);
+        panel.webview.postMessage({type:message.type === 'filteringInspect'?'filteringColumns':'filteringResult',result});
       } else if (message.type === 'pickGroupedInput') {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Similarity result': ['mssim'] } });
         if (picked && picked[0]) panel.webview.postMessage({
@@ -278,7 +297,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
       const grouped = ['pickGroupedInput', 'groupedSummarize', 'saveGroupedImage'].includes(message.type)
         || (['saveEvaluationConfig', 'loadEvaluationConfig'].includes(message.type)
           && message.kind === 'grouped');
-      panel.webview.postMessage({ type: grouped ? 'groupedError' : 'error', message: String(error.message || error) });
+      panel.webview.postMessage({ type: message.type.startsWith('filtering') || message.kind === 'filtering' ? 'filteringError' : grouped ? 'groupedError' : 'error', message: String(error.message || error) });
     }
   });
 }
@@ -290,7 +309,7 @@ function register(context, output, projectRoot) {
       try {
         const value = JSON.parse(document.getText());
         const kind = value && value.kind;
-        if (!['column', 'grouped'].includes(kind)) throw new Error('Evaluation configuration kind must be column or grouped.');
+        if (!['filtering', 'column', 'grouped'].includes(kind)) throw new Error('Evaluation configuration kind must be column or grouped.');
         initialDocument = {
           kind, config: parseEvaluationConfig(value, kind), path: document.uri.fsPath
         };
@@ -318,7 +337,7 @@ function html() {
     clearTimeout(window.showSaveToast._t);
     window.showSaveToast._t=setTimeout(function(){toast.classList.remove('show')},1600);
   };
-  </script><main><nav class="eval-tabs"><button class="active" data-eval-tab="column">Column Evaluation</button><button data-eval-tab="grouped">Grouped Box Plot</button></nav><section id="columnEvaluation"><header><div><span class="eyebrow">FREDIS EVALUATION</span><h1>Column Evaluation</h1><p class="muted">Group a result table by categories or numeric ranges.</p></div><div class="actions"><button id="loadColumnConfig">Load Settings</button><button id="saveColumnConfig">Save Settings</button><button id="saveImage" disabled>Save SVG</button></div></header>
+  </script><main><nav class="eval-tabs"><button class="active" data-eval-tab="filtering">Training Data Filtering</button><button data-eval-tab="column">Column Evaluation</button><button data-eval-tab="grouped">Grouped Box Plot</button></nav>${filteringHtml()}<section id="columnEvaluation" hidden><header><div><span class="eyebrow">FREDIS EVALUATION</span><h1>Column Evaluation</h1><p class="muted">Group a result table by categories or numeric ranges.</p></div><div class="actions"><button id="loadColumnConfig">Load Settings</button><button id="saveColumnConfig">Save Settings</button><button id="saveImage" disabled>Save SVG</button></div></header>
   <div class="layout"><aside>
     <section class="panel"><h2>Dataset</h2><label>Similarity result (.mssim)<div class="path"><input id="input" data-path-kind="file" placeholder="results.mssim"><button id="browse">Browse</button></div></label><label>Metadata source (.msds or table)<div class="path"><input id="metadata" data-path-kind="file" placeholder="metadata.msds"><button data-browse-metadata>Browse</button></div></label><div class="size-row"><label>Result join column<input id="joinColumn" placeholder="Auto: SourceSpecID"></label><label>Metadata join column<input id="metadataJoinColumn" placeholder="Auto"></label></div><p class="muted">Column names may differ. Auto prefers SourceSpecID → SourceSpecID when available, then SourceSpecID → SpecID.</p><button id="load" class="primary">Load columns</button><p id="datasetInfo" class="muted"></p></section>
     <section class="panel"><h2>Grouping</h2><label>Column<select id="groupColumn" disabled></select></label><fieldset class="transform-options"><legend>Value conversion</legend><label class="radio-option"><input type="radio" name="transform" value="none" checked>None</label><label class="radio-option"><input type="radio" name="transform" value="collision-energy">Collision Energy parser</label><label class="radio-option"><input type="radio" name="transform" value="chemical">SMILES chemical information</label><label class="radio-option"><input type="radio" name="transform" value="smarts">SMARTS substructure matching</label></fieldset><div id="ceOptions" hidden><label>Precursor m/z column<input id="precursorMzColumn" value="PrecursorMZ"></label><label>Instrument column (optional)<input id="instrumentColumn"></label></div><div id="smilesOptions" hidden><label>SMILES column<input id="smilesColumn" value="SMILES"></label></div><div id="chemicalOptions" hidden><label>Chemical descriptor<select id="chemicalDescriptor"><option>HeavyAtomCount</option><option>ExactMolWt</option><option>TPSA</option><option>MolLogP</option><option>NumHAcceptors</option><option>NumHDonors</option><option>NumRotatableBonds</option><option>RingCount</option><option>NumAromaticRings</option><option>NumAliphaticRings</option><option>FractionCSP3</option><option>NumHeteroatoms</option><option>FormalCharge</option><option>BertzCT</option></select></label></div><div id="smartsOptions" hidden><label>SMARTS queries<textarea id="smartsQueries" spellcheck="false" placeholder="Alcohol = [OX2H]&#10;Aromatic ring = c1ccccc1"></textarea><small class="muted">One query per line. Use “label = SMARTS” (spaces around =), or enter only SMARTS. Groups may overlap.</small></label></div><label>Mode<select id="mode"><option value="auto">Auto</option><option value="categorical">Category</option><option value="numeric">Numeric ranges</option></select></label><label id="binsLabel" hidden>Range boundaries<input id="bins" value="0,10,20" placeholder="0,10,20" disabled><small class="muted">0,10,20 creates [0,10), [10,20), [20,~).</small></label><p class="muted">Changes are applied only when Generate plot is pressed.</p><button id="generate" class="primary" disabled>Generate plot</button></section>
@@ -392,7 +411,8 @@ function html() {
     if(m.type==='error'){pendingColumnConfig=null;pendingAppliedRequest=null;document.getElementById('generate').disabled=!group.value;setStatus(m.message,true)}
   });
   </script></section>${groupedHtml()}<script>
-  document.querySelectorAll('[data-eval-tab]').forEach(button=>button.onclick=()=>{const grouped=button.dataset.evalTab==='grouped';document.getElementById('columnEvaluation').hidden=grouped;document.getElementById('groupedEvaluation').hidden=!grouped;document.querySelectorAll('[data-eval-tab]').forEach(item=>item.classList.toggle('active',item===button))});
+  document.querySelectorAll('[data-eval-tab]').forEach(button=>button.onclick=()=>{const kind=button.dataset.evalTab;for(const k of ['filtering','column','grouped'])document.getElementById(k+'Evaluation').hidden=k!==kind;document.querySelectorAll('[data-eval-tab]').forEach(item=>item.classList.toggle('active',item===button))});
+  (${filteringClient.toString()})();
   (${groupedClient.toString()})();
   window.addEventListener('message',event=>{if(['evaluationConfigOpened','evaluationTabSelected'].includes(event.data.type)){const tab=document.querySelector('[data-eval-tab="'+event.data.kind+'"]');if(tab)tab.click()}});
   document.addEventListener('keydown',e=>{
@@ -400,11 +420,12 @@ function html() {
     if(!(e.ctrlKey||e.metaKey)||e.shiftKey||e.altKey||key!=='s')return;
     e.preventDefault();
     const grouped=!document.getElementById('groupedEvaluation').hidden;
-    const api=grouped?window.evalGrouped:window.evalColumn;
+    const filtering=!document.getElementById('filteringEvaluation').hidden;
+    const api=filtering?window.evalFiltering:grouped?window.evalGrouped:window.evalColumn;
     if(!api)return;
-    vscode.postMessage({type:'quickSaveEvaluationConfig',kind:grouped?'grouped':'column',config:api.request(),path:api.getPath()});
+    vscode.postMessage({type:'quickSaveEvaluationConfig',kind:filtering?'filtering':grouped?'grouped':'column',config:api.request(),path:api.getPath()});
   });
-  ${pathDrop.script({host:true})}
+  ${pathDrop.script({host:true,compact:true})}
   vscode.postMessage({type:'evaluationReady'});
   </script></main></body></html>`;
 }

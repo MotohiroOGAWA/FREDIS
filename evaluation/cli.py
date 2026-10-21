@@ -67,6 +67,10 @@ def _grouped_config(args: argparse.Namespace) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m evaluation", description="Group and summarize FREDIS result tables.")
     commands = parser.add_subparsers(dest="command", required=True)
+    filtering = commands.add_parser("filtering", help="Audit trainable SpecID retention.")
+    filtering.add_argument('--request-json', required=True)
+    filtering.add_argument('--output-dir')
+    filtering.add_argument('--inspect', action='store_true')
     inspect = commands.add_parser("inspect", help="Inspect input columns and inferred types.")
     inspect.add_argument("--input", required=True)
     inspect.add_argument("--metadata")
@@ -148,6 +152,10 @@ def execute(
     args: argparse.Namespace,
     progress: Callable[[int, str], None] | None = None,
 ) -> dict:
+    if args.command == "filtering":
+        from .filtering import evaluate, inspect_metadata
+        config = json.loads(args.request_json)
+        return inspect_metadata(config) if args.inspect else evaluate(config, args.output_dir)
     if args.command == "inspect":
         if progress:
             progress(10, "Reading dataset columns…")
