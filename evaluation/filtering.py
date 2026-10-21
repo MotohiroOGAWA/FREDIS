@@ -84,11 +84,13 @@ def evaluate(config, output_dir=None):
     return {**result, **present(result, config.get('view', {}))}
 
 
-def present(result, view=None, output_dir=None, formats=()):
+def present(result, view=None, output_dir=None, formats=(), output_file=None):
     """Render/export cached counts without reading metadata or SpecID lists."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    if output_file and (len(formats) != 1 or formats[0] not in {'png', 'svg'}):
+        raise ValueError('A single output file requires PNG or SVG format.')
     view = view or {}
     from .filtering_view import select_view
     # List filters narrow the working list; graph membership is exclusively
@@ -118,13 +120,15 @@ def present(result, view=None, output_dir=None, formats=()):
     height_px = number('height', 700, 200, 12000)
     if isinstance(width_px, bool) or not isinstance(width_px, (int, float)) or not 1 <= width_px < 65536:
         raise ValueError('Calculated image width must be below 65536 px. Reduce group width, padding, or selected groups.')
+    top_padding = number('topPadding', 80, 0, 2000) if 'groupWidth' in view and vertical else 0
+    plot_height_px = height_px + top_padding
     title_size = number('titleSize', 14, 1, 96)
     category_size = number('categoryLabelSize', 10, 1, 96)
     tick_size = number('tickLabelSize', 10, 1, 96)
     axis_size = number('axisTitleSize', 11, 1, 96)
     value_size = number('valueLabelSize', 7, 1, 96)
     legend_size = number('legendSize', 10, 1, 96)
-    fig, ax = plt.subplots(figsize=(width_px/150, height_px/150), dpi=150)
+    fig, ax = plt.subplots(figsize=(width_px/150, plot_height_px/150), dpi=150)
     group_span = group_width/(group_width+group_padding) if 'groupWidth' in view else .8
     width = group_span/max(1,len(series))
     lookup = {(r['scope'], r['category'], r['tool']):r for r in rows}
@@ -140,7 +144,7 @@ def present(result, view=None, output_dir=None, formats=()):
               if view.get('showCategoryLabels', True) else '' for g in category_rows]
     if vertical:
         ax.set_xticks(range(len(category_rows)), labels, rotation=60, ha='right')
-        ax.set_ylim(0, 100 if 'groupWidth' in view else 140)
+        ax.set_ylim(0, 100*plot_height_px/height_px if 'groupWidth' in view else 140)
         if 'groupWidth' in view and group_count:
             edge = group_span/2 + group_padding/(group_width+group_padding)
             ax.set_xlim(-edge, group_count-1+edge)
@@ -172,13 +176,13 @@ def present(result, view=None, output_dir=None, formats=()):
         bottom = math.ceil(max(0, plot_box.y0-content_box.y0)) + 8
         top = math.ceil(max(0, content_box.y1-plot_box.y1)) + 8
         canvas_width = math.ceil(width_px+left+right)
-        canvas_height = math.ceil(height_px+bottom+top)
+        canvas_height = math.ceil(plot_height_px+bottom+top)
         if max(canvas_width, canvas_height) >= 65536:
             plt.close(fig)
             raise ValueError('Calculated image width or height including labels must be below 65536 px.')
         fig.set_size_inches(canvas_width/150, canvas_height/150)
         ax.set_position([left/canvas_width, bottom/canvas_height,
-                         width_px/canvas_width, height_px/canvas_height])
+                         width_px/canvas_width, plot_height_px/canvas_height])
     else:
         fig.tight_layout()
     buffer = io.BytesIO()
@@ -194,6 +198,13 @@ def present(result, view=None, output_dir=None, formats=()):
             (target/'retention.png').write_bytes(buffer.getvalue())
         if 'svg' in formats:
             fig.savefig(target/'retention.svg', format='svg')
+    if output_file:
+        target = Path(output_file).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if formats[0] == 'png':
+            target.write_bytes(buffer.getvalue())
+        else:
+            fig.savefig(target, format='svg')
     plt.close(fig)
     return {'displayRows': rows, 'categoryRows': category_rows, 'listRows': list_rows, 'listToolRows': list_tool_rows, 'fields': fields, 'png': base64.b64encode(buffer.getvalue()).decode('ascii')}
 

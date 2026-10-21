@@ -137,7 +137,7 @@ def test_group_pixel_width_and_text_visibility(result, tmp_path, orientation):
     svg_root = ET.parse(tmp_path/'shown'/'retention.svg').getroot()
     clip_rect = svg_root.find('.//{http://www.w3.org/2000/svg}clipPath/{http://www.w3.org/2000/svg}rect')
     assert float(clip_rect.attrib['width']) == pytest.approx((100*count+20*(count+1))*72/150)
-    assert float(clip_rect.attrib['height']) == pytest.approx(500*72/150)
+    assert float(clip_rect.attrib['height']) == pytest.approx((500+(80 if orientation=='vertical' else 0))*72/150)
     assert 'Custom chart title' in (tmp_path/'shown'/'retention.svg').read_text()
     hidden = {**view, **{key: False for key in ['showTitle','showCategoryLabels',
               'showTickLabels','showAxisTitle','showValues','showLegend','showCounts']}}

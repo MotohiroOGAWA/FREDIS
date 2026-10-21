@@ -155,8 +155,11 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
   pathDrop.attach(panel);
   const reportProgress = type => progress => panel.webview.postMessage({ type, ...progress });
   let filteringResult = null, filteringResultFile = null, filteringRevision = 0;
+  let filteringConfigPath = initialDocument?.kind === 'filtering' ? initialDocument.path : null;
+  const filteringDirectory = () => filteringConfigPath ? path.dirname(filteringConfigPath) : projectRoot(context);
   const restoreFiltering = async (config, configPath) => {
     ++filteringRevision;
+    filteringConfigPath = configPath;
     filteringResult = null; filteringResultFile = null;
     if (!config.resultPath) return;
     const resultFile = path.resolve(path.dirname(configPath), config.resultPath);
@@ -201,7 +204,9 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           : configFileStem(message.config.title, 'evaluation');
         const selected = await vscode.window.showSaveDialog({
           filters: { 'FREDIS evaluation configuration': ['pft'] },
-          defaultUri: initialDocument && initialDocument.kind === message.kind
+          defaultUri: message.kind === 'filtering' && filteringConfigPath
+            ? vscode.Uri.file(filteringConfigPath)
+            : initialDocument && initialDocument.kind === message.kind
             ? vscode.Uri.file(initialDocument.path)
             : vscode.Uri.file(ensureEvaluationConfigSuffix(suggestedName, message.kind))
         });
@@ -210,6 +215,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           await vscode.workspace.fs.writeFile(
             target, Buffer.from(JSON.stringify(configForTarget(configDocument, target.fsPath), null, 2) + '\n', 'utf8')
           );
+          if (message.kind === 'filtering') filteringConfigPath = target.fsPath;
           panel.webview.postMessage({ type: `${message.kind}ConfigSaved`, path: target.fsPath });
           vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
         }
@@ -234,6 +240,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
         await vscode.workspace.fs.writeFile(
           target, Buffer.from(JSON.stringify(configForTarget(configDocument, target.fsPath), null, 2) + '\n', 'utf8')
         );
+        if (message.kind === 'filtering') filteringConfigPath = target.fsPath;
         panel.webview.postMessage({ type: `${message.kind}ConfigSaved`, path: target.fsPath });
         vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
       } else if (message.type === 'loadEvaluationConfig') {
@@ -251,13 +258,13 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           if (message.kind === 'filtering') await restoreFiltering(config, selected[0].fsPath);
         }
       } else if (message.type === 'filteringPick') {
-        const picked = await vscode.window.showOpenDialog({ canSelectMany: false });
+        const picked = await vscode.window.showOpenDialog({ canSelectMany: false, defaultUri:vscode.Uri.file(filteringDirectory()) });
         if (picked && picked[0]) panel.webview.postMessage({type:'filteringPicked',metadata:message.metadata,index:message.index,path:picked[0].fsPath});
       } else if (['filteringInspect','filteringRun'].includes(message.type)) {
         let directory;
         if (message.type === 'filteringRun') {
           ++filteringRevision;
-          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Save evaluation here'});
+          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,defaultUri:vscode.Uri.file(filteringDirectory()),openLabel:'Save evaluation here'});
           if (!picked || !picked[0]) return;
           directory = picked[0].fsPath;
         }
@@ -270,21 +277,34 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           filteringResult = {...result};
           for(const key of ['png','displayRows','categoryRows','listRows','listToolRows','fields','outputDir','settingsPath'])delete filteringResult[key];
           filteringResultFile = path.join(directory,'results.json');
+          filteringConfigPath = result.settingsPath || filteringConfigPath;
         }
         panel.webview.postMessage({type:message.type === 'filteringInspect'?'filteringColumns':'filteringResult',result});
       } else if (['filteringView','filteringExport'].includes(message.type)) {
         if (!filteringResult) throw new Error('Evaluate or load saved results first.');
         const revision = ++filteringRevision;
         const args = ['filtering-view','--request-json','-'];
-        let directory;
+        let directory, outputFile;
         if (message.type === 'filteringExport') {
           if (!['tsv','png','svg'].includes(message.format)) throw new Error('Select TSV, PNG, or SVG.');
-          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Export '+message.format.toUpperCase()+' here'});
-          if (!picked || !picked[0]) return;
-          directory = picked[0].fsPath;
-          args.push('--output-dir',directory,'--format',message.format);
+          if (message.format === 'tsv') {
+            const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,defaultUri:vscode.Uri.file(filteringDirectory()),openLabel:'Export TSV here'});
+            if (!picked || !picked[0]) return;
+            directory = picked[0].fsPath;
+            args.push('--output-dir',directory);
+          } else {
+            const picked = await vscode.window.showSaveDialog({
+              defaultUri:vscode.Uri.file(path.join(filteringDirectory(),'retention.'+message.format)),
+              filters:{[message.format.toUpperCase()+' image']:[message.format]},saveLabel:'Export '+message.format.toUpperCase()
+            });
+            if (!picked) return;
+            outputFile = picked.fsPath;
+            if (!outputFile.toLowerCase().endsWith('.'+message.format)) outputFile += '.'+message.format;
+            args.push('--output-file',outputFile);
+          }
+          args.push('--format',message.format);
         }
-        panel.webview.postMessage({type:'filteringBusy',message:directory?'Exporting displayed results…':'Updating display…'});
+        panel.webview.postMessage({type:'filteringBusy',message:directory||outputFile?'Exporting displayed results…':'Updating display…'});
         const rendered = await runCli(context, projectRoot, args, output, undefined, {result:filteringResult,view:message.view,metadataConfig:message.metadataConfig});
         if(revision !== filteringRevision) return;
         if(rendered.updatedResult){
@@ -293,7 +313,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           if(filteringResultFile)await vscode.workspace.fs.writeFile(vscode.Uri.file(filteringResultFile),Buffer.from(JSON.stringify(filteringResult),'utf8'));
           rendered.updatedResult=filteringResult;
         }
-        panel.webview.postMessage({type:'filteringPresentation',result:rendered,exported:directory});
+        panel.webview.postMessage({type:'filteringPresentation',result:rendered,exported:outputFile||directory});
       } else if (message.type === 'pickGroupedInput') {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Similarity result': ['mssim'] } });
         if (picked && picked[0]) panel.webview.postMessage({

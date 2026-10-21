@@ -69,7 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     presentation = commands.add_parser('filtering-view', help='Render or export cached filtering counts.')
     presentation.add_argument('--request-json', required=True)
-    presentation.add_argument('--output-dir')
+    destination = presentation.add_mutually_exclusive_group()
+    destination.add_argument('--output-dir')
+    destination.add_argument('--output-file')
     presentation.add_argument('--format', choices=['tsv','png','svg'])
     filtering = commands.add_parser("filtering", help="Audit trainable SpecID retention.")
     filtering.add_argument('--request-json', required=True)
@@ -160,7 +162,7 @@ def execute(
         from .filtering import present, enrich_metadata
         payload = json.load(sys.stdin) if args.request_json == '-' else json.loads(args.request_json)
         enriched = enrich_metadata(payload['result'], payload.get('view') or {}, payload.get('metadataConfig'))
-        rendered = present(enriched, payload.get('view'), args.output_dir, [args.format] if args.format else [])
+        rendered = present(enriched, payload.get('view'), args.output_dir, [args.format] if args.format else [], output_file=args.output_file)
         if enriched is not payload['result']:
             rendered['updatedResult'] = enriched
         return rendered

@@ -48,6 +48,14 @@ def test_retention_and_export(tmp_path):
     assert svg.tag == '{http://www.w3.org/2000/svg}svg'
     assert not (tmp_path/'svg-only'/'retention.png').exists()
     assert not (tmp_path/'svg-only'/'retention.tsv').exists()
+    for format in ['png', 'svg']:
+        target = tmp_path/('custom-'+format)/('my graph.'+format)
+        present(cached, view, formats=[format], output_file=target)
+        assert list(target.parent.iterdir()) == [target]
+        if format == 'svg':
+            assert ET.parse(target).getroot().tag == '{http://www.w3.org/2000/svg}svg'
+        else:
+            assert target.read_bytes().startswith(b'\x89PNG')
     assert not present(cached,{'tools':[]})['displayRows']
     filtered=present(cached,{'minN':5})
     assert not filtered['listRows']
