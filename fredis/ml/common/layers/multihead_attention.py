@@ -46,7 +46,7 @@ class MultiheadAttention(nn.Module):
         if self.head_dim * num_heads != embed_dim:
             raise ValueError("embed_dim must be divisible by num_heads")
 
-        self.scaling = self.head_dim ** -0.5
+        self.scaling = self.head_dim**-0.5
 
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
@@ -187,15 +187,17 @@ class SelfAttention(nn.Module):
         batch_first: bool = True,
     ):
         super().__init__()
-        self.mha = MultiheadAttention(embed_dim, num_heads, dropout=dropout, bias=bias, batch_first=batch_first)
+        self.mha = MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout, bias=bias, batch_first=batch_first
+        )
 
     def forward(
         self,
-        x: Tensor,                               # [T,B,C]
+        x: Tensor,  # [T,B,C]
         *,
-        attn_bias: Optional[Tensor] = None,       # [B*H,T,T] or None
-        key_padding_mask: Optional[Tensor] = None,# [B,T] or None
-        attn_mask: Optional[Tensor] = None,       # bool/additive [T,T] or broadcastable
+        attn_bias: Optional[Tensor] = None,  # [B*H,T,T] or None
+        key_padding_mask: Optional[Tensor] = None,  # [B,T] or None
+        attn_mask: Optional[Tensor] = None,  # bool/additive [T,T] or broadcastable
         need_weights: bool = False,
         need_head_weights: bool = False,
     ) -> Tuple[Tensor, Optional[Tensor]]:
@@ -209,6 +211,7 @@ class SelfAttention(nn.Module):
             need_weights=need_weights,
             need_head_weights=need_head_weights,
         )
+
 
 class CrossAttention(nn.Module):
     """
@@ -228,16 +231,18 @@ class CrossAttention(nn.Module):
         batch_first: bool = True,
     ):
         super().__init__()
-        self.mha = MultiheadAttention(embed_dim, num_heads, dropout=dropout, bias=bias, batch_first=batch_first)
+        self.mha = MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout, bias=bias, batch_first=batch_first
+        )
 
     def forward(
         self,
-        q: Tensor,                               # [Tq,B,C]
-        kv: Tensor,                              # [Tk,B,C]
+        q: Tensor,  # [Tq,B,C]
+        kv: Tensor,  # [Tk,B,C]
         *,
-        attn_bias: Optional[Tensor] = None,       # [B*H,Tq,Tk] or None
-        key_padding_mask: Optional[Tensor] = None,# [B,Tk] or None
-        attn_mask: Optional[Tensor] = None,       # bool/additive [Tq,Tk] or broadcastable
+        attn_bias: Optional[Tensor] = None,  # [B*H,Tq,Tk] or None
+        key_padding_mask: Optional[Tensor] = None,  # [B,Tk] or None
+        attn_mask: Optional[Tensor] = None,  # bool/additive [Tq,Tk] or broadcastable
         need_weights: bool = False,
         need_head_weights: bool = False,
     ) -> Tuple[Tensor, Optional[Tensor]]:
@@ -251,7 +256,6 @@ class CrossAttention(nn.Module):
             need_weights=need_weights,
             need_head_weights=need_head_weights,
         )
-
 
 
 # ------------------------------------------------------------
@@ -292,6 +296,6 @@ if __name__ == "__main__":
     loss = y.mean()
     loss.backward()
 
-    print("y:", tuple(y.shape))         # [T,B,C]
+    print("y:", tuple(y.shape))  # [T,B,C]
     print("w:", None if w is None else tuple(w.shape))  # [B,T,T]
     print("loss:", float(loss.item()))

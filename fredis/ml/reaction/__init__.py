@@ -1,12 +1,5 @@
-"""Reaction-centric neural encoders used by FREDIS."""
+"""Reaction encoders used by the current source-anchored model."""
 
-from .context import LocalContextGraphBuilder, LocalContextEncoder
-from .edge_gcn import EdgeAwareGCN
-from .reactant_encoder import PatternReactantEncoder, ReactantEncoderRegistry
-from .reaction_encoder import ReactionEncoder, ReactionTransformation
+from .reactant_graphormer import ReactantGraphormerEncoder
 
-__all__ = [
-    "EdgeAwareGCN", "LocalContextGraphBuilder", "LocalContextEncoder",
-    "PatternReactantEncoder", "ReactantEncoderRegistry", "ReactionEncoder",
-    "ReactionTransformation",
-]
+__all__ = ["ReactantGraphormerEncoder"]

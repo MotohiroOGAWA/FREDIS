@@ -1,4 +1,5 @@
 """Compile concrete bond and atom deletion reactions into one Source-specific RDKit reaction."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -27,12 +28,23 @@ class CompositeReaction:
     ) -> CompositeReaction:
         mol = mapped_source(source)
         by_map = {a.GetAtomMapNum(): a.GetIdx() for a in mol.GetAtoms()}
-        source_bonds = {tuple(sorted((b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum())))
-                        for b in mol.GetBonds()}
+        source_bonds = {
+            tuple(
+                sorted(
+                    (b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum())
+                )
+            )
+            for b in mol.GetBonds()
+        }
         for reaction in reaction_sequence.reactions:
-            if reaction.retained_atom_maps | reaction.discarded_atom_maps != frozenset(by_map):
+            if reaction.retained_atom_maps | reaction.discarded_atom_maps != frozenset(
+                by_map
+            ):
                 raise ValueError("Reaction atom universe differs from Source")
-            if not (reaction.matched_bond_maps | reaction.changed_bond_maps) <= source_bonds:
+            if (
+                not (reaction.matched_bond_maps | reaction.changed_bond_maps)
+                <= source_bonds
+            ):
                 raise ValueError("Reaction references bonds absent from Source")
         retained = reaction_sequence.retained_atom_maps
         if not retained:
@@ -48,9 +60,12 @@ class CompositeReaction:
                 target.RemoveAtom(atom.GetIdx())
         target = target.GetMol()
         removed_edges = reaction_sequence.cut_bond_maps | frozenset(
-            edge for edge in source_bonds if not set(edge) <= retained)
-        affected = ({m for edge in removed_edges for m in edge}
-                    | {m for u, v, _ in reaction_sequence.bond_updates for m in (u, v)}) & retained
+            edge for edge in source_bonds if not set(edge) <= retained
+        )
+        affected = (
+            {m for edge in removed_edges for m in edge}
+            | {m for u, v, _ in reaction_sequence.bond_updates for m in (u, v)}
+        ) & retained
         # Recompute hydrogens at deletion boundaries, including bracketed mapped SMILES.
         for atom in target.GetAtoms():
             if atom.GetAtomMapNum() in affected and not atom.GetNumRadicalElectrons():
@@ -69,12 +84,22 @@ class CompositeReaction:
             raise ValueError(f"Cannot compile composite SMIRKS: {smirks}")
         # Atom maps alone do not constrain RDKit matching; bind the concrete locations.
         for atom in rxn.GetReactantTemplate(0).GetAtoms():
-            atom.ExpandQuery(rdqueries.HasIntPropWithValueQueryAtom("molAtomMapNumber", atom.GetAtomMapNum()))
+            atom.ExpandQuery(
+                rdqueries.HasIntPropWithValueQueryAtom(
+                    "molAtomMapNumber", atom.GetAtomMapNum()
+                )
+            )
         # Atom deletion intentionally leaves Source maps absent from the target.
         # RDKit's unmapped-product warning is expected; exceptions still propagate.
         rxn.Initialize(silent=True)
-        return cls(reaction_sequence, reactant, product, smirks, rxn,
-                   Chem.MolToSmiles(mol, canonical=True))
+        return cls(
+            reaction_sequence,
+            reactant,
+            product,
+            smirks,
+            rxn,
+            Chem.MolToSmiles(mol, canonical=True),
+        )
 
     def run(self, source: Compound | Chem.Mol) -> tuple[Chem.Mol, ...]:
         """Run once on the exact mapped Source and restore Source atom identities."""
@@ -87,7 +112,11 @@ class CompositeReaction:
             product = group[0]
             for atom in product.GetAtoms():
                 if atom.HasProp("react_atom_idx"):
-                    atom.SetAtomMapNum(mol.GetAtomWithIdx(atom.GetIntProp("react_atom_idx")).GetAtomMapNum())
+                    atom.SetAtomMapNum(
+                        mol.GetAtomWithIdx(
+                            atom.GetIntProp("react_atom_idx")
+                        ).GetAtomMapNum()
+                    )
             Chem.SanitizeMol(product)
             results.append(product)
         return tuple(results)

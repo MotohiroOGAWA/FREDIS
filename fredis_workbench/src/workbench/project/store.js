@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const SCHEMA = 'fredis.workbench.project';
 const workflows = ['data', 'training', 'prediction', 'reactionPatterns'];
-const pathFields = new Set(['input','validationInput','trainInput','params','outputDir','batchInput','batchOutputDir','modelPath','trainDir','valDir','resume','initializeFrom','fineTuneCheckpoint','fineTuneResume','checkpoint_path']);
+const pathFields = new Set(['input','validationInput','trainInput','params','outputDir','batchInput','batchOutputDir','modelPath','trainDir','valDir','resume','initializeFrom','fineTuneCheckpoint','fineTuneResume','integrationHead','integrationOutput','checkpoint_path','path','source']);
 function metadata(root) { return path.join(root, '.fredis'); }
 function atomic(file, value) {
   fs.mkdirSync(path.dirname(file), {recursive:true});
@@ -29,6 +29,7 @@ function references(config,base) {
   const result=[];
   function visit(value,key='') {
     if(pathFields.has(key))for(const entry of Array.isArray(value)?value:[value])if(typeof entry==='string'&&entry.trim())result.push({path:path.resolve(base,entry.trim()),role:key});
+    if(Array.isArray(value)&&!pathFields.has(key))for(const item of value)visit(item,key);
     if(value&&typeof value==='object'&&!Array.isArray(value))for(const [child,item]of Object.entries(value))visit(item,child);
   }
   visit(config);return result;

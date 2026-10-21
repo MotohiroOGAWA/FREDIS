@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from fredis.ml.specgen.predict_spectrum import direct_input_dataset
 from fredis.ml.specgen.source_reaction_msdataset import build_prediction_cache, predict_source_msdataset
@@ -8,9 +9,8 @@ from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from tests.ml.reaction.TestReactionPipeline import config
 
 
-def _generator(ion_prediction_threshold=0.5):
+def _generator():
     value = config()
-    value['generation_params']['ion_prediction_threshold'] = ion_prediction_threshold
     return create_spectrum_generator(value).eval()
 
 
@@ -275,6 +275,10 @@ def test_build_prediction_cache_serial_and_parallel_agree_on_keys_and_reactions(
     assert serial['not-a-smiles']['ok'] is False and parallel['not-a-smiles']['ok'] is False
     assert serial['CCCO']['ok'] is True and parallel['CCCO']['ok'] is True
     assert serial['CCCO']['reactions'] == parallel['CCCO']['reactions']
+    from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
+    for smiles in ('CCCO', 'CCN'):
+        assert serial[smiles]['relations'] == parallel[smiles]['relations']
+        assert serial[smiles]['relations'] == ReactionRelations.from_reactions(serial[smiles]['reactions'])
     assert serial['CCCO']['precursor_sequences'] == parallel['CCCO']['precursor_sequences']
 
 
@@ -300,29 +304,18 @@ def test_build_prediction_cache_keep_temp_controls_whether_task_files_survive(tm
     assert any(p.suffix == '.pkl' for p in kept[0].iterdir())
 
 
-def test_predict_source_msdataset_ion_prediction_threshold_filters_low_confidence_peaks():
-    dataset = direct_input_dataset(
-        smiles_values=['CCCO'],
-        collision_energy='20 eV',
-        adduct_type='[M+H]+',
-    )
-    # An untrained model's ion confidence is effectively arbitrary, but it is
-    # always within (0, 1); a threshold above every possible value must drop
-    # every peak without crashing (an all-peaks-filtered spectrum used to
-    # break MSDataset construction), and a threshold below every possible
-    # value must keep peaks flowing through unfiltered.
-    strict, _ = predict_source_msdataset(
-        dataset, _generator(ion_prediction_threshold=0.999999),
-        smiles_column='SMILES', adduct_type_column='AdductType',
-        collision_energy_column='CollisionEnergy', precursor_mz_column='PrecursorMZ',
-        instrument_column=None,
-    )
-    assert strict.n_peaks_total == 0
-
-    lenient, _ = predict_source_msdataset(
-        dataset, _generator(ion_prediction_threshold=0.000001),
-        smiles_column='SMILES', adduct_type_column='AdductType',
-        collision_energy_column='CollisionEnergy', precursor_mz_column='PrecursorMZ',
-        instrument_column=None,
-    )
-    assert lenient.n_peaks_total > 0
+def test_prediction_prepare_reuses_worker_relations(monkeypatch):
+    from fredis.ml.specgen.prepare_worker import prepare_compound_cache
+    from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
+    from fredis.libs.mmkit.mmkit import Compound, Adduct
+    generator = _generator()
+    source = Compound.from_smiles('CCCO')
+    cached = prepare_compound_cache(source.smiles, ['[M+H]+'], generator.fragmenter)
+    expected = generator.prepare([source], [Adduct.parse('[M+H]+')], [20.])[0]
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Prediction must reuse relations computed by CPU preparation')
+    monkeypatch.setattr(ReactionRelations, 'from_reactions', unexpected)
+    actual = generator.prepare([source], [Adduct.parse('[M+H]+')], [20.],
+                               precomputed={source.smiles: cached})[0]
+    for name in ('reaction_conflict_index', 'reaction_invalidation_index', 'reaction_dominance_index'):
+        torch.testing.assert_close(getattr(actual, name), getattr(expected, name))

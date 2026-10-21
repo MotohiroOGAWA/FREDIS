@@ -1,0 +1,21 @@
+const assert=require('assert/strict'),Module=require('module'),load=Module._load;
+Module._load=function(name,parent,main){return name==='vscode'?{}:load.call(this,name,parent,main);};
+const {JSDOM}=require('jsdom'),feature=require('../src/features/model-architecture/editor'),fixture=require('./fixtures');
+const normalized=feature.normalizeDocument({model_config:fixture.model,epochs:100,lr:1});
+assert.deepEqual(Object.keys(normalized.model_config),['mol_encoder_params','reaction_model_params','spectrum_model_params']);
+assert.throws(()=>feature.normalizeDocument({epochs:100}),/No model/);
+(async()=>{
+const messages=[],dom=new JSDOM(feature.editorHtml(),{runScripts:'dangerously',beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m)});}}),w=dom.window,d=w.document;
+w.dispatchEvent(new w.MessageEvent('message',{data:{type:'document',value:normalized.model_config}}));
+assert(!d.querySelector('[data-model-block=generation_params]'));
+const field=d.querySelector('[data-parameter-path="spectrum_model_params.fragment_dropout"]');field.value='0.2';field.dispatchEvent(new w.Event('input',{bubbles:true}));
+await new Promise(r=>setTimeout(r,200));assert.equal(messages.at(-1).value.spectrum_model_params.fragment_dropout,0.2);assert(!('epochs' in messages.at(-1).value));dom.window.close();
+const ext=require('../src/extension');const errors=[];
+const work=new JSDOM(ext.workbenchHtml(fixture.dataConfig,{modelConfig:fixture.model,epochs:7}),{runScripts:'dangerously',pretendToBeVisual:true,beforeParse(w){w.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m),getState:()=>({}),setState(){}});w.HTMLElement.prototype.scrollIntoView=function(){};w.ResizeObserver=class{observe(){}disconnect(){}};w.matchMedia=()=>({matches:false,addEventListener(){}});w.CSS={escape:s=>s};}});
+const wd=work.window.document;wd.getElementById('saveArchitecture').click();assert.equal(messages.at(-1).type,'architecture/save');
+work.window.dispatchEvent(new work.window.MessageEvent('message',{data:{type:'architecture/loaded',value:{...normalized.model_config,spectrum_model_params:{fragment_dropout:0.2}}}}));assert.equal(work.window.eval('getTrainingConfig().epochs'),7);assert.equal(work.window.eval('getTrainingConfig().modelConfig.spectrum_model_params.fragment_dropout'),0.2);
+const section=[...wd.querySelectorAll('#dataParameterEditor details')].find(n=>n.querySelector('summary')?.textContent.startsWith('Fragment Ion Adduct Rule Set'));
+section.open=true;section.dispatchEvent(new work.window.Event('toggle'));let rule=wd.querySelector('#adductRules details');rule.open=true;rule.dispatchEvent(new work.window.Event('toggle',{bubbles:true}));assert.equal(wd.querySelector('#adductRules details'),rule,'nested toggle must not recreate editor');
+rule.querySelectorAll('button')[3]?.click();assert(wd.querySelector('#adductRules details').open);
+await new Promise(r=>setTimeout(r,300));assert(wd.querySelector('#adductRules details').open);work.window.close();console.log('Architecture document editing, training import/export, isolation of training settings and nested adduct expansion passed.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -22,6 +22,8 @@
     "onCommand:fredis.editAdductRules",
     "onCommand:fredis.openResult",
     "onCommand:fredis.openEvaluation",
+    "onCommand:fredis.openColumnEvaluation",
+    "onCommand:fredis.openGroupedEvaluation",
     "onCustomEditor:fredis.resultViewer",
     "onCustomEditor:fredis.reactionPatternAnalysisConfigEditor",
     "onCustomEditor:fredis.reactionPatternAnalysisResultEditor",
@@ -30,7 +32,8 @@
     "onCustomEditor:fredis.reactionPatternEditor",
     "onCustomEditor:fredis.adductRuleEditor",
     "onCustomEditor:fredis.adductRuleSetEditor",
-    "onCustomEditor:fredis.fragmenterEditor"
+    "onCustomEditor:fredis.fragmenterEditor",
+    "onCustomEditor:fredis.modelArchitectureEditor"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -54,6 +57,14 @@
       {
         "command": "fredis.openEvaluation",
         "title": "FREDIS: Open Evaluation"
+      },
+      {
+        "command": "fredis.openColumnEvaluation",
+        "title": "FREDIS: Evaluation: Column Summary"
+      },
+      {
+        "command": "fredis.openGroupedEvaluation",
+        "title": "FREDIS: Evaluation: Compare Tools and Datasets"
       },
       {
         "command": "fredis.importDataset",
@@ -118,6 +129,12 @@
           },
           {
             "filenamePattern": "*.fredis-result"
+          },
+          {
+            "filenamePattern": "*.training-data.pft"
+          },
+          {
+            "filenamePattern": "*.tuning.pft"
           }
         ],
         "priority": "default"
@@ -126,8 +143,12 @@
         "viewType": "fredis.evaluationConfigEditor",
         "displayName": "FREDIS Evaluation",
         "selector": [
-          { "filenamePattern": "*.evalcol.pft" },
-          { "filenamePattern": "*.evalgroup.pft" }
+          {
+            "filenamePattern": "*.evalcol.pft"
+          },
+          {
+            "filenamePattern": "*.evalgroup.pft"
+          }
         ],
         "priority": "default"
       },
@@ -135,7 +156,9 @@
         "viewType": "fredis.reactionPatternEditor",
         "displayName": "FREDIS Reaction Pattern",
         "selector": [
-          { "filenamePattern": "*.reaction.pft" }
+          {
+            "filenamePattern": "*.reaction.pft"
+          }
         ],
         "priority": "default"
       },
@@ -143,7 +166,9 @@
         "viewType": "fredis.reactionPatternSetEditor",
         "displayName": "FREDIS Reaction Pattern Set",
         "selector": [
-          { "filenamePattern": "*.reactionset.pft" }
+          {
+            "filenamePattern": "*.reactionset.pft"
+          }
         ],
         "priority": "default"
       },
@@ -151,7 +176,9 @@
         "viewType": "fredis.adductRuleEditor",
         "displayName": "FREDIS Fragment Ion Adduct Rule",
         "selector": [
-          { "filenamePattern": "*.adduct.pft" }
+          {
+            "filenamePattern": "*.adduct.pft"
+          }
         ],
         "priority": "default"
       },
@@ -159,7 +186,9 @@
         "viewType": "fredis.adductRuleSetEditor",
         "displayName": "FREDIS Fragment Ion Adduct Rule Set",
         "selector": [
-          { "filenamePattern": "*.adductset.pft" }
+          {
+            "filenamePattern": "*.adductset.pft"
+          }
         ],
         "priority": "default"
       },
@@ -167,7 +196,19 @@
         "viewType": "fredis.fragmenterEditor",
         "displayName": "FREDIS Fragmenter Config",
         "selector": [
-          { "filenamePattern": "*.fragmenter.pft" }
+          {
+            "filenamePattern": "*.fragmenter.pft"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.modelArchitectureEditor",
+        "displayName": "FREDIS Model Architecture",
+        "selector": [
+          {
+            "filenamePattern": "*.architecture.pft"
+          }
         ],
         "priority": "default"
       }
@@ -235,25 +276,35 @@
           "minimum": 80,
           "maximum": 1200,
           "description": "Maximum width in pixels of the SMILES column in Reaction Pattern Analysis. Full SMILES remain available from the Copy button."
+        },
+        "fredis.workbench.trainableDefaults": {
+          "type": "object",
+          "default": {},
+          "description": "Default Fragmenter configuration for Trainable Spectra. Save from the Trainable Spectra editor."
         }
       }
     },
     "languages": [
       {
         "id": "fredis-workbench-file",
-        "aliases": ["FREDIS Workbench File"],
+        "aliases": [
+          "FREDIS Workbench File"
+        ],
         "extensions": [
           ".pft",
-        ".fredis-result",
-        ".reaction-pattern-analysis.pft",
-        ".reactionpatternanalysis.pft",
+          ".fredis-result",
+          ".reaction-pattern-analysis.pft",
+          ".reactionpatternanalysis.pft",
           ".evalcol.pft",
           ".evalgroup.pft",
           ".reaction.pft",
           ".reactionset.pft",
           ".adduct.pft",
           ".adductset.pft",
-          ".fragmenter.pft"
+          ".fragmenter.pft",
+          ".training-data.pft",
+          ".tuning.pft",
+          ".architecture.pft"
         ],
         "icon": {
           "light": "./media/icons/fredis-file.svg",
@@ -277,13 +328,18 @@
           "name": "FREDIS Workbench"
         }
       ]
+    },
+    "configurationDefaults": {
+      "[fredis-workbench-file]": {
+        "files.autoSave": "off"
+      }
     }
   },
   "scripts": {
     "build:spectrum-viewer": "node scripts/build-spectrum-viewer.js",
     "vscode:prepublish": "npm run build:spectrum-viewer",
     "dev": "code --extensionDevelopmentPath=. --new-window .",
-    "check": "node --check src/extension.js && node --check src/configuration.js && node --check src/webview-path-drop.js && node --check src/features/evaluation/editor.js && node --check src/features/evaluation/grouped-boxplot.js && node --check src/features/smarts-search/editor.js && node --check src/features/reaction-pattern-set/editor.js && node --check src/features/reaction-pattern-set/visual-editor.js && node --check src/features/reaction-pattern-set/reaction-preview.js && node --check src/features/reaction-pattern-set/reaction-service.js && node --check src/features/reaction-pattern-set/host.js && node --check src/features/adduct-rule-set/editor.js && node --check src/features/adduct-rule-set/ui.js && node --check src/features/spectrum-viewer/host.js && node --check src/features/spectrum-viewer/extension.js && node --check src/features/spectrum-viewer/workbench.js && node --check src/features/spectrum-viewer/upstream.js && node scripts/check-reaction-service.js && node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js && node scripts/check-adduct-rule-ui.js && node --check src/features/spectrum-prediction/editor.js && python scripts/check-reaction-pattern-visual-products.py && node scripts/check-fragmenter-editor.js && node scripts/check-evaluation.js && node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js && node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js && node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py && node scripts/check-result-webview.js && node scripts/check-smarts-compound-view.js && node scripts/check-step-validation.js && node scripts/check-training-metrics.js && node scripts/check-training-report.js && node scripts/check-language-icon.js && node scripts/check-fragmenter-file-editor.js && node scripts/check-fragment-tree-visualization.js",
+    "check": "node --check src/extension.js && node --check src/configuration.js && node --check src/webview-path-drop.js && node --check src/features/evaluation/editor.js && node --check src/features/evaluation/grouped-boxplot.js && node --check src/features/smarts-search/editor.js && node --check src/features/reaction-pattern-set/editor.js && node --check src/features/reaction-pattern-set/visual-editor.js && node --check src/features/reaction-pattern-set/reaction-preview.js && node --check src/features/reaction-pattern-set/reaction-service.js && node --check src/features/reaction-pattern-set/host.js && node --check src/features/adduct-rule-set/editor.js && node --check src/features/adduct-rule-set/ui.js && node --check src/features/spectrum-viewer/host.js && node --check src/features/spectrum-viewer/extension.js && node --check src/features/spectrum-viewer/workbench.js && node --check src/features/spectrum-viewer/upstream.js && node scripts/check-reaction-service.js && node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js && node scripts/check-adduct-rule-ui.js && node --check src/features/spectrum-prediction/editor.js && python scripts/check-reaction-pattern-visual-products.py && node scripts/check-fragmenter-editor.js && node scripts/check-evaluation.js && node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js && node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js && node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py && node scripts/check-result-webview.js && node scripts/check-smarts-compound-view.js && node scripts/check-step-validation.js && node scripts/check-training-metrics.js && node scripts/check-training-report.js && node scripts/check-language-icon.js && node scripts/check-fragmenter-file-editor.js && node scripts/check-fragment-tree-visualization.js && node scripts/check-trainable-spectra.js && node scripts/check-model-architecture.js",
     "package": "mkdir -p artifacts && npx @vscode/vsce package --allow-missing-repository --out artifacts/fredis_workbench-${npm_package_version}.vsix",
     "check:path-drop": "node scripts/check-path-drop.js && node scripts/check-path-drop-workbench.js",
     "check:training-sources": "python scripts/check-training-sources.py",
@@ -294,7 +350,9 @@
     "check:reaction-preview": "node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-service.js",
     "check:reaction-pattern-analysis": "node --check src/features/reaction-pattern-analysis/editor.js && node --check src/features/reaction-pattern-analysis/results-view.js && node scripts/check-reaction-pattern-analysis.js",
     "check:projects": "node scripts/check-projects.js",
-    "check:workbench": "node scripts/check-projects.js && node scripts/check-workbench.js && node scripts/check-workbench-jobs.js && node scripts/check-parameter-editor.js && node scripts/check-defaults.js"
+    "check:workbench": "node scripts/check-projects.js && node scripts/check-workbench.js && node scripts/check-workbench-jobs.js && node scripts/check-parameter-editor.js && node scripts/check-defaults.js",
+    "check:tuning": "node scripts/check-tuning.js && node scripts/check-tuning-result.js && cd .. && python -m unittest discover -s tests/ml/tuning -p \"test_*.py\"",
+    "check:competitive": "node scripts/check-competitive-mlps.js && python scripts/check-fragment-training-cli.py && cd .. && python -m pytest tests/ml/reaction/test_competitive_spectrum.py -q"
   },
   "devDependencies": {
     "@vscode/vsce": "2.15.0",

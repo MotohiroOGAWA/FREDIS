@@ -12,9 +12,7 @@ def default_output_file(input_file: str) -> str:
 
     input_path = Path(input_file)
     return str(
-        input_path.with_name(
-            input_path.stem + "_assigned_formula" + input_path.suffix
-        )
+        input_path.with_name(input_path.stem + "_assigned_formula" + input_path.suffix)
     )
 
 
@@ -40,9 +38,7 @@ def save_dataset(
         dataset.to_hdf5(str(output_path), mode="w")
         return
 
-    raise AttributeError(
-        "MSDataset must provide either save() or to_hdf5()."
-    )
+    raise AttributeError("MSDataset must provide either save() or to_hdf5().")
 
 
 def prepare_dataset_io(
@@ -135,9 +131,7 @@ def initialize_output_columns(
     """
 
     calc_formula_coverage_column = calc_formula_coverage_column.strip()
-    calc_formula_column = infer_calc_formula_column(
-        calc_formula_coverage_column
-    )
+    calc_formula_column = infer_calc_formula_column(calc_formula_coverage_column)
 
     if overwrite:
         dataset[calc_formula_coverage_column] = ""

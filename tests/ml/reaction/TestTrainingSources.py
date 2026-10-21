@@ -104,25 +104,15 @@ class TestTrainingSources(unittest.TestCase):
             validation = self._dataset(root, 'validation', ['Br', 'C', 'Cl', 'N', 'O'])
             sources = dataset_sources(train, validation)
             self.assertEqual(sources['symbols'], ('Br', 'C', 'Cl', 'N', 'O'))
-            inherited = inherit_model_config({'mol_encoder_params': {'node_dim': 16}}, train, validation, prepared_max_roles=None)
+            inherited = inherit_model_config({'mol_encoder_params': {'node_dim': 16}}, train, validation)
             self.assertEqual(tuple(inherited['mol_encoder_params']['symbols']), ('Br', 'C', 'Cl', 'N', 'O'))
 
-    def test_inheritance_uses_given_max_roles(self):
+    def test_inheritance_has_no_role_capacity_setting(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             train = self._dataset(root, 'train', ['C', 'O'])
             validation = self._dataset(root, 'validation', ['C', 'O'])
-            inherited = inherit_model_config({'mol_encoder_params': {'node_dim': 16}}, train, validation,
-                                             prepared_max_roles=7)
-            self.assertEqual(inherited['reaction_model_params']['max_roles'], 7)
-
-    def test_unknown_max_roles_leaves_generator_default(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            train = self._dataset(root, 'train', ['C', 'O'])
-            validation = self._dataset(root, 'validation', ['C', 'O'])
-            inherited = inherit_model_config({'mol_encoder_params': {'node_dim': 16}}, train, validation,
-                                             prepared_max_roles=None)
+            inherited = inherit_model_config({'mol_encoder_params': {'node_dim': 16}}, train, validation)
             self.assertNotIn('max_roles', inherited.get('reaction_model_params', {}))
 
     def test_fresh_encoder_uses_configured_architecture_and_dataset_symbols(self):
@@ -133,7 +123,7 @@ class TestTrainingSources(unittest.TestCase):
             inherited = inherit_model_config(
                 {'mol_encoder_params': {'symbols': ['Xe'], 'node_dim': 48, 'graph_dim': 192,
                                         'num_layers': 3, 'num_heads': 6}},
-                train, validation, prepared_max_roles=None)
+                train, validation)
             self.assertEqual(inherited['mol_encoder_params']['symbols'], ['C', 'O'])
             self.assertEqual(inherited['mol_encoder_params']['node_dim'], 48)
             self.assertEqual(inherited['mol_encoder_params']['graph_dim'], 192)
@@ -154,10 +144,10 @@ class TestTrainingSources(unittest.TestCase):
             fragmenter = {'mass_tolerance': '0.01Da'}
             chemistry = {'fragmenter_params': fragmenter, 'symbols': ['C', 'O'], 'adduct_type_strs': ['[M+H]+']}
             (directory / 'preparation_config.json').write_text(json.dumps({'chemistry_config': chemistry}))
-            (directory / 'fragment-tree.pft').write_text(json.dumps({
+            (directory / 'fragment-tree.training-data.pft').write_text(json.dumps({
                 'fragmenterParams': fragmenter, 'symbols': ['O', 'C']}))
             (directory / 'reaction_statistics.json').write_text(json.dumps({'chemistry_config': chemistry}))
-            self.assertEqual(dataset_chemistry_config(directory), chemistry)
+            self.assertEqual(dataset_chemistry_config(directory), {**chemistry, 'reaction_models': []})
             stale = {'fragmenter_params': {'mass_tolerance': '0.5Da'}, 'symbols': ['C', 'N'], 'adduct_type_strs': ['[M+Na]+']}
             (directory / 'reaction_statistics.json').write_text(json.dumps({'chemistry_config': stale}))
             with self.assertRaisesRegex(ValueError, 'Regenerate this dataset'):
@@ -173,7 +163,7 @@ class TestTrainingSources(unittest.TestCase):
                      'adduct_type_strs': sources['adduct_type_strs'],
                      'mol_encoder_params': {'symbols': ('C', 'N', 'S')}}
             with self.assertRaisesRegex(ValueError, 'molecular encoder checkpoint'):
-                inherit_model_config({}, train, validation, saved_model=saved, prepared_max_roles=None)
+                inherit_model_config({}, train, validation, saved_model=saved)
 
     def test_sample_meets_assignment_score_treats_missing_scores_as_passing(self):
         self.assertTrue(training._sample_meets_assignment_score({'assignmentScore': None, 'assignmentScoreWithoutPrecursor': None}, 0.9, 0.9))

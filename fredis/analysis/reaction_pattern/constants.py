@@ -1,8 +1,9 @@
 """Names shared by the Reaction Pattern Analysis writer, reader and Workbench backend."""
+
 from __future__ import annotations
 
 SCHEMA = "fredis.reaction-pattern-analysis"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 1
 RESULT_FORMAT = "hdf5-tree-v1"
 
 RESULT_NAME = "result.reactionpatternanalysis.pft"
@@ -47,9 +48,14 @@ DISTRIBUTION_METRICS = (
     "newly_assigned_peak_count",
     "newly_assigned_intensity",
 )
-EDGE_METRICS = frozenset(name for name in DISTRIBUTION_METRICS
-                         if name.startswith(("parent_", "delta_", "newly_")))
-COVERAGE_METRICS = frozenset(name for name in DISTRIBUTION_METRICS if name.endswith("_coverage"))
+EDGE_METRICS = frozenset(
+    name
+    for name in DISTRIBUTION_METRICS
+    if name.startswith(("parent_", "delta_", "newly_"))
+)
+COVERAGE_METRICS = frozenset(
+    name for name in DISTRIBUTION_METRICS if name.endswith("_coverage")
+)
 HISTOGRAM_BINS = 20
 HISTOGRAM_RANGE = (0.0, 1.0)
 

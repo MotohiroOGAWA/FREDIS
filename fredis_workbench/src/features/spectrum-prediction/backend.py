@@ -1,6 +1,7 @@
 """Backend for predicting a single MS/MS spectrum from SMILES + CE + adduct."""
 from __future__ import annotations
 
+
 import contextlib
 import json
 import sys
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, ".")
+
+from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
 
 import torch
 from rdkit import Chem
@@ -125,12 +128,12 @@ def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=())
 
     spectrum_batch = result.spectrum_batch
     spectra = result.spectra
-    candidate_node_index = spectrum_batch.physical_candidate_node_index.detach().cpu().tolist()
+    candidate_node_index = spectrum_batch.state_node_index.detach().cpu().tolist()
     ion_probability = spectra.ion_probability.detach().cpu().tolist()
-    candidate_adduct = spectrum_batch.physical_candidate_adduct
-    candidate_sample_index = spectrum_batch.physical_candidate_sample_index.detach().cpu().tolist()
-    candidate_mz = spectrum_batch.physical_candidate_mz.detach().cpu().tolist()
-    candidate_formula_tensor = spectrum_batch.physical_candidate_formula_tensor
+    candidate_adduct = spectrum_batch.state_adducts
+    candidate_sample_index = spectrum_batch.state_sample_index.detach().cpu().tolist()
+    candidate_mz = spectrum_batch.state_mz.detach().cpu().tolist()
+    candidate_formula_tensor = spectrum_batch.state_formula_tensor
     intensity = spectra.intensity.detach().cpu().tolist()
 
     # Candidate ions below the trained confidence threshold are the same
@@ -142,7 +145,7 @@ def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=())
         if node not in local_index or candidate_sample_index[entry] != sample:
             continue
         probability = float(ion_probability[entry])
-        if probability < threshold:
+        if probability < threshold or not bool((candidate_formula_tensor[entry, :-1] >= 0).all()) or candidate_mz[entry] <= 0:
             continue
         annotations_by_node.setdefault(local_index[node], []).append(
             {
@@ -232,16 +235,18 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
     with torch.no_grad():
         result = generator.predict(
             [source], [adduct], [ce_ev],
-            precomputed={source.smiles: {"reactions": reactions}},
+            precomputed={source.smiles: {
+                "reactions": reactions,
+                "relations": ReactionRelations.from_reactions(reactions),
+            }},
         )
 
     if not result.spectra.mz.numel():
         raise ValueError("The model did not produce any peaks for this input.")
-    threshold = generator.generation.ion_prediction_threshold
     intensity_threshold = generator.generation.peak_intensity_threshold
-    node_indices = result.spectrum_batch.physical_candidate_node_index.detach().cpu().tolist()
+    node_indices = result.spectrum_batch.state_node_index.detach().cpu().tolist()
     node_smiles = result.spectrum_batch.node_smiles
-    ion_adducts = result.spectrum_batch.physical_candidate_adduct
+    ion_adducts = result.spectrum_batch.state_adducts
     peaks = sorted(
         (
             {
@@ -263,7 +268,7 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
             # Below the trained ion confidence threshold: the same unrelated
             # adduct/hydrogen-shift candidate this model now learns to push
             # toward zero, kept out of the predicted spectrum shown here.
-            if confidence >= threshold and intensity >= intensity_threshold
+            if intensity >= intensity_threshold and bool((formula_row[:-1] >= 0).all()) and mz > 0
         ),
         key=lambda peak: peak["mz"],
     )

@@ -1,4 +1,5 @@
 """Phase 2: group every valid spectrum of every dataset by unique compound."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ class SampleRecord:
     ``peak_index`` is the position in ``mz``; it is the peak identity used to
     join Baseline and Pattern assignments (never the m/z float).
     """
+
     dataset_id: int
     record_index: int
     smiles: str
@@ -76,7 +78,9 @@ def group_compounds(samples: list[SampleRecord]) -> list[CompoundGroup]:
         compound_id = compound_id_for(canonical)
         group = groups.get(compound_id)
         if group is None:
-            group = groups[compound_id] = CompoundGroup(compound_id, canonical, sample.smiles)
+            group = groups[compound_id] = CompoundGroup(
+                compound_id, canonical, sample.smiles
+            )
         group.samples.append(sample)
     ordered = [groups[key] for key in sorted(groups)]
     next_sample_id = 0
@@ -98,8 +102,17 @@ def mark_precursor_peaks(groups: list[CompoundGroup], mass_tolerance) -> None:
         cache: dict[str, float] = {}
         for sample in group.samples:
             if sample.adduct not in cache:
-                cache[sample.adduct] = Adduct.parse(sample.adduct).apply_to_formula(formula).normalized.exact_mass
+                cache[sample.adduct] = (
+                    Adduct.parse(sample.adduct)
+                    .apply_to_formula(formula)
+                    .normalized.exact_mass
+                )
             target = cache[sample.adduct]
             sample.is_precursor = np.fromiter(
-                (bool(mass_tolerance.within(float(value), target)) for value in sample.mz),
-                dtype=bool, count=len(sample.mz))
+                (
+                    bool(mass_tolerance.within(float(value), target))
+                    for value in sample.mz
+                ),
+                dtype=bool,
+                count=len(sample.mz),
+            )

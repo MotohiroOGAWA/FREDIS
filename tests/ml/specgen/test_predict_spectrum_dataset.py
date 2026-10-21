@@ -92,7 +92,7 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     model_config = config()
     generator = create_spectrum_generator(model_config).eval()
     model_path = tmp_path / "model.pt"
-    torch.save({"model_config": {"params": model_config}, "model_state_dict": generator.state_dict()}, model_path)
+    torch.save({"model_config": model_config, "model_state_dict": generator.state_dict()}, model_path)
 
     dataset = direct_input_dataset(smiles_values=["CCCO", "CCCO"], collision_energy="20 eV", adduct_type="[M+H]+")
     dataset["SpecID"] = ["orig-1", "orig-2"]
@@ -138,7 +138,7 @@ def test_main_keeps_prepare_temp_files_under_output_dir_only_with_keep_temp(tmp_
     model_config = config()
     generator = create_spectrum_generator(model_config).eval()
     model_path = tmp_path / "model.pt"
-    torch.save({"model_config": {"params": model_config}, "model_state_dict": generator.state_dict()}, model_path)
+    torch.save({"model_config": model_config, "model_state_dict": generator.state_dict()}, model_path)
 
     dataset = direct_input_dataset(smiles_values=["CCCO", "CCN"], collision_energy="20 eV", adduct_type="[M+H]+")
     dataset["SpecID"] = ["orig-1", "orig-2"]
@@ -172,7 +172,7 @@ def test_main_writes_pft_json_before_prediction_even_if_it_later_fails(tmp_path,
     model_config = config()
     generator = create_spectrum_generator(model_config).eval()
     model_path = tmp_path / "model.pt"
-    torch.save({"model_config": {"params": model_config}, "model_state_dict": generator.state_dict()}, model_path)
+    torch.save({"model_config": model_config, "model_state_dict": generator.state_dict()}, model_path)
 
     dataset = direct_input_dataset(smiles_values=["CCCO"], collision_energy="20 eV", adduct_type="[M+H]+")
     dataset["SpecID"] = ["orig-1"]
@@ -202,7 +202,7 @@ def test_main_saves_successes_and_failure_report_for_unsupported_atoms(tmp_path,
     model_config = config()
     generator = create_spectrum_generator(model_config).eval()
     model_path = tmp_path / "model.pt"
-    torch.save({"model_config": {"params": model_config}, "model_state_dict": generator.state_dict()}, model_path)
+    torch.save({"model_config": model_config, "model_state_dict": generator.state_dict()}, model_path)
 
     dataset = direct_input_dataset(
         smiles_values=["CCCO", "CCN"], collision_energy="20 eV", adduct_type="[M+H]+"

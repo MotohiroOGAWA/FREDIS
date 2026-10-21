@@ -9,25 +9,24 @@ parser = build_arg_parser()
 base = ['--train-dir', 'train', '--val-dir', 'val', '--output-dir', 'out']
 argv = list(base)
 for flag, (_, _, kind, _) in MODEL_OPTIONS.items():
-    argv += ['--' + flag, str(0.25 if kind is float else 64)]
+    value = 'competitive' if flag=='spectrum-prediction-mode' else 'mlp' if flag=='collision-energy-encoding' else '32,16' if flag.endswith('fc-dims') else str(0.25 if kind is float else 64)
+    argv += ['--' + flag, value]
 config = training_model_config(parser.parse_args(argv))
 assert 'fragmenter_params' not in config
 for _, (section, key, kind, _) in MODEL_OPTIONS.items():
-    assert config[section][key] == (0.25 if kind is float else 64)
-assert config['reaction_model_params']['reaction_neighborhood_mode'] == 'hop_pooling'
-assert config['reaction_model_params']['reaction_neighborhood_max_hop'] == 3
-assert 'max_roles' not in config['reaction_model_params']
-none_config = training_model_config(parser.parse_args(argv + ['--reaction-neighborhood-mode', 'none']))
-assert none_config['reaction_model_params']['reaction_neighborhood_mode'] == 'none'
-with contextlib.redirect_stderr(io.StringIO()):
-    try:
-        parser.parse_args(argv + ['--reaction-neighborhood-mode', 'gnn'])
-    except SystemExit as error:
-        assert error.code == 2
-    else:
-        raise AssertionError('--reaction-neighborhood-mode gnn')
-hop_config = training_model_config(parser.parse_args(argv + ['--reaction-neighborhood-max-hop', '2']))
-assert hop_config['reaction_model_params']['reaction_neighborhood_max_hop'] == 2
+    expected = 'competitive' if key=='prediction_mode' else 'mlp' if key=='collision_energy_encoding' else [32,16] if key.endswith('fc_dims') else 0.25 if kind is float else 64
+    assert config[section][key] == expected
+assert 'reaction_neighborhood_mode' not in config['reaction_model_params']
+assert 'reaction_neighborhood_max_hop' not in config['reaction_model_params']
 for flag, (key, _, default) in MOL_ENCODER_OPTIONS.items():
     assert config['mol_encoder_params'][key] == default
+assert config['spectrum_model_params']['adduct_embedding_dim'] == 64
+assert 'ce_dropout' not in config['spectrum_model_params']
+with contextlib.redirect_stderr(io.StringIO()):
+    try:
+        parser.parse_args(base + ['--ce-dropout', '0.1'])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError('Removed CE dropout flag must be rejected')
 print('Explicit joint fragment CLI options passed.')

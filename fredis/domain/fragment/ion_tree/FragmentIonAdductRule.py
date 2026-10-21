@@ -55,6 +55,7 @@ class FragmentIonAdductRule:
         return FragmentIonAdductRule(
             name=self.name,
             adduct_type=self.adduct_type.copy(),
-            fragment_ion_adducts=tuple(value.copy() for value in self.fragment_ion_adducts),
+            fragment_ion_adducts=tuple(
+                value.copy() for value in self.fragment_ion_adducts
+            ),
         )
-

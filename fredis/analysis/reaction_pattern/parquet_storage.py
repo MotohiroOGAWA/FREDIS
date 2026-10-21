@@ -7,6 +7,7 @@ structures or paths (those are in C).  ``assigned::<condition_id>`` and
 compound; ``compound_condition`` in A tells which samples each condition
 evaluated.  An edge's newly assigned peaks are ``child and not parent``.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,10 +19,20 @@ from .comparison import CompoundComparison
 from .constants import assigned_column, count_column
 
 IDENTITY_COLUMNS = {
-    "compound_id": object, "smiles": object, "sample_id": "int64", "dataset_id": "int64",
-    "record_index": "int64", "sample_index": "int64", "peak_index": "int64", "adduct": object,
-    "collision_energy": "float64", "precursor_mz": "float64", "mz": "float64", "intensity": "float64",
-    "relative_intensity": "float64", "is_precursor": bool,
+    "compound_id": object,
+    "smiles": object,
+    "sample_id": "int64",
+    "dataset_id": "int64",
+    "record_index": "int64",
+    "sample_index": "int64",
+    "peak_index": "int64",
+    "adduct": object,
+    "collision_energy": "float64",
+    "precursor_mz": "float64",
+    "mz": "float64",
+    "intensity": "float64",
+    "relative_intensity": "float64",
+    "is_precursor": bool,
 }
 
 
@@ -41,7 +52,9 @@ def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
             "sample_index": np.full(count, sample.sample_index, dtype=np.int64),
             "peak_index": np.arange(count, dtype=np.int64),
             "adduct": np.full(count, sample.adduct, dtype=object),
-            "collision_energy": np.full(count, sample.collision_energy, dtype=np.float64),
+            "collision_energy": np.full(
+                count, sample.collision_energy, dtype=np.float64
+            ),
             "precursor_mz": np.full(count, sample.precursor_mz, dtype=np.float64),
             "mz": sample.mz.astype(np.float64),
             "intensity": sample.intensity.astype(np.float64),
@@ -50,12 +63,18 @@ def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
         }
         for condition_id in conditions:
             outcome = comparison.outcomes[condition_id]
-            part[assigned_column(condition_id)] = np.asarray(outcome.assigned[index], dtype=bool)
-            part[count_column(condition_id)] = np.asarray(outcome.counts[index], dtype=np.int32)
+            part[assigned_column(condition_id)] = np.asarray(
+                outcome.assigned[index], dtype=bool
+            )
+            part[count_column(condition_id)] = np.asarray(
+                outcome.counts[index], dtype=np.int32
+            )
         parts.append(pd.DataFrame(part))
     if parts:
         return pd.concat(parts, ignore_index=True)
-    frame = pd.DataFrame({name: pd.Series(dtype=dtype) for name, dtype in IDENTITY_COLUMNS.items()})
+    frame = pd.DataFrame(
+        {name: pd.Series(dtype=dtype) for name, dtype in IDENTITY_COLUMNS.items()}
+    )
     for condition_id in conditions:
         frame[assigned_column(condition_id)] = pd.Series(dtype=bool)
         frame[count_column(condition_id)] = pd.Series(dtype="int32")
@@ -72,7 +91,9 @@ def write_peaks(comparison: CompoundComparison, output: Path) -> Path:
     return path
 
 
-def read_condition_masks(path: Path, columns: dict[int, tuple[str, str | None]]) -> dict:
+def read_condition_masks(
+    path: Path, columns: dict[int, tuple[str, str | None]]
+) -> dict:
     """``{(sample_index, condition_id): (assigned, counts)}`` from a peak table.
 
     ``columns`` maps condition ids to their (assigned, count) column names in
@@ -88,7 +109,10 @@ def read_condition_masks(path: Path, columns: dict[int, tuple[str, str | None]])
             if assigned_name not in rows.columns:
                 continue
             assigned = rows[assigned_name].to_numpy(dtype=bool)
-            counts = (rows[count_name].to_numpy(dtype=np.int32) if count_name and count_name in rows.columns
-                      else assigned.astype(np.int32))
+            counts = (
+                rows[count_name].to_numpy(dtype=np.int32)
+                if count_name and count_name in rows.columns
+                else assigned.astype(np.int32)
+            )
             result[(int(sample_index), int(condition_id))] = (assigned, counts)
     return result

@@ -53,7 +53,7 @@ records with that SMILES (all adducts and collision energies)
   ├─ precursor resolution             records with an unreachable precursor are dropped
   ├─ peak annotation                  peaks → formulas → reaction combinations on the source
   ├─ teacher structure                teacher states, positive / weak-negative reactions
-  ├─ materialized teacher trees       physical-ion candidates and intensity targets
+  ├─ materialized teacher trees       ion-condition states and intensity targets
   └─ data/<stem>.preft.pt + one manifest row
 ```
 
@@ -236,27 +236,21 @@ states**: sets of primitive-reaction indices, starting from the empty state.
   - A positive reaction that is invalid is an error.
 
 The teacher states are then materialized into one fragment tree per branch
-group. `prepare_spectrum_model_batch` groups each node's formula entries into
-**physical-ion candidates**: (node, formula, net adduct, charge), each with its
-(fragment-ion adduct, ΔH) explanations.
+group. `prepare_spectrum_model_batch` creates one state per
+(structural node, fragment-ion adduct, hydrogen shift, sample). Conditions with
+equal formulas stay separate before prediction. Formula and m/z are annotations
+for peak assignment and output.
 
-- Every sample/node gets an independent fragment label. Every `(fragment-ion adduct, ΔH)`
-  explanation gets an independent state label; fragment-negative states
-  remain in state supervision.
-- Positive fragment/state rows store the maximum relative intensity of their
-  matched peaks (base peak = 1). The model applies `intensity_power` to these
-  prepared weights.
 - `target_intensity` is the highest observed intensity within tolerance of the
-  candidate m/z, or 0.
+  state m/z, or 0.
 
 The saved payload contains source graphs and primitive-reaction features, teacher
 reaction sets at every depth, valid continuations and next-state indices,
 positive paths per experimental peak, weak negatives, materialized fragment
-graph tensors, physical-ion candidates with explanations, formula tensors,
-exact m/z, charge, fragment/state labels and positive weights, intensity
-targets and peak annotations. The payload has a single
-current format with no version field, so regenerate `.preft.pt` files after a
-format change.
+graph tensors, ion-condition states, formula tensors with charge, exact m/z,
+precursor adducts, intensity targets and peak annotations.
+The payload uses schema `fredis.fragment-tree-training`. No format conversion is provided;
+regenerate `.preft.pt` files after a format change.
 
 ## Validation split
 
@@ -380,7 +374,7 @@ Otherwise:
   preparation_config.json      resolved CLI settings, chemistry_config and Workbench form state
   invalid_records.json         excluded records per input: {"train": [...], "validation": [...]}
   train_structures/
-    fragment-tree.pft          Workbench configuration of this split (status: running → completed)
+    fragment-tree.training-data.pft          Workbench configuration of this split (status: running → completed)
     data/smiles_<index:06d>_<sha1[:16]>.preft.pt
     manifest.tsv               one row per source (completed or skipped)
     assignment_scores.tsv      one row per kept sample
@@ -435,8 +429,7 @@ Tab-separated, one row per source, sorted by SMILES.
 | `num_teacher_nodes` | Teacher states, including one empty root per branch group |
 | `num_transition_states` | Teacher states plus one-step next states of valid reactions |
 | `num_positive_transitions` | Unique teacher (parent, child, reaction) steps |
-| `num_physical_ion_candidates` | Physical-ion candidates, replicated per sample |
-| `num_ion_explanations` | (fragment-ion adduct, ΔH) explanations of those candidates |
+| `num_ion_states` | Structural-node/ion-condition/sample states |
 | `max_teacher_reaction_count` | Largest number of reactions in a teacher state |
 | `num_nodes`, `num_edges` | Nodes and edges of the **materialized teacher trees**, not the full search tree |
 | `assignment_score`, `assignment_score_without_precursor` | Mean per-sample assignment scores |
@@ -451,7 +444,7 @@ Split-level summary:
 
 ```json
 {
-  "architecture": "fragment-tree-physical-ion",
+  "architecture": "fragment-tree-competitive-ion",
   "max_primitive_reactions": 83,
   "max_primitive_reactions_smiles": "…",
   "max_raw_combinations": 91234,
@@ -486,7 +479,7 @@ Split-level summary:
   - `num_teacher_nodes`, `num_positive_transitions`,
     `mean_teacher_nodes_per_sample`, `mean_positive_edges_per_sample`
   - `num_branch_groups`, `num_transition_states`,
-    `num_physical_ion_candidates`, `num_ion_explanations`,
+    `num_ion_states`,
     `max_teacher_reaction_count`
   - `num_sources`, `num_samples`, `num_metadata_valid_records`,
     `num_skipped_sources`, `num_skipped_records`, `num_rejected_records`,
@@ -542,3 +535,12 @@ Typical relations:
 User-facing guides: [data preparation](../../../../docs/guides/data-preparation.md)
 and [Workbench](../../../../docs/guides/workbench.md). Training details are in
 [`fragment_tree_training/README.md`](../../training/fragment_tree_training/README.md).
+
+
+### Retaining complete reaction-count levels
+
+During training data preparation, reaching a search limit retains the largest reaction count that can be enumerated exhaustively within the limit. For example, if the search exceeds a limit at reaction count 3, all results from count 3 and above are discarded, and annotation uses the complete tree through count 2. If even count 1 cannot be completed, annotation uses count 0 (Source only). Spectra whose precursors cannot be resolved in the retained tree are still excluded.
+
+`manifest.tsv` and `.preft.pt` metadata under `metadata.search_stats` record `requested_max_reaction_count`, `completed_max_reaction_count`, `search_truncated`, and `discarded_from_reaction_count`. The saved metadata also includes `limit_attempts`, containing each failed attempt's reaction-count bound, limit name, limit value, and observed counters. Ordinary search counters describe the complete retained tree.
+
+The same behavior applies to trainable SpecID verification, which uses `ReactionStructureBuilder`. After a limit is reached, the builder retries with a lower reaction-count bound instead of retaining incomplete combinations. If existing seeds exceed the retained bound, the source is excluded with a recorded reason rather than silently dropping those seeds.

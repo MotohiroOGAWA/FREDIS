@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from rdkit import Chem
 from rdkit.Chem import Descriptors, rdMolDescriptors
 
-
 DEFAULT_DESCRIPTOR_NAMES = (
     "ExactMolWt",
     "HeavyAtomCount",

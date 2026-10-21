@@ -44,7 +44,11 @@ class _FragmentEdgeStore:
         transitions = tuple(tuple(group) for group in transitions)
         if len(transitions) != num_edges:
             raise ValueError("transitions_by_edge must match source_indices")
-        if any(not isinstance(t, ReactionSequenceTransition) for group in transitions for t in group):
+        if any(
+            not isinstance(t, ReactionSequenceTransition)
+            for group in transitions
+            for t in group
+        ):
             raise TypeError("Invalid reaction transition")
         object.__setattr__(self, "transitions_by_edge", transitions)
         object.__setattr__(self, "source_indices", source_indices)

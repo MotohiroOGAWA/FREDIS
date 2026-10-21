@@ -20,7 +20,7 @@ async function inspectFiles(directory,extensions,limit,depth=5){
 }
 async function library(root){const [samples,models]=await Promise.all([
  inspectFiles(path.join(root,'data/minidata'),name=>/\.(msds|msp|mgf|tsv|csv|parquet)$/i.test(name),24,2),
- inspectFiles(path.join(root,'data/training'),name=>/^(last|best|model)\.pt$/i.test(name),40,9)
+ inspectFiles(path.join(root,'data/training'),name=>/\.pt$/i.test(name),40,9)
  ]);return {samples,models};}
 async function openDocumentation(context,root){
  const build=path.join(root,'docs/_build/html'),index=path.join(build,'index.html');
@@ -45,9 +45,18 @@ async function openDocumentation(context,root){
 function attach(panel,context,projectRoot){
  const post=data=>panel.webview.postMessage(data),latest=new Map();
  panel.webview.onDidReceiveMessage(async message=>{
- if(!message||!['data/columns','data/preview','data/check','data/preflight','data/model','library/load','library/pick','library/copy','library/open','shell/document','shell/github'].includes(message.type))return;
+ if(!message||!['data/columns','data/preview','data/check','data/preflight','data/model','library/load','library/pick','library/copy','library/open','shell/document','shell/github','models/pick','models/inspect','models/export','models/patternPick'].includes(message.type))return;
  try{
  const root=projectRoot(context);
+ if(message.type==='models/patternPick'){try{const chosen=await vscode.window.showOpenDialog({canSelectMany:false,canSelectFiles:true,canSelectFolders:false,filters:{'Reaction pattern or pattern set':['pft']}});if(!chosen?.[0])return;const result=await backend(context,root,'pattern-definitions',{path:chosen[0].fsPath});post({type:'models/patterns',...result});}catch(error){post({type:'models/patterns',error:error.message});}return;}
+ if(['models/pick','models/inspect','models/export','models/patternPick'].includes(message.type)){
+  try{
+   let file=message.path;
+   if(message.type==='models/pick'){const chosen=await vscode.window.showOpenDialog({canSelectMany:false,canSelectFiles:true,canSelectFolders:false,filters:{'Reaction model or prediction checkpoint':['pt']}});if(!chosen?.[0])return;file=chosen[0].fsPath;}
+   if(message.type==='models/export'){const chosen=await vscode.window.showSaveDialog({filters:{'Reaction model':['pt']},defaultUri:vscode.Uri.file(path.join(root,'pattern-'+message.pattern_id+'.reaction-model.pt'))});if(!chosen)return;const output=chosen.fsPath.endsWith('.reaction-model.pt')?chosen.fsPath:chosen.fsPath+'.reaction-model.pt';const result=await backend(context,root,'pattern-export',{path:file,pattern_id:message.pattern_id,output});post({type:'models/exported',path:result.path});return;}
+   const result=await backend(context,root,'model-inspect',{path:file});post({type:'models/inspected',target:message.target||'models',...result});
+  }catch(error){post({type:'models/inspected',target:message.target||'models',error:error.message});}return;
+ }
  if(message.type==='shell/document')await openDocumentation(context,root);
  if(message.type==='shell/github')await vscode.env.openExternal(vscode.Uri.parse('https://github.com/MotohiroOGAWA/FREDIS'));
  if(message.type==='library/load')post({type:'library/data',...await library(root)});

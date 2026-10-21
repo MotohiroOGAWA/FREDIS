@@ -51,7 +51,9 @@ def parse_neutral_loss_formula(loss_text: str) -> Formula:
 def format_neutral_loss_formula(loss_formula: Formula) -> str:
     elements = loss_formula.elements
     if elements and all(count <= 0 for count in elements.values()):
-        positive_elements = {element: -int(count) for element, count in elements.items()}
+        positive_elements = {
+            element: -int(count) for element, count in elements.items()
+        }
         return "-" + str(Formula(elements=positive_elements, charge=0))
 
     return str(loss_formula)
@@ -82,8 +84,7 @@ def parse_formula_assignment_label(label: str) -> FormulaAssignmentCandidate:
 
     if not text.endswith(")") or text.count("(") != 1 or text.count(")") != 1:
         raise ValueError(
-            "Neutral-loss formula labels must look like C5H3(-CH3). "
-            f"Got {text!r}."
+            "Neutral-loss formula labels must look like C5H3(-CH3). " f"Got {text!r}."
         )
 
     formula_text, loss_text = text[:-1].split("(", maxsplit=1)
@@ -117,8 +118,10 @@ def _neutral_loss_label_for_formula(
     loss_formula = formula - original_formula.plain
     loss_counts = list(loss_formula.elements.values())
 
-    if loss_counts and all(count <= 0 for count in loss_counts) and any(
-        count < 0 for count in loss_counts
+    if (
+        loss_counts
+        and all(count <= 0 for count in loss_counts)
+        and any(count < 0 for count in loss_counts)
     ):
         return f"{formula}({format_neutral_loss_formula(loss_formula)})"
 
@@ -165,25 +168,28 @@ def calculate_dbe(elements: dict[str, int]) -> float:
     Raises:
         AssertionError: If unsupported elements are present.
     """
-    allowed_elements = {'C', 'H', 'O', 'N', 'P', 'S', 'F', 'Cl', 'Br', 'I', 'Na'}
+    allowed_elements = {"C", "H", "O", "N", "P", "S", "F", "Cl", "Br", "I", "Na"}
     unsupported = set(elements.keys()) - allowed_elements
     assert not unsupported, f"Unsupported elements in formula: {unsupported}"
 
-    C = elements.get('C', 0)
-    H = elements.get('H', 0)
-    O = elements.get('O', 0)
-    N = elements.get('N', 0)
-    P = elements.get('P', 0)
-    S = elements.get('S', 0)
-    X = sum([elements.get(x, 0) for x in ['F', 'Cl', 'Br', 'I']])  # Halogens
-    
-    dbe = (2*C + N - H - X + 2) / 2.0
+    C = elements.get("C", 0)
+    H = elements.get("H", 0)
+    O = elements.get("O", 0)
+    N = elements.get("N", 0)
+    P = elements.get("P", 0)
+    S = elements.get("S", 0)
+    X = sum([elements.get(x, 0) for x in ["F", "Cl", "Br", "I"]])  # Halogens
+
+    dbe = (2 * C + N - H - X + 2) / 2.0
     return dbe
 
-def enumerate_possible_sub_formulas(elements: dict[str, int], timeout:float=float('inf')) -> Generator[tuple[dict[str, int], float], None, None]:
+
+def enumerate_possible_sub_formulas(
+    elements: dict[str, int], timeout: float = float("inf")
+) -> Generator[tuple[dict[str, int], float], None, None]:
     base_elements = [(elem, count) for elem, count in elements.items() if elem != "H"]
     max_h = elements.get("H", 0)
-    
+
     # Create all combinations from 0 to the original count for each element (excluding H)
     ranges = [range(c + 1) for _, c in base_elements]
 
@@ -193,7 +199,7 @@ def enumerate_possible_sub_formulas(elements: dict[str, int], timeout:float=floa
             raise TimeoutError("Timeout exceeded during formula enumeration.")
         # Generate element count combinations
         temp_counts = {elem: count for (elem, _), count in zip(base_elements, counts)}
-        
+
         # Try hydrogen counts from 0 to max_h
         for h in range(max_h + 1):
             dbe = calculate_dbe(temp_counts | {"H": h})
@@ -203,10 +209,13 @@ def enumerate_possible_sub_formulas(elements: dict[str, int], timeout:float=floa
             temp_counts["H"] = h
             if sum(temp_counts.values()) == 0:
                 continue
-            
+
             yield temp_counts.copy(), dbe
 
-def get_possible_sub_formulas(formula: Formula, hydrogen_delta: int = 0, timeout: float=float('inf')) -> Dict[str, float]:
+
+def get_possible_sub_formulas(
+    formula: Formula, hydrogen_delta: int = 0, timeout: float = float("inf")
+) -> Dict[str, float]:
     """
     Generate possible sub-formulas with their degree of unsaturation.
     Returns a dictionary of sub-formula strings and their DBE values.
@@ -218,13 +227,18 @@ def get_possible_sub_formulas(formula: Formula, hydrogen_delta: int = 0, timeout
 
     sub_formulas = [
         Formula(candidate_elements, charge=0)
-        for candidate_elements, dbe in enumerate_possible_sub_formulas(elements, timeout=timeout)
+        for candidate_elements, dbe in enumerate_possible_sub_formulas(
+            elements, timeout=timeout
+        )
     ]
 
-    sub_formulas = sorted(sub_formulas , key=lambda f: (f.exact_mass, str(f.plain_value)))
+    sub_formulas = sorted(
+        sub_formulas, key=lambda f: (f.exact_mass, str(f.plain_value))
+    )
 
     return sub_formulas
-    
+
+
 def assign_formulas_to_peaks(
     peaks_mz: List[float],
     formula_candidates: Sequence[Union[Formula, str, FormulaAssignmentCandidate]],
@@ -293,20 +307,16 @@ def assign_formulas_to_peaks(
             "mz": mz,
             "n_matches": len(matches),
             "matched_formulas": [
-                formula_name
-                for _formula_index, formula_name, _error in matches
+                formula_name for _formula_index, formula_name, _error in matches
             ],
             "matched_formula_indices": [
-                formula_index
-                for formula_index, _formula_name, _error in matches
+                formula_index for formula_index, _formula_name, _error in matches
             ],
-            "mass_errors": [
-                error
-                for _formula_index, _formula_name, error in matches
-            ],
+            "mass_errors": [error for _formula_index, _formula_name, error in matches],
         }
 
     return results
+
 
 def get_isotopic_masses(formula: Formula) -> List[Tuple[float, int, int]]:
     """
@@ -345,8 +355,8 @@ def get_isotopic_masses(formula: Formula) -> List[Tuple[float, int, int]]:
     n_br = formula._elements.get("Br", 0)
 
     # --- Isotopic mass differences (Da) ---
-    delta_cl = 1.99705   # 37Cl - 35Cl
-    delta_br = 1.99795   # 81Br - 79Br
+    delta_cl = 1.99705  # 37Cl - 35Cl
+    delta_br = 1.99795  # 81Br - 79Br
 
     # --- No isotopic elements ---
     if n_cl == 0 and n_br == 0:

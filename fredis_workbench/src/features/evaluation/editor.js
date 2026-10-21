@@ -132,14 +132,16 @@ function parseEvaluationConfig(value, expectedKind) {
   return value.config;
 }
 
-function open(context, output, projectRoot) {
+function open(context, output, projectRoot, kind = null) {
+  if (kind !== null) evaluationConfigSuffix(kind);
   const panel = vscode.window.createWebviewPanel('fredis.evaluation', 'FREDIS Evaluation', vscode.ViewColumn.One, {
     enableScripts: true, retainContextWhenHidden: true
   });
-  attach(panel, context, output, projectRoot);
+  attach(panel, context, output, projectRoot, null, kind);
+  return panel;
 }
 
-function attach(panel, context, output, projectRoot, initialDocument = null) {
+function attach(panel, context, output, projectRoot, initialDocument = null, initialKind = null) {
   panel.webview.options = { ...panel.webview.options, enableScripts: true };
   panel.webview.html = html();
   pathDrop.attach(panel);
@@ -147,6 +149,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null) {
   panel.webview.onDidReceiveMessage(async message => {
     try {
       if (message.type === 'evaluationReady') {
+        if (initialKind) await panel.webview.postMessage({ type: 'evaluationTabSelected', kind: initialKind });
         if (!initialDocument) return;
         if (initialDocument.error) {
           panel.webview.postMessage({ type: 'error', message: initialDocument.error });
@@ -391,7 +394,7 @@ function html() {
   </script></section>${groupedHtml()}<script>
   document.querySelectorAll('[data-eval-tab]').forEach(button=>button.onclick=()=>{const grouped=button.dataset.evalTab==='grouped';document.getElementById('columnEvaluation').hidden=grouped;document.getElementById('groupedEvaluation').hidden=!grouped;document.querySelectorAll('[data-eval-tab]').forEach(item=>item.classList.toggle('active',item===button))});
   (${groupedClient.toString()})();
-  window.addEventListener('message',event=>{if(event.data.type==='evaluationConfigOpened'){const tab=document.querySelector('[data-eval-tab="'+event.data.kind+'"]');if(tab)tab.click()}});
+  window.addEventListener('message',event=>{if(['evaluationConfigOpened','evaluationTabSelected'].includes(event.data.type)){const tab=document.querySelector('[data-eval-tab="'+event.data.kind+'"]');if(tab)tab.click()}});
   document.addEventListener('keydown',e=>{
     const key=(e.key||'').toLowerCase();
     if(!(e.ctrlKey||e.metaKey)||e.shiftKey||e.altKey||key!=='s')return;

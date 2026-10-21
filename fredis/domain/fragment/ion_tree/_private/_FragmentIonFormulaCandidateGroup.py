@@ -45,8 +45,12 @@ class _FragmentIonFormulaCandidateGroup:
         indptr = np.asarray(self.indptr, dtype=np.int64)
         arrays = {
             name: np.asarray(getattr(self, name), dtype=np.int64)
-            for name in ("node_indices", "candidate_adduct_indices",
-                         "fragment_ion_adduct_positions", "hydrogen_shifts")
+            for name in (
+                "node_indices",
+                "candidate_adduct_indices",
+                "fragment_ion_adduct_positions",
+                "hydrogen_shifts",
+            )
         }
 
         if formulas.ndim != 1:
@@ -65,9 +69,13 @@ class _FragmentIonFormulaCandidateGroup:
             raise ValueError("candidate_adduct_indices contains out-of-range values.")
         positions = arrays["fragment_ion_adduct_positions"]
         if np.any(positions < 0) or np.any(positions >= len(self.fragment_ion_adducts)):
-            raise ValueError("fragment_ion_adduct_positions contains out-of-range values.")
+            raise ValueError(
+                "fragment_ion_adduct_positions contains out-of-range values."
+            )
 
-        object.__setattr__(self, "fragment_ion_adducts", tuple(self.fragment_ion_adducts))
+        object.__setattr__(
+            self, "fragment_ion_adducts", tuple(self.fragment_ion_adducts)
+        )
         object.__setattr__(self, "candidate_adducts", tuple(self.candidate_adducts))
         object.__setattr__(self, "formulas", formulas)
         object.__setattr__(self, "indptr", indptr)
@@ -97,7 +105,9 @@ class _FragmentIonFormulaCandidateGroup:
                 continue
             base_formula = compound.formula.normalized
 
-            for hydrogen_shift, hydrogen_shift_adduct in zip(hydrogen_shifts, hydrogen_shift_adducts):
+            for hydrogen_shift, hydrogen_shift_adduct in zip(
+                hydrogen_shifts, hydrogen_shift_adducts
+            ):
                 for position, fragment_ion_adduct in enumerate(fragment_ion_adducts):
                     formula = fragment_ion_adduct.apply_to_formula(
                         hydrogen_shift_adduct.apply_to_formula(base_formula)
@@ -107,20 +117,29 @@ class _FragmentIonFormulaCandidateGroup:
                         continue
 
                     candidate_adduct_index = cls._register_adduct(
-                        adduct=fragment_ion_adduct.add_prefer_self(hydrogen_shift_adduct),
+                        adduct=fragment_ion_adduct.add_prefer_self(
+                            hydrogen_shift_adduct
+                        ),
                         adducts=candidate_adducts,
                         adduct_key_to_index=candidate_adduct_key_to_index,
                     )
 
                     formula_to_candidates.setdefault(formula, []).append(
-                        (node_index, candidate_adduct_index, position, int(hydrogen_shift))
+                        (
+                            node_index,
+                            candidate_adduct_index,
+                            position,
+                            int(hydrogen_shift),
+                        )
                     )
 
         formulas: list[Formula] = []
         indptr: list[int] = [0]
         rows: list[tuple[int, int, int, int]] = []
 
-        for formula in sorted(formula_to_candidates, key=lambda value: value.exact_mass):
+        for formula in sorted(
+            formula_to_candidates, key=lambda value: value.exact_mass
+        ):
             formulas.append(formula)
             rows.extend(formula_to_candidates[formula])
             indptr.append(len(rows))

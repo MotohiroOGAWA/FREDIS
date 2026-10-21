@@ -15,7 +15,9 @@ from fredis.domain.formula.assign_formula import (
 class AssignFormulaCommand(CLICommand):
     name = "run"
     help = "Assign possible subformulas to MS/MS peaks."
-    description = "Assign possible subformulas to MS/MS peaks based on precursor formula."
+    description = (
+        "Assign possible subformulas to MS/MS peaks based on precursor formula."
+    )
     order = 10
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
@@ -54,7 +56,6 @@ class AssignFormulaCommand(CLICommand):
             default="0.01Da,10ppm",
             help="Mass tolerance string, e.g. 0.01Da,10ppm.",
         )
-
 
         parser.add_argument(
             "-max_formula",

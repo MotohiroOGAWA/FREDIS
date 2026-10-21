@@ -171,8 +171,7 @@ def assign_record_formulas(
     )
 
     assigned_formula_texts = [
-        ",".join(result["matched_formulas"])
-        for result in assignment_results
+        ",".join(result["matched_formulas"]) for result in assignment_results
     ]
 
     matched_intensity = sum(
@@ -181,11 +180,7 @@ def assign_record_formulas(
         if len(result["matched_formulas"]) > 0
     )
 
-    coverage = (
-        matched_intensity / total_intensity
-        if total_intensity > 0
-        else 0.0
-    )
+    coverage = matched_intensity / total_intensity if total_intensity > 0 else 0.0
 
     record.peaks[calc_formula_column] = assigned_formula_texts
     record[calc_formula_coverage_column] = str(coverage)

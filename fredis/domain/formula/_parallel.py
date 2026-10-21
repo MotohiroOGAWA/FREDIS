@@ -92,9 +92,7 @@ def merge_report_tsvs(
         return
 
     existing_files = [
-        input_file
-        for input_file in input_files
-        if os.path.exists(input_file)
+        input_file for input_file in input_files if os.path.exists(input_file)
     ]
 
     if len(existing_files) == 0:

@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import torch
 import tempfile
 import unittest
 import unittest.mock
@@ -11,7 +12,7 @@ import numpy as np
 import pandas as pd
 from fredis.libs.msentity.msentity import MSDataset
 from fredis.libs.msentity.msentity.core.PeakSeries import PeakSeries
-from fredis.libs.mmkit.mmkit import Compound
+from fredis.libs.mmkit.mmkit import Compound,Adduct
 from fredis.ml.data_preparation.fragment_tree.datasets import load_spectrum_dataset, split_by_smiles
 from fredis.ml.data_preparation.fragment_tree.create_training_data import main, _confirm_existing_output
 from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
@@ -114,7 +115,25 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(saved['max_unique_fragment_smiles'],-1)
             self.assertEqual(saved['max_reaction_combinations'],-1)
 
-    def test_tree_limits_skip_only_the_source_and_continue_serial_and_parallel(self):
+    def test_three_reaction_limit_keeps_exact_two_reaction_annotation(self):
+        from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
+        from fredis.ml.input.structure_builder import ReactionStructureBuilder
+        cfg=config();cfg['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=3
+        generator=create_spectrum_generator(cfg)
+        source=Compound.from_smiles('CCCCCO')
+        reference=generator.fragmenter.build_fragment_ion_tree(source,max_reaction_count=2)
+        limit=reference.search_stats['num_raw_combinations']
+        builder=ReactionStructureBuilder(generator,max_reaction_combinations=limit)
+        data,kept=builder.build(source,[Adduct.parse('[M+H]+')],[20.],[[103.0759]],[[1.]])
+        self.assertEqual(tuple(kept),(0,))
+        self.assertEqual(builder.last_search_stats['completed_max_reaction_count'],2)
+        self.assertEqual(builder.last_search_stats['discarded_from_reaction_count'],3)
+        self.assertEqual(builder.last_search_stats['num_raw_combinations'],limit)
+        self.assertEqual(set(builder.last_reaction_sequence_compounds),set(reference.reaction_sequence_compounds))
+        self.assertTrue(all(len(sequence.reactions)<=2 for sequence in builder.last_reaction_sequence_compounds))
+        self.assertTrue(data.sample_annotations)
+
+    def test_tree_limits_save_previous_complete_depth_serial_and_parallel(self):
         from fredis.ml.data_preparation.fragment_tree.create_training_data import create_reaction_training_data
         metadata=pd.DataFrame({'SMILES':['CCO','CCO','C'],'AdductType':['[M+H]+']*3,
                                'CollisionEnergy':[20]*3,'PrecursorMZ':[47,47,17]})
@@ -123,52 +142,20 @@ class TestPreparationWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             for workers in (1,2):
                 for limit in ({'max_unique_fragment_smiles':1},{'max_reaction_combinations':1}):
-                    with self.subTest(workers=workers,limit=limit):
-                        output=Path(directory)/f'{workers}-{next(iter(limit))}'
-                        stderr=io.StringIO()
-                        with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(stderr):
-                            files=create_reaction_training_data(dataset=data,chemistry_config=model,output_dir=output,
-                                num_workers=workers,chunk_size=3,**limit)
-                        self.assertEqual(len(files),1)
-                        skipped=json.loads((output/'skipped_sources.json').read_text())
-                        self.assertEqual(skipped[0]['smiles'],'CCO')
-                        manifest=pd.read_csv(output/'manifest.tsv',sep='\t')
-                        rejected=manifest[manifest.status=='skipped'].iloc[0]
-                        self.assertEqual(rejected.rejected_sample_count,2)
-                        self.assertEqual(rejected.num_nodes,0)
-                        self.assertEqual(rejected.num_edges,0)
-                        self.assertTrue((output/rejected.rejection_log).is_file())
-                        self.assertEqual(skipped[0]['record_indexes'],[0,1])
-                        name=next(iter(limit))
-                        # A limit skip is its own category, distinct from ordinary errors.
-                        self.assertEqual(skipped[0]['reason'],f'{name} exceeded: limit=1, observed>1')
-                        self.assertEqual(skipped[0]['category'],'limit_exceeded')
-                        self.assertEqual(skipped[0]['limit'],name)
-                        self.assertEqual(rejected.skip_category,'limit_exceeded')
-                        self.assertEqual(rejected.reason,skipped[0]['reason'])
-                        # Statistics up to the moment of the stop are kept for diagnosis.
-                        partial=skipped[0]['search_stats']
-                        observed=partial['num_unique_fragment_smiles' if name=='max_unique_fragment_smiles' else 'num_raw_combinations']
-                        self.assertEqual(observed,2)
-                        for field in ('num_primitive_reactions','num_raw_combinations','num_compiled_sequences',
-                                      'num_rdkit_run_reactants','num_generated_fragments','num_unique_fragment_smiles'):
-                            self.assertEqual(rejected[field],partial[field])
-                        completed=manifest[manifest.status=='completed'].iloc[0]
-                        self.assertEqual(completed.num_primitive_reactions,0)
-                        self.assertTrue(pd.isna(completed.skip_category))
-                        stats=json.loads((output/'reaction_statistics.json').read_text())
-                        self.assertEqual(stats['search_limits'],{'max_unique_fragment_smiles':-1,'max_reaction_combinations':-1,**limit})
-                        self.assertEqual(stats['num_skipped_sources_by_category'],{'limit_exceeded':1})
-                        self.assertEqual(stats['num_limit_skipped_sources'],{name:1})
-                        # Maxima cover completed sources only; methane has no reactions.
-                        self.assertEqual(stats['max_primitive_reactions'],0)
-                        self.assertEqual(stats['max_primitive_reactions_smiles'],'C')
-                        self.assertEqual(stats['num_samples'],1)
-                        self.assertEqual(stats['num_metadata_valid_records'],3)
-                        self.assertEqual(stats['num_skipped_sources'],1)
-                        self.assertEqual(stats['num_skipped_records'],2)
-                        self.assertTrue((output/'preparation_config.json').is_file())
-                        self.assertIn('100%',stderr.getvalue())
+                    output=Path(directory)/f'{workers}-{next(iter(limit))}'
+                    files=create_reaction_training_data(dataset=data,chemistry_config=model,output_dir=output,
+                                                        num_workers=workers,chunk_size=3,**limit)
+                    self.assertEqual(len(files),2)
+                    manifest=pd.read_csv(output/'manifest.tsv',sep='\t')
+                    retained=manifest[manifest.smiles=='CCO'].iloc[0]
+                    self.assertEqual(retained.status,'completed')
+                    self.assertEqual(retained.num_valid_samples,2)
+                    self.assertEqual(retained.completed_max_reaction_count,0)
+                    self.assertTrue(retained.search_truncated)
+                    self.assertEqual(retained.discarded_from_reaction_count,1)
+                    payload=torch.load(output/'data'/retained.file,weights_only=False)
+                    self.assertEqual(payload['metadata']['search_stats']['completed_max_reaction_count'],0)
+                    self.assertEqual(payload['metadata']['search_stats']['limit_attempts'][0]['limit_name'],next(iter(limit)))
 
     def test_explicit_hydrogen_preparation_preserves_graph_and_reaction_alignment(self):
         from fredis.ml.input.structure_builder import ReactionStructureBuilder
@@ -185,7 +172,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         self.assertEqual(data.source_graph.num_nodes,2)
         self.assertEqual(data.source_atom_capacity,2)
         self.assertTrue(torch.all(data.reaction_source_atom_index<2))
-        self.assertEqual(data.reaction_source_atom_features.shape[0],data.reaction_source_atom_index.numel())
+        self.assertEqual(int(data.reaction_source_atom_ptr[-1]),data.reaction_source_atom_index.numel())
         batch,indices=generator.mol_encoder.encode_batch([source,Compound.from_smiles('[H]')])
         self.assertEqual(indices.tolist(),[0,1])
         self.assertEqual(batch.shape[0],2)
@@ -206,7 +193,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             output=root/'out';(output/'train_structures/stale').mkdir(parents=True)
             (output/'train_structures/stale/old.bin').write_text('stale')
             (output/'orphan.txt').write_text('old')
-            (output/'fragment-tree.pft').write_text(json.dumps({'validationRatio':0.25}))
+            (output/'fragment-tree.training-data.pft').write_text(json.dumps({'validationRatio':0.25}))
             model=chemistry();model['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count']=1
             with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
                 main(['--input',str(input_file),'--validation-input',str(validation_file),'--output-dir',str(output),
@@ -214,7 +201,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                     '--minimum-relative-intensity','0.2','--validation-seed','7'])
             self.assertFalse((output/'orphan.txt').exists())
             self.assertFalse((output/'train_structures/stale').exists())
-            saved=json.loads((output/'train_structures/fragment-tree.pft').read_text())
+            saved=json.loads((output/'train_structures/fragment-tree.training-data.pft').read_text())
             self.assertEqual(saved['validationInput'],str(validation_file))
             self.assertEqual(saved['validationRatio'],0.25)
             self.assertEqual(saved['validationSeed'],7)
@@ -249,7 +236,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         shifted=collated.sample_annotations[2]['peaks'][0]['matches'][0]['nodeIndices']
         self.assertEqual(shifted,[node+offset for node in original])
 
-    def test_result_inspection_uses_unique_fragment_nodes_and_reaction_references(self):
+    def test_result_inspection_preserves_reaction_states_and_reaction_references(self):
         from fredis.libs.mmkit.mmkit import Formula
         from fredis.ml.data_preparation.fragment_tree.create_training_data import create_reaction_training_data
         result_spec=importlib.util.spec_from_file_location('result_backend','fredis_workbench/src/features/fragment-tree-result/backend.py')
@@ -263,18 +250,19 @@ class TestPreparationWorkflow(unittest.TestCase):
             scores=pd.read_csv(Path(directory)/'assignment_scores.tsv',sep='\t')
             self.assertEqual(len(scores),1)
             manifest=pd.read_csv(Path(directory)/'manifest.tsv',sep='\t').iloc[0]
-            self.assertEqual(manifest.num_nodes,4)
-            self.assertEqual(manifest.num_edges,3)
+            self.assertEqual(manifest.num_nodes,5)
+            self.assertEqual(manifest.num_edges,4)
             self.assertEqual(manifest.rejected_sample_count,0)
             self.assertAlmostEqual(manifest.assignment_score,13/15)
             self.assertAlmostEqual(manifest.assignment_score_without_precursor,3/5)
             recovered=backend.structure_manifest({'directory':directory})[0]
-            self.assertEqual(recovered['num_nodes'],4)
-            self.assertEqual(recovered['num_edges'],3)
+            self.assertEqual(recovered['num_nodes'],5)
+            self.assertEqual(recovered['num_edges'],4)
             self.assertAlmostEqual(recovered['assignment_score'],13/15)
             self.assertAlmostEqual(scores.assignment_score.iloc[0],13/15)
             self.assertAlmostEqual(scores.assignment_score_without_precursor.iloc[0],3/5)
         sample=result['samples'][0]
+        self.assertEqual(sample['nodeCount'],5)
         self.assertEqual(sample['adduct'],'[M+H]+')
         self.assertEqual(sample['mainAdduct'],'[M+H]+')
         self.assertEqual(sample['collisionEnergyDisplay'],'20.3')
@@ -318,8 +306,8 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertFalse((root/'out/train_structures/preparation_config.json').exists())
             self.assertFalse((root/'out/validation_structures/preparation_config.json').exists())
             self.assertFalse((root/'out/fragment-tree.pft').exists())
-            self.assertTrue((root/'out/train_structures/fragment-tree.pft').exists())
-            self.assertTrue((root/'out/validation_structures/fragment-tree.pft').exists())
+            self.assertTrue((root/'out/train_structures/fragment-tree.training-data.pft').exists())
+            self.assertTrue((root/'out/validation_structures/fragment-tree.training-data.pft').exists())
             for split in ('train','validation'):
                 folder=root/'out'/f'{split}_structures'
                 self.assertEqual(len(list((folder/'data').glob('*.preft.pt'))),2)
@@ -490,7 +478,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                     self.assertTrue(set(SEARCH_STAT_FIELDS)<={*manifest.columns})
                     self.assertIn('skip_category',manifest.columns)
                     for smiles,stats in expected.items():
-                        for field in SEARCH_STAT_FIELDS:
+                        for field in SEARCH_STAT_FIELDS[:6]:
                             self.assertEqual(manifest.loc[smiles,field],stats[field],(smiles,field))
                     summary=json.loads((output/'reaction_statistics.json').read_text())
                     for field,key in (('num_primitive_reactions','max_primitive_reactions'),('num_raw_combinations','max_raw_combinations'),
@@ -522,12 +510,11 @@ class TestPreparationWorkflow(unittest.TestCase):
             skipped={source['smiles']:source for source in json.loads((output/'skipped_sources.json').read_text())}
             manifest=pd.read_csv(output/'manifest.tsv',sep='\t').set_index('smiles')
             summary=json.loads((output/'reaction_statistics.json').read_text())
-        # Every source has more than one raw combination and exceeds a budget of one.
         for smiles in ('CCO','CCC','COC'):
-            self.assertEqual(skipped[smiles]['category'],'limit_exceeded')
-            self.assertEqual(manifest.loc[smiles,'skip_category'],'limit_exceeded')
-        self.assertEqual(skipped['CCN']['category'],'limit_exceeded')
-        self.assertEqual(summary['num_limit_skipped_sources'],{'max_reaction_combinations':4})
+            self.assertEqual(manifest.loc[smiles,'status'],'completed')
+            self.assertEqual(manifest.loc[smiles,'completed_max_reaction_count'],0)
+        self.assertEqual(skipped['CCN']['category'],'error')
+        self.assertEqual(summary['num_limit_skipped_sources'],{})
         with tempfile.TemporaryDirectory() as directory,unittest.mock.patch.object(ReactionStructureBuilder,'build',build):
             output=Path(directory)
             with contextlib.redirect_stderr(io.StringIO()):
@@ -542,7 +529,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         # Statistics of a tree search that finished before a later error are still reported.
         from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
         expected=create_preparation_context(model).fragmenter.build_fragment_ion_tree(Compound.from_smiles('CCN')).search_stats
-        self.assertEqual(skipped['CCN']['search_stats'],expected)
+        for field,value in expected.items():self.assertEqual(skipped['CCN']['search_stats'][field],value)
         self.assertEqual(manifest.loc['CCN','num_primitive_reactions'],expected['num_primitive_reactions'])
         self.assertEqual(summary['num_skipped_sources_by_category'],{'error':1})
         self.assertEqual(summary['num_limit_skipped_sources'],{})

@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Sequence
 
 import numpy as np
-import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
-
-from fredis.libs.msentity.msentity import MSDataset
 
 
 @dataclass(frozen=True)
@@ -60,17 +56,24 @@ def sample_validation_smiles_by_max_tanimoto(
         unique_validation, radius=radius, n_bits=n_bits
     )
     if not train_fingerprints:
-        raise ValueError("No valid training SMILES were available for Tanimoto sampling.")
+        raise ValueError(
+            "No valid training SMILES were available for Tanimoto sampling."
+        )
     if not validation_fingerprints:
-        raise ValueError("No valid validation SMILES were available for Tanimoto sampling.")
+        raise ValueError(
+            "No valid validation SMILES were available for Tanimoto sampling."
+        )
 
     target_count = min(
-        len(valid_smiles), max(1, int(math.ceil(len(valid_train_smiles) * float(ratio))))
+        len(valid_smiles),
+        max(1, int(math.ceil(len(valid_train_smiles) * float(ratio)))),
     )
     rng = np.random.default_rng(seed)
     bins: list[list[ValidationSmilesSample]] = [[] for _ in range(num_bins)]
     for smiles, fingerprint in zip(valid_smiles, validation_fingerprints):
-        maximum = float(max(DataStructs.BulkTanimotoSimilarity(fingerprint, train_fingerprints)))
+        maximum = float(
+            max(DataStructs.BulkTanimotoSimilarity(fingerprint, train_fingerprints))
+        )
         bin_index = min(int(maximum * num_bins), num_bins - 1)
         bins[bin_index].append(ValidationSmilesSample(smiles, maximum, bin_index))
 
@@ -91,57 +94,3 @@ def sample_validation_smiles_by_max_tanimoto(
         for values in active:
             selected.append(values.pop())
     return selected
-
-
-def sample_validation_dataset(
-    *,
-    train_dataset: MSDataset | None = None,
-    train_smiles: Sequence[str] | None = None,
-    validation_dataset: MSDataset,
-    smiles_column: str,
-    ratio: float,
-    num_bins: int,
-    radius: int,
-    n_bits: int,
-    seed: int,
-    output_file: str | Path,
-    report_file: str | Path,
-) -> Path:
-    if train_smiles is None:
-        if train_dataset is None:
-            raise ValueError("train_dataset or train_smiles is required.")
-        train_smiles = train_dataset.metadata[smiles_column].dropna().astype(str).tolist()
-    validation_smiles = validation_dataset.metadata[smiles_column].dropna().astype(str).tolist()
-    selected = sample_validation_smiles_by_max_tanimoto(
-        train_smiles,
-        validation_smiles,
-        ratio=ratio,
-        num_bins=num_bins,
-        radius=radius,
-        n_bits=n_bits,
-        seed=seed,
-    )
-    selected_smiles = {item.smiles for item in selected}
-    indexes = [
-        index
-        for index, value in enumerate(validation_dataset.metadata[smiles_column])
-        if not pd.isna(value) and str(value) in selected_smiles
-    ]
-
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    validation_dataset[indexes].save(str(output_path))
-
-    report_path = Path(report_file)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        [
-            {
-                "smiles": item.smiles,
-                "max_tanimoto_index": item.max_tanimoto_index,
-                "tanimoto_bin": item.bin_index,
-            }
-            for item in selected
-        ]
-    ).sort_values("max_tanimoto_index").to_csv(report_path, sep="\t", index=False)
-    return output_path

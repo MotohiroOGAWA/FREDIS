@@ -32,8 +32,7 @@ class FragmentIonTreeBuilder(FragmentTreeBuilder):
             FragmentIonAdductRuleSet,
         ):
             raise TypeError(
-                "fragment_ion_adduct_rule_set must be a "
-                "FragmentIonAdductRuleSet."
+                "fragment_ion_adduct_rule_set must be a " "FragmentIonAdductRuleSet."
             )
 
     def build(
@@ -135,7 +134,5 @@ class FragmentIonTreeBuilder(FragmentTreeBuilder):
         return FragmentIonTreeBuilder(
             max_reaction_count=self.max_reaction_count,
             reaction_pattern_set=self.reaction_pattern_set.copy(),
-            fragment_ion_adduct_rule_set=(
-                self.fragment_ion_adduct_rule_set.copy()
-            ),
+            fragment_ion_adduct_rule_set=(self.fragment_ion_adduct_rule_set.copy()),
         )

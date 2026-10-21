@@ -1,5 +1,5 @@
 """Precompute RDKit-heavy per-compound fragmentation data for spectrum
-prediction (reactions and candidate precursor sequences), in an
+prediction (reactions, pairwise relations and candidate precursor sequences), in an
 isolated process. RDKit does not parallelize well across Python threads, so
 real OS subprocess isolation is required for a speedup, not a thread pool.
 
@@ -9,6 +9,7 @@ fredis.utils.parallel_subprocess, and consuming the result) lives in
 build_prediction_cache() in source_reaction_msdataset.py, mirroring the
 create_training_data.py / subprocess_worker.py split.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -16,11 +17,12 @@ import pickle
 from pathlib import Path
 
 from fredis.libs.mmkit.mmkit import Adduct, Compound
+from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
 from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
 
 
 def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
-    """Reactions and, per requested adduct, the candidate precursor
+    """Reactions, pairwise chemistry relations and, per adduct, candidate precursor
     reaction sequences -- both plain picklable dataclasses (no live RDKit Mol
     references), reused verbatim (no RDKit call) by
     SourceAnchoredFragmentSpectrumGenerator.prepare().
@@ -35,6 +37,7 @@ def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
     sample sharing this compound down with it."""
     source = Compound.from_smiles(smiles)
     reactions = fragmenter.fragment_ion_tree_builder.create_reaction_instances(source)
+    relations = ReactionRelations.from_reactions(reactions)
     precursor_tree = None
     precursor_sequences = {}
     for adduct_str in adduct_strs:
@@ -45,12 +48,21 @@ def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
                 # most once per compound regardless of how many adducts it
                 # was requested with.
                 precursor_tree = fragmenter.build_fragment_ion_tree(
-                    source, max_reaction_count=fragmenter.precursor_candidate_max_reaction_count)
-            sequences = {pa.reaction_sequence for pa in fragmenter.resolve_precursor_reactions(precursor_tree, adduct)}
-            precursor_sequences[adduct_str] = tuple(sorted(sequences, key=lambda seq: (seq is not None, seq.key if seq else ())))
+                    source,
+                    max_reaction_count=fragmenter.precursor_candidate_max_reaction_count,
+                )
+            sequences = {
+                pa.reaction_sequence
+                for pa in fragmenter.resolve_precursor_reactions(precursor_tree, adduct)
+            }
+            precursor_sequences[adduct_str] = tuple(
+                sorted(
+                    sequences, key=lambda seq: (seq is not None, seq.key if seq else ())
+                )
+            )
         except Exception:
             precursor_sequences[adduct_str] = ()
-    return {"reactions": reactions, "precursor_sequences": precursor_sequences}
+    return {"reactions": reactions, "relations": relations, "precursor_sequences": precursor_sequences}
 
 
 def prepare_chunk(groups: dict[str, list[str]], prep_config: dict) -> dict[str, dict]:
@@ -61,7 +73,10 @@ def prepare_chunk(groups: dict[str, list[str]], prep_config: dict) -> dict[str, 
     results = {}
     for smiles, adduct_strs in groups.items():
         try:
-            results[smiles] = {"ok": True, **prepare_compound_cache(smiles, adduct_strs, fragmenter)}
+            results[smiles] = {
+                "ok": True,
+                **prepare_compound_cache(smiles, adduct_strs, fragmenter),
+            }
         except Exception as error:
             results[smiles] = {"ok": False, "error": f"{type(error).__name__}: {error}"}
     return results

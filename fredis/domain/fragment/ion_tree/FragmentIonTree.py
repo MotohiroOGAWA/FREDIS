@@ -9,7 +9,9 @@ from ....libs.mmkit.mmkit import Adduct, Compound
 from ..tree.FragmentTree import FragmentTree
 from .FragmentIonAdductRule import FragmentIonAdductRule
 from .FragmentIonAdductRuleSet import FragmentIonAdductRuleSet
-from ._private._FragmentIonFormulaCandidateGroup import _FragmentIonFormulaCandidateGroup
+from ._private._FragmentIonFormulaCandidateGroup import (
+    _FragmentIonFormulaCandidateGroup,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -31,18 +33,24 @@ class FragmentIonTree(FragmentTree):
     fragment_compounds: Tuple[Compound, ...]
     search_stats: Dict[str, int] | None = None
     reaction_sequence_compounds: Dict[Any, Compound] = field(default_factory=dict)
-    formula_candidate_groups: Dict[Adduct, _FragmentIonFormulaCandidateGroup] = field(default_factory=dict)
+    formula_candidate_groups: Dict[Adduct, _FragmentIonFormulaCandidateGroup] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         super().__post_init__()
 
         if not isinstance(self.fragment_ion_adduct_rule_set, FragmentIonAdductRuleSet):
-            raise TypeError("fragment_ion_adduct_rule_set must be a FragmentIonAdductRuleSet.")
+            raise TypeError(
+                "fragment_ion_adduct_rule_set must be a FragmentIonAdductRuleSet."
+            )
 
         object.__setattr__(self, "fragment_compounds", tuple(self.fragment_compounds))
         if len(self.fragment_compounds) != self.num_nodes:
             raise ValueError("fragment_compounds must have one Compound per node.")
-        if not all(isinstance(compound, Compound) for compound in self.fragment_compounds):
+        if not all(
+            isinstance(compound, Compound) for compound in self.fragment_compounds
+        ):
             raise TypeError("fragment_compounds must contain only Compound values.")
 
         if not isinstance(self.formula_candidate_groups, dict):
@@ -88,7 +96,9 @@ class FragmentIonTree(FragmentTree):
     @property
     def node_is_neutral(self) -> np.ndarray:
         """True for nodes that can take fragment-ion adducts."""
-        return np.asarray([compound.charge == 0 for compound in self.fragment_compounds], dtype=bool)
+        return np.asarray(
+            [compound.charge == 0 for compound in self.fragment_compounds], dtype=bool
+        )
 
     def get_adduct_rule_index_by_adduct_type(self, adduct_type: Adduct | str) -> int:
         """Return adduct rule index by main adduct type."""
@@ -98,15 +108,21 @@ class FragmentIonTree(FragmentTree):
         """Return the adduct rule of one main adduct type."""
         return self.fragment_ion_adduct_rule_set.get_rule_by_adduct_type(adduct_type)
 
-    def get_fragment_ion_adducts(self, node_index: int, adduct_type: Adduct | str) -> Tuple[Adduct, ...]:
+    def get_fragment_ion_adducts(
+        self, node_index: int, adduct_type: Adduct | str
+    ) -> Tuple[Adduct, ...]:
         """Fragment-ion adducts applicable to one node under one main adduct type."""
         if not 0 <= node_index < self.num_nodes:
-            raise IndexError(f"node_index must be in [0, {self.num_nodes}). Got {node_index}.")
+            raise IndexError(
+                f"node_index must be in [0, {self.num_nodes}). Got {node_index}."
+            )
         if self.fragment_compounds[node_index].charge != 0:
             return ()
         return self.get_adduct_rule(adduct_type).fragment_ion_adducts
 
-    def get_formula_candidate_group(self, adduct_type: Adduct | str) -> _FragmentIonFormulaCandidateGroup:
+    def get_formula_candidate_group(
+        self, adduct_type: Adduct | str
+    ) -> _FragmentIonFormulaCandidateGroup:
         """Return formula candidate group for one main adduct type, built lazily."""
         rule = self.get_adduct_rule(adduct_type)
         group = self.formula_candidate_groups.get(rule.adduct_type)
@@ -125,7 +141,9 @@ class FragmentIonTree(FragmentTree):
         formula: object,
     ) -> tuple[tuple[int, Adduct], ...]:
         """Return (node_index, candidate_adduct) candidates by formula."""
-        return self.get_formula_candidate_group(adduct_type).get_candidates_by_formula(formula)
+        return self.get_formula_candidate_group(adduct_type).get_candidates_by_formula(
+            formula
+        )
 
     def copy(self) -> FragmentIonTree:
         """Return a copy of this FragmentIonTree.

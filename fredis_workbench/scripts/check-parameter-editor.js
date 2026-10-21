@@ -36,57 +36,41 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  const current=editor.getValue(),args=buildArgs({input:'input.msds',outputDir:'output',fragmenterParams:current.fragmenter_params});assert(!args.includes('--params'));assert.deepEqual(JSON.parse(args[args.indexOf('--params-json')+1]),current.fragmenter_params);
  const dataArgs=buildArgs({input:'input.msds',outputDir:'out',fragmenterParams:current.fragmenter_params,symbols:current.symbols,maxUniqueFragmentSmiles:500,maxReactionCombinations:1000});assert(dataArgs.includes('--symbols-json'));assert.equal(dataArgs[dataArgs.indexOf('--max-unique-fragment-smiles')+1],'500');assert.equal(dataArgs[dataArgs.indexOf('--max-reaction-combinations')+1],'1000');assert(!dataArgs.includes('--max-node')&&!dataArgs.includes('--max-edge'));
  const trainingArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:current});assert(!trainingArgs.includes('--params'));assert(!trainingArgs.includes('--params-json'));
- // A resumed config always carries reaction_model_params.state_dropout and
- // spectrum_model_params.dropout (training_model_config writes both from the one
- // shared --dropout), but only that one shared field may ever be edited.
+ // Branch dropout remains linked to the shared setting; the new State Head
+ // dropout is independently editable in the spectrum model.
  const dropoutConfigRoot=new Element('div');
- createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{dropout:0.3}},'training');
+ createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{}},'training');
  assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.state_dropout'));
- assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.dropout'));
+ assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
+ assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');
- // Mol Encoder descriptors are checkboxes; the default is FormalCharge only.
- assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,['FormalCharge']);
- const descriptorBox=name=>walk(ionRoot).find(node=>node.dataset.parameterPath==='mol_encoder_params.descriptors.'+name);
- assert.equal(descriptorBox('FormalCharge').type,'checkbox');assert(descriptorBox('FormalCharge').checked);assert(!descriptorBox('TPSA').checked);
- descriptorBox('TPSA').checked=true;descriptorBox('TPSA').onchange();assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,['TPSA','FormalCharge']);
- descriptorBox('FormalCharge').checked=false;descriptorBox('FormalCharge').onchange();assert.deepEqual(ionEditor.getValue().mol_encoder_params.descriptors,['TPSA']);
+ // Descriptors are chosen only on the post-branch intensity head.
+ assert.equal(ionEditor.getValue().mol_encoder_params.external_feature_dim,0);assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,[]);
+ const descriptorBox=name=>walk(ionRoot).find(node=>node.dataset.parameterPath==='spectrum_model_params.descriptors.'+name);
+ assert.equal(descriptorBox('FormalCharge').type,'checkbox');assert(!descriptorBox('FormalCharge').checked);assert(!descriptorBox('TPSA').checked);
+ descriptorBox('TPSA').checked=true;descriptorBox('TPSA').onchange();assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,['TPSA']);
+ descriptorBox('FormalCharge').checked=false;descriptorBox('FormalCharge').onchange();assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,['TPSA']);
  const descriptorArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:ionEditor.getValue()});
- assert.deepEqual(descriptorArgs.slice(descriptorArgs.indexOf('--descriptors'),descriptorArgs.indexOf('--descriptors')+2),['--descriptors','TPSA']);
+ assert.deepEqual(descriptorArgs.slice(descriptorArgs.indexOf('--intensity-descriptors'),descriptorArgs.indexOf('--intensity-descriptors')+2),['--intensity-descriptors','TPSA']);
  descriptorBox('TPSA').checked=false;descriptorBox('TPSA').onchange();
  assert(!walk(ionRoot).some(node=>node.tag==='button'&&node.textContent.startsWith('Override ')));
  assert.equal(walk(ionRoot).find(node=>node.dataset.parameterPath==='generation_params.max_fragment_nodes').value,100);
- assert.equal(walk(ionRoot).find(node=>node.dataset.parameterPath==='generation_params.ion_prediction_threshold').value,0.5);
+ assert(!walk(ionRoot).some(node=>node.dataset.parameterPath==='generation_params.ion_prediction_threshold'));
  assert(!walk(ionRoot).some(node=>/loss_weight|intensity_power/.test(node.dataset.parameterPath||'')));
  assert(walk(ionRoot).some(node=>node.className==='parameter-group-heading'&&node.textContent==='Fragment Tree Search'));
  const ionArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:ionEditor.getValue()});
  assert.equal(ionArgs[ionArgs.indexOf('--max-fragment-nodes')+1],'100');
- assert.equal(ionArgs[ionArgs.indexOf('--ion-prediction-threshold')+1],'0.5');
+ assert(!ionArgs.includes('--ion-prediction-threshold'));
  assert(!ionArgs.includes('--fragment-loss-weight'));
- const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',fragmentLossWeight:0.4,intensityPower:1});
- assert.equal(lossArgs[lossArgs.indexOf('--fragment-loss-weight')+1],'0.4');
- assert.equal(lossArgs[lossArgs.indexOf('--intensity-power')+1],'1');
- // reaction_neighborhood_mode is a closed-choice Primitive Reaction Encoder setting,
- // defaulted like every other optional reaction_model_params field.
- const neighborhoodRoot=new Element('div'),neighborhoodEditor=createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
- const neighborhoodMode=walk(neighborhoodRoot).find(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode');
- assert.equal(neighborhoodMode.tag,'select');assert.deepEqual(neighborhoodMode.children.map(option=>option.value),['hop_pooling','none']);assert.equal(neighborhoodMode.value,'hop_pooling');
- // Neighborhood Max Hop defaults to 3 and starts enabled alongside hop_pooling.
- const maxHop=walk(neighborhoodRoot).find(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop');
- assert.equal(maxHop.value,3);assert(!maxHop.disabled);
- maxHop.value='2';maxHop.oninput();assert.equal(neighborhoodEditor.getValue().reaction_model_params.reaction_neighborhood_max_hop,2);
- neighborhoodMode.value='none';neighborhoodMode.onchange();assert.equal(neighborhoodEditor.getValue().reaction_model_params.reaction_neighborhood_mode,'none');
- // Switching to Mode=none re-renders and disables the now-meaningless Max Hop field.
- assert(walk(neighborhoodRoot).find(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop').disabled);
- const neighborhoodArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:neighborhoodEditor.getValue()});
- assert.equal(neighborhoodArgs[neighborhoodArgs.indexOf('--reaction-neighborhood-mode')+1],'none');
- assert.equal(neighborhoodArgs[neighborhoodArgs.indexOf('--reaction-neighborhood-max-hop')+1],'2');
- // max_roles is sized from the prepared dataset, never a form field, even
- // when a resumed/loaded config already carries one.
- const maxRolesRoot=new Element('div');
- createParameterEditor(maxRolesRoot,{reaction_model_params:{max_roles:96}},'training');
- assert(!walk(maxRolesRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.max_roles'));
+ const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',intensityLossWeight:0.4,cosineLossWeight:1});
+ assert.equal(lossArgs[lossArgs.indexOf('--intensity-loss-weight')+1],'0.4');
+ assert.equal(lossArgs[lossArgs.indexOf('--cosine-loss-weight')+1],'1');
+ // Neighborhood settings are owned by the per-pattern architecture editor.
+ const neighborhoodRoot=new Element('div');createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
+ assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode'));
+ assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop'));
  // Dropout is one shared training-level flag, not a per-component model_config override.
  const dropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',dropout:0.3});
  assert.equal(dropoutArgs[dropoutArgs.indexOf('--fragment-tree-dropout')+1],'0.3');

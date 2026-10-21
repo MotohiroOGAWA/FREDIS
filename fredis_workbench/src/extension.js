@@ -1,3 +1,4 @@
+const modelArchitecture=require('./features/model-architecture/editor');
 const reactionPatternUi = require('./features/reaction-pattern-set/ui');
 const {commonCss,formCss} = require('./features/reaction-pattern-set/styles');
 const projects = require('./workbench/project');
@@ -35,7 +36,7 @@ const fragmenterEditor = require('./features/fragmenter/editor');
 const reactionPatternHost = require('./features/reaction-pattern-set/host');
 const { projectRoot, isFredisRoot, runChemistryBackend, showElementPicker, readReactionPatternImport, safeFileStem, ensureFileSuffix } = reactionPatternHost;
 
-const RESULT_NAME = 'fragment-tree.pft';
+const RESULT_NAME = 'fragment-tree.training-data.pft';
 const REACTION_PATTERN_ANALYSIS_CONFIG_VIEW_TYPE = 'fredis.reactionPatternAnalysisConfigEditor';
 // result.reactionpatternanalysis.pft is binary HDF5; it opens in the Workbench, never as text.
 const REACTION_PATTERN_ANALYSIS_RESULT_VIEW_TYPE = 'fredis.reactionPatternAnalysisResultEditor';
@@ -50,6 +51,8 @@ function activate(context) {
     vscode.commands.registerCommand('fredis.openWorkbench', () => openWorkbench(context, output)),
     vscode.commands.registerCommand('fredis.openResult', openResultPicker),
     vscode.commands.registerCommand('fredis.openEvaluation', () => evaluation.open(context, output, projectRoot)),
+    vscode.commands.registerCommand('fredis.openColumnEvaluation', () => evaluation.open(context, output, projectRoot, 'column')),
+    vscode.commands.registerCommand('fredis.openGroupedEvaluation', () => evaluation.open(context, output, projectRoot, 'grouped')),
     vscode.window.registerCustomEditorProvider('fredis.resultViewer', provider, {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true
@@ -66,6 +69,7 @@ function activate(context) {
   evaluation.register(context, output, projectRoot);
   reactionPatternSetEditor.register(context);
   adductRuleSetEditor.register(context);
+  modelArchitecture.register(context);
   fragmenterEditor.register(context);
   workbench.register(context, output, projectRoot, openWorkbench);
   enableDevelopmentReload(context, output);
@@ -109,12 +113,12 @@ function defaultConfig(context) {
 function defaultTrainingConfig(context) {
   const root = projectRoot(context);
   // Architecture defaults not listed here are filled in by the parameter editor.
-  const modelConfig = { mol_encoder_params: { node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 } };
+  const modelConfig = { mol_encoder_params: { node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 }, reaction_model_params:{hidden_dim:128}, spectrum_model_params:{} };
   return workbenchDefaults.workflowDefaults('training',{
     application: 'fragment-tree-training', modelConfig, trainDir: '', valDir: '',
     outputDir: '',
-    experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.2, branchMilTemperature:0.1, fragmentLossWeight:0.5, stateLossWeight:0.5, intensityLossWeight:1, cosineLossWeight:0.5, precursorFreeLossWeight:0.5, intensityPower:0.5, gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
-    fineTuneCheckpoint: '', adapterWidth: 8
+    experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.5, branchMilTemperature:0.1,   intensityLossWeight:1, cosineLossWeight:1,   gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
+    fineTuneCheckpoint: '', headOnly: false
   },root);
 }
 
@@ -157,7 +161,8 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
   panel.onDidDispose(()=>{if(predictionProcess)workbench.stopChild(predictionProcess);});
   const initialConfig = defaultConfig(context);
   const initialTrainingConfig = defaultTrainingConfig(context);
-  panel.webview.html = workbench.secure(workbenchHtml(initialConfig, initialTrainingConfig,workbenchDefaults.workflowDefaults('prediction',{},projectRoot(context)),reactionPatternAnalysisUiSettings()), panel.webview);
+  modelArchitecture.attachWorkbench(panel);
+  panel.webview.html = workbench.secure(workbenchHtml(initialConfig, initialTrainingConfig,workbenchDefaults.workflowDefaults('prediction',{},projectRoot(context)),reactionPatternAnalysisUiSettings(),workbenchDefaults.workflowDefaults('trainable',{},projectRoot(context))), panel.webview);
   const panelContext = context;
   panel.webview.onDidReceiveMessage(async message => {
     if (message?.type === 'spectrumViewer') return;
@@ -170,14 +175,14 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
           panel.webview.postMessage({ type: 'picked', form: message.form, field: message.field, value: picked[0].fsPath });
         }
       } else if (message.type === 'saveConfig') {
-        const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS run configuration': ['pft'] }, defaultUri: vscode.Uri.file('fragment-tree.pft') });
+        const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS training dataset': ['training-data.pft'] }, defaultUri: vscode.Uri.file('fragment-tree.training-data.pft') });
         if (target) {await fs.promises.writeFile(target.fsPath, JSON.stringify(normalizeConfig(message.config), null, 2) + '\n');projects.record(context,'data',message.config,{label:path.basename(target.fsPath),reason:'exported',sourcePath:target.fsPath,base:projectRoot(context)});}
       } else if (['loadConfig','loadConfigFile','loadConfigJSON'].includes(message.type)) {
         // Extension-agnostic: this always loads a data-preparation run
         // configuration by content (normalizeConfig), so any filename works.
-        const picked = message.type==='loadConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadConfigJSON'?[{fsPath:message.name||'fragment-tree.pft'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
+        const picked = message.type==='loadConfigFile'?[vscode.Uri.file(message.path)]:message.type==='loadConfigJSON'?[{fsPath:message.name||'fragment-tree.training-data.pft'}]:await vscode.window.showOpenDialog({ canSelectMany: false });
         if (picked && picked[0]) {
-          const config = normalizeConfig(JSON.parse(message.type==='loadConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8')));
+          const config = normalizeConfig(JSON.parse(message.type==='loadConfigJSON'?message.json:await fs.promises.readFile(picked[0].fsPath, 'utf8')),message.type==='loadConfigJSON'?undefined:path.dirname(picked[0].fsPath));
           panel.webview.postMessage({ type: 'config', path: message.type==='loadConfigJSON'?undefined:picked[0].fsPath, config: normalizeConfig({ ...defaultConfig(context), ...config }) });
         }
       } else if (message.type === 'saveTrainingConfig') {
@@ -198,8 +203,6 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         }
       } else if (message.type === 'openResult') {
         await openResultPicker();
-      } else if (message.type === 'openEvaluation') {
-        evaluation.open(context, output, projectRoot);
       } else if (message.type === 'copyText') {
         await vscode.env.clipboard.writeText(String(message.text || ''));
       } else if (message.type === 'copyCommand') {
@@ -222,6 +225,14 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         const command = shellDisplay(python, buildTrainingArgs(normalizeTrainingConfig(message.config)));
         await vscode.env.clipboard.writeText(command);
         panel.webview.postMessage({ type: 'trainingStatus', status: 'idle', text: 'Command copied.', command });
+      } else if (message.type === 'training/pickIntegrationOutput') {
+        const selected=await vscode.window.showSaveDialog({filters:{'FREDIS checkpoint':['pt']}});
+        if(selected)panel.webview.postMessage({type:'training/integrationOutput',path:selected.fsPath});
+      } else if (message.type === 'training/integrate') {
+        try {
+          const result=await require('./workbench/services').backend(context,projectRoot(context),'training-integrate',message,{timeoutMs:0});
+          panel.webview.postMessage({type:'training/integrated',output:message.output,...result});
+        } catch(error) { panel.webview.postMessage({type:'training/integrated',error:error.message}); }
       } else if (message.type === 'runTraining') {
         await runTraining(context, output, normalizeTrainingConfig(message.config), panel);
       } else if (message.type === 'stop') {
@@ -337,7 +348,7 @@ function runSpectrumPredictionBackend(context, payload) {
   });
 }
 
-function normalizeConfig(config) {
+function normalizeConfig(config, baseDirectory) {
   const result={...config,...config.workbench_config};
   delete result.workbench_config;
   const aliases={validation_input:'validationInput',validation_ratio:'validationRatio',validation_seed:'validationSeed',
@@ -348,7 +359,8 @@ function normalizeConfig(config) {
     num_workers:'numWorkers',chunk_size:'chunkSize',max_unique_fragment_smiles:'maxUniqueFragmentSmiles',max_reaction_combinations:'maxReactionCombinations'};
   for(const [from,to] of Object.entries(aliases)){if(result[from]!==undefined&&result[to]===undefined)result[to]=result[from];delete result[from];}
   const chemistry=result.chemistry_config;delete result.chemistry_config;
-  if(chemistry){result.fragmenterParams??=chemistry.fragmenter_params;result.symbols??=chemistry.symbols;}
+  if(chemistry){result.fragmenterParams??=chemistry.fragmenter_params;result.symbols??=chemistry.symbols;result.reactionModels??=chemistry.reaction_models||[];}
+  if(baseDirectory&&Array.isArray(result.reactionModels))result.reactionModels=result.reactionModels.map(record=>({...record,...(record.source?{source:path.resolve(baseDirectory,record.source)}:{})}));
   if(result.validationRatio==null)delete result.validationRatio;
   if(result.validationInput==null)result.validationInput='';
   result.input ||= result.trainInput;
@@ -357,7 +369,7 @@ function normalizeConfig(config) {
 
 function normalizeTrainingConfig(config) {
   const result=JSON.parse(JSON.stringify(config||{}));
-  const model=result.modelConfig?.params||result.modelConfig;
+  const model=result.modelConfig;
   if(model&&typeof model==='object'&&!Array.isArray(model)){
     result.modelConfig={};
     for(const key of ['mol_encoder_params','reaction_model_params','spectrum_model_params','generation_params'])if(model[key]&&typeof model[key]==='object'&&!Array.isArray(model[key]))result.modelConfig[key]=model[key];
@@ -387,7 +399,7 @@ async function runFragmentTree(context, output, config, panel) {
   for (const key of ['input', 'outputDir']) if (!config[key]) throw new Error(`${key} is required.`);
   const root = projectRoot(context);
   const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
-  const resultPath = path.join(config.outputDir, 'train_structures', 'fragment-tree.pft');
+  const resultPath = path.join(config.outputDir, 'train_structures', 'fragment-tree.training-data.pft');
   const args = buildArgs(config);
   const command = shellDisplay(python, args);
   output.clear(); output.show(true); output.appendLine(`$ ${command}`);
@@ -409,14 +421,14 @@ async function runFragmentTree(context, output, config, panel) {
     const status = observed.job.status;
     if (code === 0) {
       for(const split of ['train','validation']){
-        const target=path.join(config.outputDir,split+'_structures','fragment-tree.pft');
+        const target=path.join(config.outputDir,split+'_structures','fragment-tree.training-data.pft');
         if(!fs.existsSync(target))continue;
         const saved=JSON.parse(await fs.promises.readFile(target,'utf8'));
         await fs.promises.writeFile(target,JSON.stringify({...saved,status:'completed',startedAt,finishedAt:new Date().toISOString(),exitCode:code,command:args},null,2)+'\n');
       }
     }
     panel.webview.postMessage({ type: 'status', status, text: signal ? 'Cancelled.' : code === 0 ? 'Completed.' : `Failed with exit code ${code}.`, resultPath });
-    if (code === 0) {const validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Validation Result'?validationPath:resultPath)); });}
+    if (code === 0) {const validationPath=path.join(config.outputDir,'validation_structures','fragment-tree.training-data.pft');vscode.window.showInformationMessage('FREDIS fragment tree data preparation completed.', 'Open Train Result',...(fs.existsSync(validationPath)?['Open Validation Result']:[])).then(choice => { if (choice) openResult(vscode.Uri.file(choice==='Open Validation Result'?validationPath:resultPath)); });}
   });
 }
 
@@ -424,6 +436,7 @@ function buildArgs(c) {
   const args=['-m', 'fredis.cli', 'train', 'create-fragment-tree-data',
     '--input', c.input || c.trainInput, '--output-dir', c.outputDir];
   if(c.fragmenterParams) args.push('--params-json',JSON.stringify(c.fragmenterParams));
+  if(c.reactionModels?.length)args.push('--reaction-models-json',JSON.stringify(c.reactionModels));
   if(c.symbols)args.push('--symbols-json',JSON.stringify(c.symbols));
   for(const [key,flag]of Object.entries({maxUniqueFragmentSmiles:'--max-unique-fragment-smiles',maxReactionCombinations:'--max-reaction-combinations'}))if(c[key]!==undefined)args.push(flag,String(c[key]));
   for(const [key,flag] of Object.entries({smilesColumn:'--smiles-column',adductTypeColumn:'--adduct-type-column',collisionEnergyColumn:'--collision-energy-column',precursorMzColumn:'--precursor-mz-column'}))if(c[key])args.push(flag,c[key]);
@@ -440,21 +453,25 @@ function buildArgs(c) {
 }
 
 function buildTrainingArgs(c) {
+  if(c.tuning?.enabled){const trials=require('./workbench/tuning').plan(c,buildTrainingArgs);return ['-m','fredis.cli','train','tune-fragment-tree','--plan-json',JSON.stringify({outputDir:c.outputDir,trials})];}
   const a = ['-m', 'fredis.cli', 'train', 'fragment-tree',
     '--train-dir', c.trainDir, '--val-dir', c.valDir, '--output-dir', c.outputDir,
     '--epochs', String(c.epochs || 1), '--batch-size', String(c.batchSize || 4),
     '--device', c.device || 'cuda', '--lr', String(c.lr ?? 0.0001)];
   if(!c.resume&&!c.fineTuneCheckpoint){
-    const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',state_num_layers:'reaction-state-layers',reaction_neighborhood_mode:'reaction-neighborhood-mode',reaction_neighborhood_max_hop:'reaction-neighborhood-max-hop'},spectrum_model_params:{hidden_dim:'spectrum-hidden-dim',num_layers:'spectrum-num-layers',num_heads:'spectrum-num-heads',ion_embedding_dim:'ion-embedding-dim',hydrogen_shift_embedding_dim:'hydrogen-shift-embedding-dim',state_hidden_dim:'ion-state-hidden-dim',main_adduct_dim:'main-adduct-embedding-dim',collision_energy_dim:'collision-energy-feature-dim'},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',ion_prediction_threshold:'ion-prediction-threshold',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist',dropout:'dropout'}};
-    for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,String(value));}
-    const descriptors=c.modelConfig?.mol_encoder_params?.descriptors;if(Array.isArray(descriptors))a.push('--descriptors',...descriptors);
+    if(c.pretrainedPatterns?.length||c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.reaction_model_params.state_dropout=c.dropout??0;model.spectrum_model_params??={};a.push('--model-architecture-json',JSON.stringify({model_config:model,pretrained_patterns:c.pretrainedPatterns||[]}));}
+
+    const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',state_num_layers:'reaction-state-layers'},spectrum_model_params:{"adduct_embedding_dim":"adduct-embedding-dim","collision_energy_dim": "collision-energy-feature-dim", "ce_fc_dims": "ce-fc-dims", "ce_center": "ce-center", "ce_scale": "ce-scale", "fragment_fc_dims": "fragment-fc-dims", "fragment_dropout": "fragment-dropout", "state_fc_dims": "state-fc-dims", "state_dropout": "state-dropout"},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist',dropout:'dropout'}};
+    for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,Array.isArray(value)?value.join(','):String(value));}
+    const descriptors=c.modelConfig?.spectrum_model_params?.descriptors;if(Array.isArray(descriptors))a.push('--intensity-descriptors',...descriptors);
   }
-  for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));
+  for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (!(c.resume&&key==='dropout')&&c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));
   if(c.cacheDatasetInMemory)a.push('--cache-dataset-in-memory');
   if(c.overwrite)a.push('--overwrite');
   if (c.initializeFrom) a.push('--initialize-from', c.initializeFrom);
   if (c.resume) a.push('--resume', c.resume);
-  if (c.fineTuneCheckpoint && !c.resume) a.push('--fine-tune-checkpoint', c.fineTuneCheckpoint, '--adapter-width', String(c.adapterWidth || 8));
+  if (c.fineTuneCheckpoint && !c.resume) a.push('--fine-tune-checkpoint', c.fineTuneCheckpoint);
+  if(c.headOnly&&c.fineTuneCheckpoint&&!c.resume)a.push('--head-only');
   return a;
 }
 
@@ -529,6 +546,7 @@ class ResultEditorProvider {
 
 async function resultHtml(manifestPath) {
   const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+  if (manifest.schema === 'fredis.tuning-result') return require('./features/tuning-result/view').html(manifest,commonCss());
   if (manifest.schema === 'fredis.training-report') {
     return trainingReport.html({ manifest, root: path.dirname(manifestPath), reportPath: manifestPath }, commonCss());
   }
@@ -686,7 +704,7 @@ function datasetStatisticsHtml(stats) {
 }
 
 function manifestTableHtml(manifest, index) {
-  const columns = ['file', 'status', 'smiles', 'num_input_records', 'num_valid_samples', 'rejected_sample_count', 'rejection_log', 'num_branch_groups', 'num_teacher_nodes', 'num_transition_states', 'num_positive_transitions', 'num_physical_ion_candidates', 'num_ion_explanations', 'max_teacher_reaction_count', 'num_nodes', 'num_edges', 'assignment_score', 'assignment_score_without_precursor', 'num_primitive_reactions', 'num_raw_combinations', 'num_compiled_sequences', 'num_rdkit_run_reactants', 'num_generated_fragments', 'num_unique_fragment_smiles', 'skip_category', 'reason'];
+  const columns = ['file', 'status', 'smiles', 'num_input_records', 'num_valid_samples', 'rejected_sample_count', 'rejection_log', 'num_branch_groups', 'num_teacher_nodes', 'num_transition_states', 'num_positive_transitions', 'num_ion_states', 'max_teacher_reaction_count', 'num_nodes', 'num_edges', 'assignment_score', 'assignment_score_without_precursor', 'num_primitive_reactions', 'num_raw_combinations', 'num_compiled_sequences', 'num_rdkit_run_reactants', 'num_generated_fragments', 'num_unique_fragment_smiles', 'skip_category', 'reason'];
   const rows = manifest.rows.map(row => `<tr>${columns.map(column => { const value = row[column] ?? ''; if(column.startsWith('assignment_score')) return `<td data-value="${escapeHtml(value)}" title="Mean per-sample intensity coverage">${value!==''&&Number.isFinite(Number(value))?(Number(value)*100).toFixed(2)+'%':'Unavailable'}</td>`; if(column==='rejection_log'&&!value)return '<td data-value="">—</td>'; if (column === 'file' && value && row.exists) return `<td data-value="${escapeHtml(value)}"><button class="manifest-file" data-open-file="${encodeURIComponent(row.relative)}">${escapeHtml(value)}</button></td>`; if (column === 'file' && value) return `<td data-value="${escapeHtml(value)}"><span>${escapeHtml(value)}</span><small class="missing-file">not generated (${escapeHtml(row.status || 'missing')})</small></td>`; if (column === 'rejection_log' && value) return `<td data-value="${escapeHtml(value)}"><button class="manifest-file" data-open-file="${encodeURIComponent(path.join(manifest.relativeBase || '', value))}">${escapeHtml(value)}</button></td>`; return `<td data-value="${escapeHtml(value)}">${escapeHtml(value)}</td>`; }).join('')}</tr>`).join('');
   return `<div class="manifest-grid" data-manifest-grid="${index}"><h3>${escapeHtml(manifest.directory)}</h3><div class="manifest-controls"><input type="search" data-manifest-search placeholder="Filter all columns…"><label>Rows <select data-page-size><option>20</option><option selected>50</option><option>100</option><option>250</option></select></label><button data-page-prev>Previous</button><span data-page-label></span><button data-page-next>Next</button></div><div class="table-scroll manifest-scroll"><table><thead><tr>${columns.map((column,columnIndex) => `<th class="sortable" data-manifest-sort="${columnIndex}" data-label="${escapeHtml(column)}">${escapeHtml(column)} ↕</th>`).join('')}</tr><tr class="column-filters">${columns.map((column,columnIndex) => `<th><input data-column-filter="${columnIndex}" placeholder="Filter…" aria-label="Filter ${escapeHtml(column)}"></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
@@ -710,7 +728,7 @@ function inspectFragmentTreeResult(context, target) {
 async function scan(root, dir, depth, limit, out = []) {
   if (depth < 0 || out.length >= limit) return out;
   for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
-    if (entry.name === RESULT_NAME || entry.name === 'fragment-tree.fredis-result' || entry.name.startsWith('.')) continue;
+    if (entry.name === RESULT_NAME || entry.name === 'fragment-tree.pft' || entry.name === 'fragment-tree.fredis-result' || entry.name.startsWith('.')) continue;
     if (entry.isDirectory() && entry.name === 'data' && /(?:train|validation)_structures$/.test(path.basename(dir))) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) await scan(root, full, depth - 1, limit, out);
@@ -761,7 +779,7 @@ const HELP = {
   ,modelPath: 'Trained fragment-tree model checkpoint (model.pt or a raw state_dict) used for spectrum prediction.'
 };
 
-function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPatternAnalysisUi = {}) {
+function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPatternAnalysisUi = {}, trainableConfig = {}) {
   return `<!doctype html><html><head><meta charset="UTF-8"><style>${commonCss()}${formCss()}${trainingCss()}${trainingWorkbench.css()}${pathDrop.css()}${workbench.css()}${parameterEditor.css()}${fragmentTreeVisualization.css()}${spectrumViewer.css()}${reactionPatternAnalysis.css()}</style></head><body><main>
   ${layout.header()}
   ${workbench.html()}<nav id="appNavigation"><button class="tab" data-app="smarts">SMARTS Search</button><button class="tab" data-app="fragmentTree">Fragment Tree</button><button class="tab" data-app="reactionViewer">Reaction Viewer</button><button class="tab" data-app="reactionPatternAnalysis">Reaction Pattern Analysis</button><button class="tab" data-app="reactionPatterns">Reaction Pattern Set</button><button class="tab" data-app="adduct">Adduct Rule Set</button><button class="tab active" data-app="data">Data Preparation</button><button class="tab" data-app="training">Training</button><button class="tab" data-app="predict">Predict Spectrum</button></nav>
@@ -776,7 +794,7 @@ function workbenchHtml(config, trainingConfig, predictionConfig = {}, reactionPa
   ${trainingWorkbench.html({pathField,field,optimization:workbench.trainingHtml(),parameters:parameterEditor.importHtml('training'),defaults:workbenchDefaults.html('training')})}
   <form id="predictForm" data-app-panel="predict" class="preparation-page prediction-page" novalidate hidden>
     ${spectrumPrediction.html()}${workbenchDefaults.html('prediction')}
-  </form><div id="helpTooltip" role="tooltip"></div><script>const vscode=acquireVsCodeApi();window.fredisMsentityBridge={postMessage:message=>vscode.postMessage({type:'spectrumViewer',message})}; const initial=${safeJson(config)}; const initialTraining=${safeJson(trainingConfig)};const initialPrediction=${safeJson(predictionConfig)}; ${pathDrop.script({host:true})}${webviewScript()}${reactionPatternVisualEditor.script()}${reactionPatternPreview.script()}${spectrumPrediction.script()}${workbench.script()}${parameterEditor.script()}${fragmentTreeVisualization.script()}${reactionPatternAnalysis.script(reactionPatternAnalysisUi)}${layout.script()}${datasetUpload.script()}${preparation.script()}${workbenchDefaults.script()}${trainingWorkbench.script()}${projects.script()}${spectrumViewer.script()}</script></main></body></html>`;
+  </form><div id="helpTooltip" role="tooltip"></div><script>const vscode=acquireVsCodeApi();window.fredisMsentityBridge={postMessage:message=>vscode.postMessage({type:'spectrumViewer',message})}; const initial=${safeJson(config)}; const initialTraining=${safeJson(trainingConfig)};const initialPrediction=${safeJson(predictionConfig)};const initialTrainable=${safeJson(trainableConfig)}; ${pathDrop.script({host:true})}${webviewScript()}${reactionPatternVisualEditor.script()}${reactionPatternPreview.script()}${spectrumPrediction.script()}${workbench.script()}${parameterEditor.script()}${fragmentTreeVisualization.script()}${reactionPatternAnalysis.script(reactionPatternAnalysisUi)}${layout.script()}${datasetUpload.script()}${preparation.script()}${workbenchDefaults.script()}${trainingWorkbench.script()}${projects.script()}${spectrumViewer.script()}</script></main></body></html>`;
 }
 function pathField(name,label,kind,form='data') { return `<label data-help="${HELP[name] || ''}">${label}<div class="path"><input name="${name}" data-path-kind="${kind}"><button type="button" data-pick="${name}" data-kind="${kind}" data-form="${form}">Browse</button></div>${HELP[name]?`<small class="field-help">${HELP[name]}</small>`:''}</label>`; }
 function field(name,label,type,step='1') { return `<label data-help="${HELP[name] || ''}">${label}<input name="${name}" type="${type}"${type==='number'?` step="${step}"`:''}>${HELP[name]?`<small class="field-help">${HELP[name]}</small>`:''}</label>`; }
@@ -797,9 +815,9 @@ function webviewScript() { return `
     const tooltip=document.getElementById('helpTooltip'); let tooltipTimer;
     document.querySelectorAll('[data-help]').forEach(el=>{el.addEventListener('mouseenter',()=>{tooltipTimer=setTimeout(()=>{const r=el.getBoundingClientRect();tooltip.textContent=el.dataset.help;tooltip.style.left=Math.min(r.left,window.innerWidth-390)+'px';tooltip.style.top=(r.bottom+7)+'px';tooltip.classList.add('visible');},500);});el.addEventListener('mouseleave',()=>{clearTimeout(tooltipTimer);tooltip.classList.remove('visible');});});
     setConfig(initial);setFormConfig(trainingForm,initialTraining);setFormConfig(predictForm,initialPrediction);if(initialPrediction.adductType)predictForm.elements.adductType.dataset.restoreValue=initialPrediction.adductType;setPredictEnabled(false); document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>vscode.postMessage({type:'pick',form:b.dataset.form||'data',field:b.dataset.pick,kind:b.dataset.kind}));
-    document.querySelectorAll('[data-app]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-app]').forEach(x=>x.classList.toggle('active',x===button));const app=button.dataset.app;if(app==='reactionPatterns'){document.getElementById('reactionPatternPageMount').append(document.getElementById('reactionPatternApp'));onReactionPatternChange=()=>{};}if(app==='adduct'){document.getElementById('adductPageMount').append(document.getElementById('adductApp'));onAdductChange=()=>{};}document.getElementById('homePage').hidden=true;document.getElementById('jobPage').hidden=true;document.getElementById('environmentPage').hidden=true;document.getElementById('spectrumViewerApp').hidden=true;document.getElementById('smartsApp').hidden=app!=='smarts';document.getElementById('fragmentTreeApp').hidden=app!=='fragmentTree';document.getElementById('reactionViewerApp').hidden=app!=='reactionViewer';document.getElementById('reactionPatternAnalysisApp').hidden=app!=='reactionPatternAnalysis';document.getElementById('reactionPatternApp').hidden=app!=='reactionPatterns';document.getElementById('adductApp').hidden=app!=='adduct';form.hidden=app!=='data';trainingForm.hidden=app!=='training';predictForm.hidden=app!=='predict';document.getElementById('dataActions').hidden=app!=='data';document.getElementById('appSubtitle').textContent=app==='smarts'?'SMARTS Search':app==='fragmentTree'?'Fragment Tree Visualization':app==='reactionViewer'?'Reaction Viewer':app==='reactionPatternAnalysis'?'Reaction Pattern Analysis':app==='reactionPatterns'?'Reaction Pattern Set Editor':app==='adduct'?'Fragment Ion Adduct Rule Set Editor':app==='training'?'Fragment Tree Training':app==='predict'?'Predict Spectrum':'Fragment Tree Data Preparation';if(app==='reactionViewer')window.dispatchEvent(new Event('reactionViewer/open'));if(app==='reactionPatternAnalysis')window.dispatchEvent(new Event('reactionPatternAnalysis/open'));});
+    document.querySelectorAll('[data-app]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-app]').forEach(x=>x.classList.toggle('active',x===button));const app=button.dataset.app;if(app==='reactionPatterns'){document.getElementById('reactionPatternPageMount').append(document.getElementById('reactionPatternApp'));onReactionPatternChange=()=>{};}if(app==='adduct'){document.getElementById('adductPageMount').append(document.getElementById('adductApp'));onAdductChange=()=>{};}document.getElementById('homePage').hidden=true;document.getElementById('modelsPage').hidden=true;document.getElementById('trainablePage').hidden=true;document.getElementById('jobPage').hidden=true;document.getElementById('environmentPage').hidden=true;document.getElementById('spectrumViewerApp').hidden=true;document.getElementById('smartsApp').hidden=app!=='smarts';document.getElementById('fragmentTreeApp').hidden=app!=='fragmentTree';document.getElementById('reactionViewerApp').hidden=app!=='reactionViewer';document.getElementById('reactionPatternAnalysisApp').hidden=app!=='reactionPatternAnalysis';document.getElementById('reactionPatternApp').hidden=app!=='reactionPatterns';document.getElementById('adductApp').hidden=app!=='adduct';form.hidden=app!=='data';trainingForm.hidden=app!=='training';predictForm.hidden=app!=='predict';document.getElementById('dataActions').hidden=app!=='data';document.getElementById('appSubtitle').textContent=app==='smarts'?'SMARTS Search':app==='fragmentTree'?'Fragment Tree Visualization':app==='reactionViewer'?'Reaction Viewer':app==='reactionPatternAnalysis'?'Reaction Pattern Analysis':app==='reactionPatterns'?'Reaction Pattern Set Editor':app==='adduct'?'Fragment Ion Adduct Rule Set Editor':app==='training'?'Fragment Tree Training':app==='predict'?'Predict Spectrum':'Fragment Tree Data Preparation';if(app==='reactionViewer')window.dispatchEvent(new Event('reactionViewer/open'));if(app==='reactionPatternAnalysis')window.dispatchEvent(new Event('reactionPatternAnalysis/open'));});
     document.getElementById('reactionViewerLoadPatterns').onclick=()=>vscode.postMessage({type:'loadReactionPatternSet'});
-    document.getElementById('save').onclick=()=>vscode.postMessage({type:'saveConfig',config:getConfig()}); document.getElementById('load').onclick=()=>vscode.postMessage({type:'loadConfig'}); document.getElementById('openResult').onclick=()=>vscode.postMessage({type:'openResult'}); document.getElementById('openEvaluation').onclick=()=>vscode.postMessage({type:'openEvaluation'});
+    document.getElementById('save').onclick=()=>vscode.postMessage({type:'saveConfig',config:getConfig()}); document.getElementById('load').onclick=()=>vscode.postMessage({type:'loadConfig'}); document.getElementById('openResult').onclick=()=>vscode.postMessage({type:'openResult'});
     ${reactionPatternUi.script()}
     ${adductUi.script()}
     const initialAdductSet=initial.fragmenterParams?.fragment_ion_tree_builder?.fragment_ion_adduct_rule_set;if(initialAdductSet)window.dispatchEvent(new MessageEvent('message',{data:{type:'adductRuleSet',value:{fragment_ion_adduct_rule_set:JSON.parse(JSON.stringify(initialAdductSet))},path:''}}));

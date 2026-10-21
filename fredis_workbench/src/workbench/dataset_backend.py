@@ -104,6 +104,9 @@ def preview(payload: dict) -> dict:
 def validate(payload: dict, *, check_datasets: bool = True) -> dict:
     from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context,validate_limits
     config={'fragmenter_params':payload['fragmenterParams'],'symbols':payload.get('symbols')}
+    if payload.get('reactionModels'):
+        from fredis.ml.training.fragment_tree_training.pattern_models import prepare_pattern_models
+        config=prepare_pattern_models(config,payload['reactionModels'])
     generator=create_preparation_context(config)
     validate_limits(payload.get('maxUniqueFragmentSmiles',-1),payload.get('maxReactionCombinations',-1))
     for key in ('numWorkers','chunkSize'):
@@ -133,10 +136,10 @@ def validate(payload: dict, *, check_datasets: bool = True) -> dict:
 def model(payload: dict) -> dict:
     import torch
     checkpoint=torch.load(payload['path'],map_location='cpu')
-    if checkpoint.get('architecture')!='fragment-tree-physical-ion': raise ValueError('Choose a compatible physical-ion fragment-tree checkpoint.')
+    if checkpoint.get('architecture')!='fragment-tree-competitive-ion': raise ValueError('Choose a compatible physical-ion fragment-tree checkpoint.')
     config=checkpoint.get('model_config')
     if not isinstance(config,dict): raise ValueError('Checkpoint does not contain a model configuration.')
-    return {'modelConfig':config.get('params',config),'path':payload['path']}
+    return {'modelConfig':config,'path':payload['path']}
 
 def structure_manifest(payload):
     import torch
@@ -155,15 +158,19 @@ def structure_manifest(payload):
 def training_checkpoint(payload):
     import torch
     checkpoint = torch.load(payload['path'], map_location='cpu', weights_only=False)
-    if checkpoint.get('architecture') != 'fragment-tree-physical-ion':
+    if checkpoint.get('architecture') != 'fragment-tree-competitive-ion':
         raise ValueError('Checkpoint architecture is incompatible with training.')
     config = checkpoint.get('model_config')
     if not config:
         raise ValueError('Checkpoint does not contain model configuration.')
-    group = checkpoint['optimizer_state_dict']['param_groups'][0]
-    fields={'branch_weight':'branchWeight','negative_weight':'negativeWeight','branch_mil_temperature':'branchMilTemperature','validation_interval_steps':'validationIntervalSteps','validation_fraction':'validationFraction','fragment_loss_weight':'fragmentLossWeight','state_loss_weight':'stateLossWeight','intensity_loss_weight':'intensityLossWeight','cosine_loss_weight':'cosineLossWeight','precursor_free_loss_weight':'precursorFreeLossWeight','intensity_power':'intensityPower'}
+    if 'optimizer_state_dict' not in checkpoint:
+        raise ValueError('This checkpoint cannot resume training. Import its reaction models in New model instead.')
+    group = checkpoint.get('optimizer_state_dict',{}).get('param_groups',[{'lr':1e-4,'weight_decay':0.01}])[0]
+    fields={'branch_weight':'branchWeight','negative_weight':'negativeWeight','branch_mil_temperature':'branchMilTemperature','validation_interval_steps':'validationIntervalSteps','validation_fraction':'validationFraction','intensity_loss_weight':'intensityLossWeight','cosine_loss_weight':'cosineLossWeight'}
     restored={field:checkpoint.get('training_settings',{})[key] for key,field in fields.items() if key in checkpoint.get('training_settings',{})}
-    return {'modelConfig': config.get('params', config), 'lr': group['lr'], 'weightDecay': group.get('weight_decay', 0), 'trainingSettings':restored}
+    params=config
+    restored['dropout']=params.get('reaction_model_params',{}).get('state_dropout',0)
+    return {'modelConfig': config, 'patternModels': describe_patterns(config), 'lr': group['lr'], 'weightDecay': group.get('weight_decay', 0), 'trainingSettings':restored}
 
 def training_sources(payload):
     import torch
@@ -174,11 +181,15 @@ def training_sources(payload):
         saved = torch.load(path, map_location='cpu', weights_only=False)['model_config']
         if not payload.get('resume'):
             inherited = dataset_sources(payload['trainDir'], payload['valDir'])
-            saved = {**saved.get('params', saved), 'fragmenter_params': inherited['fragmenter_params'],
+            saved = {**saved, 'fragmenter_params': inherited['fragmenter_params'],
                      'adduct_type_strs': inherited['adduct_type_strs']}
-    config = inherit_model_config(payload.get('modelConfig') or {}, payload['trainDir'], payload['valDir'],
-        saved_model=saved, prepared_max_roles=None)
-    return {'modelConfig': config}
+    config = inherit_model_config(saved or payload.get('modelConfig') or {}, payload['trainDir'], payload['valDir'],
+        saved_model=saved)
+    if not payload.get('resume') and payload.get('pretrainedPatterns'):
+        from fredis.ml.training.fragment_tree_training.pattern_models import assemble_config
+        config=assemble_config(config,payload['pretrainedPatterns'])
+        config=inherit_model_config(config,payload['trainDir'],payload['valDir'],saved_model=config)
+    return {'modelConfig': config, 'patternModels': describe_patterns(config)}
 
 def training_assignment_score_counts(payload):
     from fredis.ml.training.fragment_tree_training.prepared_dataset import prepared_piece_sequence
@@ -199,11 +210,45 @@ def training_assignment_score_counts(payload):
                            filteredSamples=pieces.total_samples)
     return result
 
+def pattern_definitions(payload):
+    from fredis.domain.fragment.reaction import ReactionPatternSet
+    value=json.loads(Path(payload['path']).read_text())
+    value=value.get('reaction_pattern_set',value.get('reaction_pattern',value))
+    if 'reactant_smarts' in value:
+        value={'name':'selected','patterns':[value]}
+    patterns=ReactionPatternSet.from_dict(value).patterns
+    return {'patterns':[p.to_dict() for p in patterns]}
+
+
+def describe_patterns(config):
+    from fredis.domain.fragment import Fragmenter
+    from fredis.ml.training.fragment_tree_training.pattern_models import pattern_config
+    imports={item['new_id']:item['path'] for item in config.get('fine_tuning',{}).get('pattern_imports',[])}
+    return [dict(pattern=p.to_dict(), architecture=pattern_config(config,p.pattern_id), source=imports.get(p.pattern_id),
+                 atom_count=p.reactant_query.GetNumAtoms())
+            for p in Fragmenter.from_dict(config['fragmenter_params']).reaction_pattern_set.patterns]
+
+
+def model_inspect(payload):
+    from fredis.ml.training.fragment_tree_training.pattern_models import inspect_model
+    return inspect_model(payload['path'])
+
+
+def pattern_export(payload):
+    from fredis.ml.training.fragment_tree_training.pattern_models import export_pattern
+    return export_pattern(payload['path'], payload['pattern_id'], payload['output'])
+
+
+def training_integrate(payload):
+    from fredis.ml.training.fragment_tree_training.integration import integrate_checkpoints
+    return integrate_checkpoints(payload['checkpoints'], payload['headCheckpoint'], payload['output'])
+
+
 def main():
     request=json.loads(sys.stdin.read())
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            result={'training-sources':training_sources,'training-checkpoint':training_checkpoint,'training-assignment-score-counts':training_assignment_score_counts,'structure-manifest':structure_manifest,'columns':columns,'preview':preview,'validate':validate,'validate-config':lambda payload:validate(payload,check_datasets=False),'model':model}[request['command']](request['payload'])
+            result={'pattern-definitions':pattern_definitions,'model-inspect':model_inspect,'pattern-export':pattern_export,'training-integrate':training_integrate,'training-sources':training_sources,'training-checkpoint':training_checkpoint,'training-assignment-score-counts':training_assignment_score_counts,'structure-manifest':structure_manifest,'columns':columns,'preview':preview,'validate':validate,'validate-config':lambda payload:validate(payload,check_datasets=False),'model':model}[request['command']](request['payload'])
         print(json.dumps({'ok':True,'result':result},allow_nan=False))
     except Exception as error:
         import traceback

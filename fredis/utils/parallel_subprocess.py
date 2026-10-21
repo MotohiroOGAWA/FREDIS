@@ -1,54 +1,11 @@
 from __future__ import annotations
 
-import os
 import sys
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Dict, Generator, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from tqdm import tqdm
-
-
-def generate_task_arguments(
-    input_files: List[str],
-    output_files: List[str],
-    input_flag: str = "-i",
-    output_flag: str = "-o",
-) -> Generator[List[str], None, None]:
-    """Generate arguments for subprocess tasks.
-
-    Parameters
-    ----------
-    input_files:
-        Input file paths.
-
-    output_files:
-        Output file paths.
-
-    input_flag:
-        Command-line flag for input.
-
-    output_flag:
-        Command-line flag for output.
-
-    Yields
-    ------
-    List[str]
-        Argument list for one subprocess.
-    """
-
-    for in_file, out_file in zip(input_files, output_files):
-        yield [input_flag, in_file, output_flag, out_file]
-
-
-def to_module_name(path: str) -> str:
-    """Convert file path to module name if needed."""
-
-    if path.endswith(".py"):
-        path = os.path.splitext(path)[0]
-        path = path.replace(os.sep, ".")
-
-    return path
 
 
 def run_in_subprocess(
@@ -109,7 +66,9 @@ def run_parallel_subprocesses(
     unit: str = "it",
     on_complete: Optional[Callable[[List[str]], None]] = None,
     progress: Optional[tqdm] = None,
-    on_error: Optional[Callable[[List[str], subprocess.CalledProcessError], None]] = None,
+    on_error: Optional[
+        Callable[[List[str], subprocess.CalledProcessError], None]
+    ] = None,
 ) -> None:
     """Run multiple subprocesses in parallel.
 
@@ -140,7 +99,6 @@ def run_parallel_subprocesses(
         resets to 0 each call.
     """
 
-
     # Optional parent-side notification preserves subprocess isolation.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -153,11 +111,15 @@ def run_parallel_subprocesses(
             for commands in commands_list
         }
 
-        completed = as_completed(futures) if progress is not None else tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc=desc,
-            unit=unit,
+        completed = (
+            as_completed(futures)
+            if progress is not None
+            else tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc=desc,
+                unit=unit,
+            )
         )
         for future in completed:
             try:

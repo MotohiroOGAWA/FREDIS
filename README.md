@@ -90,3 +90,15 @@ MSDataset prediction**. `fredis-predict-spectrum` is an equivalent command name.
 ## Documentation
 
 See the [FREDIS documentation](docs/index.md) and the [shared product overview](fredis_workbench/content/overview.md). Build the Sphinx + Furo guide with `pip install -e ".[docs]"` and `python -m sphinx -W --keep-going -b html docs docs/_build/html`.
+
+## Python code style
+
+Install the development tools with `pip install -e ".[dev]"`. Format the FREDIS
+package with `python -m black fredis`, or verify its formatting with
+`python -m black --check fredis`. The shared configuration in `pyproject.toml`
+excludes the third-party repositories under `fredis/libs`.
+
+Keep one operation per statement, name tensor indices after the objects they
+reference, and split long workflows at domain boundaries such as feature
+encoding, transition enumeration, probability propagation and loss calculation.
+Document tensor ownership and indexing where these are not apparent from types.

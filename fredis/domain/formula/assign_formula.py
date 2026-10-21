@@ -190,32 +190,32 @@ def assign_formulas(
 
             continue
         except Exception as e:
-                message = (
-                    "ErrorGeneratingFormulas: "
-                    f"formula={precursor_formula_value}, error={e}"
-                )
-                print(f"[WARN] {message}", file=sys.stderr)
+            message = (
+                "ErrorGeneratingFormulas: "
+                f"formula={precursor_formula_value}, error={e}"
+            )
+            print(f"[WARN] {message}", file=sys.stderr)
 
-                for record_index in record_indexes:
-                    record = dataset[record_index]
+            for record_index in record_indexes:
+                record = dataset[record_index]
 
-                    report_rows.append(
-                        AssignFormulaReportRow(
-                            index=int(record_index),
-                            spec_id=get_record_spec_id(record),
-                            status="ErrorGeneratingFormulas",
-                            message=message,
-                            formula=str(precursor_formula_value),
-                            smiles=str(record[smiles_column]),
-                            adduct_type=str(record[adduct_type_column]),
-                            precursor_mz=str(record[precursor_mz_column]),
-                        )
+                report_rows.append(
+                    AssignFormulaReportRow(
+                        index=int(record_index),
+                        spec_id=get_record_spec_id(record),
+                        status="ErrorGeneratingFormulas",
+                        message=message,
+                        formula=str(precursor_formula_value),
+                        smiles=str(record[smiles_column]),
+                        adduct_type=str(record[adduct_type_column]),
+                        precursor_mz=str(record[precursor_mz_column]),
                     )
+                )
 
-                    pbar.update(1)
-                    progress_count += 1
+                pbar.update(1)
+                progress_count += 1
 
-                continue
+            continue
 
         if (
             max_formula_candidates is not None
@@ -256,10 +256,7 @@ def assign_formulas(
             record = dataset[record_index]
 
             try:
-                if (
-                    not overwrite
-                    and str(record[calc_formula_coverage_column]) != ""
-                ):
+                if not overwrite and str(record[calc_formula_coverage_column]) != "":
                     progress_count += 1
                     pbar.update(1)
                     continue
@@ -284,8 +281,7 @@ def assign_formulas(
 
             except Exception as e:
                 message = (
-                    "ErrorAssigningFormula: "
-                    f"record_index={record_index}, error={e}"
+                    "ErrorAssigningFormula: " f"record_index={record_index}, error={e}"
                 )
                 print(f"[WARN] {message}", file=sys.stderr)
 
@@ -340,13 +336,9 @@ def assign_formulas(
     )
 
     print(
-        f"Saved successful records: {len(success_record_indexes)} "
-        f"to {output_file}"
+        f"Saved successful records: {len(success_record_indexes)} " f"to {output_file}"
     )
-    print(
-        f"Saved skipped/error report: {len(report_rows)} "
-        f"to {report_file}"
-    )
+    print(f"Saved skipped/error report: {len(report_rows)} " f"to {report_file}")
 
     return success_dataset
 
@@ -433,10 +425,7 @@ def parallel_assign_formulas(
     )
 
     output_path = Path(output_file)
-    temp_dir = (
-        output_path.parent
-        / f"{output_path.stem}_temp_parallel_assign_formula"
-    )
+    temp_dir = output_path.parent / f"{output_path.stem}_temp_parallel_assign_formula"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     parallel_infos: List[Dict[str, object]] = []
@@ -526,9 +515,7 @@ def parallel_assign_formulas(
         )
 
     commands_list = [
-        info["command"]
-        for info in parallel_infos
-        if bool(info["enabled"])
+        info["command"] for info in parallel_infos if bool(info["enabled"])
     ]
 
     if len(commands_list) == 0:
@@ -564,10 +551,7 @@ def parallel_assign_formulas(
 
     if len(output_datasets) == 0:
         merge_report_tsvs(
-            [
-                str(info["temp_report"])
-                for info in parallel_infos
-            ],
+            [str(info["temp_report"]) for info in parallel_infos],
             report_file,
         )
 
@@ -588,10 +572,7 @@ def parallel_assign_formulas(
     )
 
     merge_report_tsvs(
-        [
-            str(info["temp_report"])
-            for info in parallel_infos
-        ],
+        [str(info["temp_report"]) for info in parallel_infos],
         report_file,
     )
 

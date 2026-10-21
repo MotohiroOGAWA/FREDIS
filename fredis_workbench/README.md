@@ -331,9 +331,11 @@ label for 500ms to see its description.
 The default CLI is `python -m fredis.cli train fragment-tree`; it jointly
 trains a newly initialized Mol Encoder. Training options include
 `--weight-decay`, `--gradient-clip`, `--branch-weight`, `--negative-weight`,
-`--branch-mil-temperature`, `--fragment-loss-weight`, `--state-loss-weight`,
-`--intensity-loss-weight`, `--cosine-loss-weight`, `--precursor-free-loss-weight`
-and `--intensity-power`, all in **Optimization and Loss**. Spectrum generation
+`--branch-mil-temperature`, `--intensity-loss-weight` and
+`--cosine-loss-weight`, all in **Optimization and Loss**. Weak negative reaction
+weight defaults to `0.5`; cosine loss weight defaults to `1`. Hover over each
+label for its description. Mouse-wheel scrolling does not change numeric input
+values; edit the field or use its step arrows. Spectrum generation
 settings (branch path threshold, fragment node budget, ion and peak thresholds)
 form their own **Generation Params** section, separate from the architecture.
 
@@ -422,3 +424,20 @@ Dataset schema, saved molecular targets, checkpoint compatibility and actual
 memory requirements are verified by the training runtime. **Inspect Dataset**
 reveals the directory in Explorer. **Start Training** opens the existing job view
 with logs, progress and metrics. **Copy Command** uses the same CLI builder.
+
+### Saving Workbench files
+
+FREDIS configuration files (`*.pft`) use manual saving by default, even when
+VS Code Auto Save is enabled globally. Edits remain unsaved until Ctrl+S or
+Save All, and closing a modified document follows VS Code’s normal save/discard
+flow. This is contributed through the `fredis-workbench-file` language setting;
+ordinary text/source files keep their existing Auto Save behavior. An explicit
+user/workspace language override can still override this default. Reload the
+VS Code window after updating the extension to pick up the new contribution.
+
+Fragment and State Heads have separate architecture controls:
+`--fragment-fc-dims`, `--fragment-dropout`, `--state-fc-dims`, `--state-dropout`.
+Both default to hidden widths `128,64` and dropout `0`. Fragment Head normalizes
+Child/Self/Sink events per fragment; State Head normalizes ion/H-shift states
+after DAG propagation. Joint probabilities multiply the two distributions.
+Old coupled Transition Head checkpoints are incompatible and need retraining.
