@@ -25,7 +25,7 @@ structure = SimpleNamespace(
     num_samples=0, num_branch_groups=0, sample_annotations=(),
     reactions=SimpleNamespace(reaction_type=torch.empty((0,3))),
     states=ReactionStateData(), teacher=TeacherData(),
-    condition_features=torch.empty((0,2)), sample_branch_group_index=torch.empty(0,dtype=torch.long),
+    collision_energy_eV=torch.empty(0), branch_group_adduct_index=torch.empty(0,dtype=torch.long), sample_branch_group_index=torch.empty(0,dtype=torch.long),
     spectrum_batch=SimpleNamespace(decoded=SimpleNamespace(trees=(),compounds=()),
         state_node_index=torch.empty(0),state_adduct_index=torch.empty(0)),
 )

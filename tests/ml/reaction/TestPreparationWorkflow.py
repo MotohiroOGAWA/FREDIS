@@ -168,7 +168,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         from fredis.ml.input.source_reaction_structure import prepare_source_reactions
         reactions=generator.fragmenter.fragment_ion_tree_builder.create_reaction_instances(source)
         data=prepare_source_reactions(source=source,reactions=reactions,graph_builder=generator.mol_encoder.graph_builder,
-            condition_features=torch.tensor([[0.,20.]]),max_reaction_count=1)
+            collision_energy_eV=torch.tensor([20.]),branch_group_adduct_index=torch.tensor([0]),max_reaction_count=1)
         self.assertEqual(data.source_graph.num_nodes,2)
         self.assertEqual(data.source_atom_capacity,2)
         self.assertTrue(torch.all(data.reactions.reaction_source_atom_index<2))
@@ -390,7 +390,10 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual([file.name for file in serial],[file.name for file in parallel])
             for left,right in zip(serial,parallel):
                 first=SourceReactionStructure.load(left);second=SourceReactionStructure.load(right)
-                self.assertTrue(torch.equal(first.condition_features,second.condition_features))
+                self.assertTrue(torch.equal(first.collision_energy_eV,second.collision_energy_eV))
+                self.assertEqual(first.collision_energy_eV.dtype, torch.float32)
+                self.assertEqual(first.branch_group_adduct_index.dtype, torch.int64)
+                self.assertTrue(torch.equal(first.branch_group_adduct_index,second.branch_group_adduct_index))
                 self.assertTrue(torch.equal(first.teacher.positive_reaction_index, second.teacher.positive_reaction_index))
                 self.assertTrue(torch.equal(first.spectrum_batch.target_intensity,second.spectrum_batch.target_intensity))
             stats=json.loads((root/'parallel/reaction_statistics.json').read_text())

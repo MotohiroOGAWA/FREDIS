@@ -249,12 +249,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 self.fragmenter._resolve_main_adduct_type(precursor_types[i])
                 for i in rows
             ]
-            conditions = torch.tensor(
-                [
-                    [self.adduct_type_strs.index(str(adduct)), collision_energy[i]]
-                    for adduct, i in zip(main, rows)
-                ],
-                dtype=torch.float32,
+            energies = torch.tensor(
+                [collision_energy[i] for i in rows], dtype=torch.float32
             )
             group_keys = {}
             sample_group = []
@@ -270,7 +266,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                     reactions=reactions,
                     relations=relations,
                     graph_builder=self.mol_encoder.graph_builder,
-                    condition_features=conditions,
+                    collision_energy_eV=energies,
                     max_reaction_count=self.feature_model.max_reaction_count,
                     sample_branch_group_index=torch.tensor(sample_group),
                     branch_group_adduct_index=group_adduct,

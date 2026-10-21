@@ -54,8 +54,8 @@ class SourceReactionStructure:
     teacher: TeacherData = field(default_factory=TeacherData, kw_only=True)
     # [S]: source molecule ID for each observed spectrum.
     sample_tree_index: Tensor
-    # [S, 2]: [main_adduct_index, collision_energy_eV].
-    condition_features: Tensor
+    # [S], float32: collision energy in eV.
+    collision_energy_eV: Tensor
     # Downstream precomputed graphs are optional for scorer-only training.
     source_smiles: tuple[str, ...] = field(default=(), kw_only=True)
     max_reaction_role_count: int = field(default=0, kw_only=True)
@@ -77,6 +77,7 @@ class SourceReactionStructure:
     branch_group_tree_index: Tensor = field(
         default_factory=lambda: torch.empty(0, dtype=torch.long), kw_only=True
     )
+    # [G], int64: main adduct for each branch group.
     branch_group_adduct_index: Tensor = field(
         default_factory=lambda: torch.empty(0, dtype=torch.long), kw_only=True
     )
@@ -156,7 +157,7 @@ class SourceReactionStructure:
 
     def __setstate__(self, state):
         """Restore current-format runtime views without RDKit or old-format conversion."""
-        if "annotations" not in state or "teacher" not in state or "states" not in state:
+        if any(name not in state for name in ("annotations", "teacher", "states", "collision_energy_eV")):
             raise ValueError("Unsupported prepared data; regenerate the dataset")
         self.__dict__.update(state)
         if self.annotations is not None and self.spectrum_batch is not None:
@@ -246,7 +247,7 @@ class SourceReactionStructure:
             raise ValueError("Cannot collate an empty batch")
         if any(item.formula_elements != structures[0].formula_elements for item in structures):
             raise ValueError("Cannot collate different formula element vocabularies")
-        graphs, sample_trees, conditions = [], [], []
+        graphs, sample_trees, energies = [], [], []
         state_samples, next_rows, eos = [], [], []
         atom_offset = reaction_offset = tree_offset = sample_offset = group_offset = (
             state_offset
@@ -325,7 +326,7 @@ class SourceReactionStructure:
                 node_offset += len(item.spectrum_batch.decoded.compounds)
             graphs.extend(item.source_graph.to_data_list())
             sample_trees.append(item.sample_tree_index + tree_offset)
-            conditions.append(item.condition_features)
+            energies.append(item.collision_energy_eV)
             state_samples.append(item.states.branch_group_index + group_offset)
             for ptr, data, dest in (
                 (
@@ -409,7 +410,7 @@ class SourceReactionStructure:
                 [item.source_graph.num_graphs for item in structures],
             ),
             sample_tree_index=torch.cat(sample_trees),
-            condition_features=torch.cat(conditions),
+            collision_energy_eV=torch.cat(energies),
             spectrum_batch=spectrum_batch,
             source_smiles=tuple((key for item in structures for key in item.source_smiles)),
             sample_branch_group_index=torch.cat(sample_groups),
@@ -465,12 +466,12 @@ def prepare_source_reactions(
     source: Compound,
     reactions: tuple[ReactionInstance, ...],
     graph_builder: MolGraphBuilder,
-    # [S, 2]: [main_adduct_index, collision_energy_eV].
-    condition_features: Tensor,
+    # [S], float32: collision energy in eV.
+    collision_energy_eV: Tensor,
+    branch_group_adduct_index: Tensor,
     max_reaction_count: int,
     teacher_paths=None,
     sample_branch_group_index: Tensor | None = None,
-    branch_group_adduct_index: Tensor | None = None,
     valid_reaction_sequences: frozenset[ReactionSequence] | None = None,
     relations: ReactionRelations | None = None,
 ) -> SourceReactionStructure:
@@ -487,20 +488,16 @@ def prepare_source_reactions(
     maps = {atom.GetAtomMapNum(): i for i, atom in enumerate(graph_builder.graph_atoms(source))}
     raw_graph = graph_builder.build(source)
 
-    sample_count = condition_features.shape[0]
+    collision_energy_eV = torch.as_tensor(collision_energy_eV, dtype=torch.float32)
+    if collision_energy_eV.ndim != 1:
+        raise ValueError("collision_energy_eV must have shape [S]")
+    sample_count = collision_energy_eV.shape[0]
     if sample_branch_group_index is None:
         sample_branch_group_index = torch.arange(sample_count, dtype=torch.long)
     sample_branch_group_index = torch.as_tensor(sample_branch_group_index, dtype=torch.long)
     if sample_branch_group_index.shape != (sample_count,):
         raise ValueError("sample_branch_group_index must have one entry per spectrum")
     group_count = int(sample_branch_group_index.max()) + 1 if sample_count else 0
-    if branch_group_adduct_index is None:
-        branch_group_adduct_index = torch.tensor(
-            [
-                int(condition_features[(sample_branch_group_index == g).nonzero()[0], 0])
-                for g in range(group_count)
-            ]
-        )
     branch_group_adduct_index = torch.as_tensor(branch_group_adduct_index, dtype=torch.long)
     if branch_group_adduct_index.shape != (group_count,):
         raise ValueError("branch_group_adduct_index must have one entry per branch group")
@@ -671,7 +668,7 @@ def prepare_source_reactions(
         source_graph=graph,
         reactions=ReactionTensorData.from_reactions(reactions, maps, relations),
         sample_tree_index=torch.zeros(sample_count, dtype=torch.long),
-        condition_features=condition_features,
+        collision_energy_eV=collision_energy_eV,
         source_smiles=(source.smiles,),
         sample_branch_group_index=sample_branch_group_index,
         branch_group_tree_index=torch.zeros(group_count, dtype=torch.long),

@@ -249,7 +249,8 @@ def inspect_structure(file_path: Path) -> dict:
         raise TypeError("This .preft.pt file is not a prepared fragment-tree training structure.")
 
     source_smiles = str(metadata.get("smiles", ""))
-    conditions = structure.condition_features.tolist()
+    energies = structure.collision_energy_eV.tolist()
+    group_adducts = structure.branch_group_adduct_index.tolist()
     states = _reaction_states(structure)
     transitions = _transitions(structure)
 
@@ -272,9 +273,8 @@ def inspect_structure(file_path: Path) -> dict:
     samples = []
     sample_groups = structure.sample_branch_group_index.tolist()
     for sample_id in range(num_samples):
-        adduct_index, collision_energy = (
-            conditions[sample_id] if sample_id < len(conditions) else (None, None)
-        )
+        adduct_index = group_adducts[sample_groups[sample_id]]
+        collision_energy = energies[sample_id]
         if sample_id < len(annotations):
             collision_energy = annotations[sample_id]["collisionEnergy"]
         display_ce = (

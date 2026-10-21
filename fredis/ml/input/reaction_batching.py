@@ -221,7 +221,7 @@ def select_samples(data: SourceReactionStructure, indices) -> SourceReactionStru
     return replace(
         data,
         sample_tree_index=data.sample_tree_index[indices],
-        condition_features=data.condition_features[indices],
+        collision_energy_eV=data.collision_energy_eV[indices],
         sample_branch_group_index=group_map[data.sample_branch_group_index[indices]],
         branch_group_tree_index=data.branch_group_tree_index[group_indices],
         branch_group_adduct_index=data.branch_group_adduct_index[group_indices],

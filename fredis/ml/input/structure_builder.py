@@ -211,13 +211,7 @@ class ReactionStructureBuilder:
                 peaks.append(list(dict.fromkeys(paths)))
             teacher_paths.append(peaks)
         mains = [fragmenter._resolve_main_adduct_type(adduct) for adduct in precursor_types]
-        conditions = torch.tensor(
-            [
-                [generator.adduct_type_strs.index(str(main)), ce]
-                for main, ce in zip(mains, collision_energy)
-            ],
-            dtype=torch.float32,
-        )
+        energies = torch.tensor(collision_energy, dtype=torch.float32)
         group_keys = {}
         sample_groups = []
         for main in mains:
@@ -230,7 +224,7 @@ class ReactionStructureBuilder:
             source=source,
             reactions=reactions,
             graph_builder=generator.mol_encoder.graph_builder,
-            condition_features=conditions,
+            collision_energy_eV=energies,
             max_reaction_count=fragmenter.tree_max_reaction_count,
             teacher_paths=teacher_paths,
             sample_branch_group_index=torch.tensor(sample_groups),
