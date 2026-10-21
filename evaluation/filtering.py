@@ -140,12 +140,15 @@ def present(result, view=None, output_dir=None, formats=()):
               if view.get('showCategoryLabels', True) else '' for g in category_rows]
     if vertical:
         ax.set_xticks(range(len(category_rows)), labels, rotation=60, ha='right')
-        ax.set_ylim(0, 140)
+        ax.set_ylim(0, 100 if 'groupWidth' in view else 140)
+        if 'groupWidth' in view and group_count:
+            edge = group_span/2 + group_padding/(group_width+group_padding)
+            ax.set_xlim(-edge, group_count-1+edge)
         ax.set_ylabel('Retained spectra (%)' if view.get('showAxisTitle', True) else '', fontsize=axis_size)
     else:
         ax.set_yticks(range(len(category_rows)), labels)
         ax.invert_yaxis()
-        ax.set_xlim(0, 135)
+        ax.set_xlim(0, 100 if 'groupWidth' in view else 135)
         ax.set_xlabel('Retained spectra (%)' if view.get('showAxisTitle', True) else '', fontsize=axis_size)
     ax.tick_params(axis='x' if vertical else 'y', labelsize=category_size)
     ax.tick_params(axis='y' if vertical else 'x', labelsize=tick_size,
@@ -155,7 +158,29 @@ def present(result, view=None, output_dir=None, formats=()):
         ax.set_title(view.get('title') or result.get('title', 'Training data filtering audit'), fontsize=title_size)
     if series and view.get('showLegend', True):
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=legend_size)
-    fig.tight_layout()
+    if 'groupWidth' in view:
+        # Size the axes themselves in pixels. Add only the space actually needed
+        # by tick labels, titles, bar annotations and the legend.
+        import math
+        ax.set_position([0, 0, 1, 1])
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        plot_box = ax.get_window_extent(renderer)
+        content_box = ax.get_tightbbox(renderer)
+        left = math.ceil(max(0, plot_box.x0-content_box.x0)) + 8
+        right = math.ceil(max(0, content_box.x1-plot_box.x1)) + 8
+        bottom = math.ceil(max(0, plot_box.y0-content_box.y0)) + 8
+        top = math.ceil(max(0, content_box.y1-plot_box.y1)) + 8
+        canvas_width = math.ceil(width_px+left+right)
+        canvas_height = math.ceil(height_px+bottom+top)
+        if max(canvas_width, canvas_height) >= 65536:
+            plt.close(fig)
+            raise ValueError('Calculated image width or height including labels must be below 65536 px.')
+        fig.set_size_inches(canvas_width/150, canvas_height/150)
+        ax.set_position([left/canvas_width, bottom/canvas_height,
+                         width_px/canvas_width, height_px/canvas_height])
+    else:
+        fig.tight_layout()
     buffer = io.BytesIO()
     fig.savefig(buffer, format='png', dpi=150)
     if output_dir:

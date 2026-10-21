@@ -129,7 +129,15 @@ def test_group_pixel_width_and_text_visibility(result, tmp_path, orientation):
                 tickLabelSize=13, axisTitleSize=14, valueLabelSize=9, legendSize=15)
     shown = present(result, view, tmp_path/'shown', ['svg'])
     count = len(shown['categoryRows'])
-    assert struct.unpack('>II', base64.b64decode(shown['png'])[16:24]) == (100*count+20*(count+1), 500)
+    image_width, image_height = struct.unpack('>II', base64.b64decode(shown['png'])[16:24])
+    assert image_width > 100*count+20*(count+1)
+    assert image_height > 500
+    # SVG axes rectangle preserves the exact requested plot dimensions.
+    import xml.etree.ElementTree as ET
+    svg_root = ET.parse(tmp_path/'shown'/'retention.svg').getroot()
+    clip_rect = svg_root.find('.//{http://www.w3.org/2000/svg}clipPath/{http://www.w3.org/2000/svg}rect')
+    assert float(clip_rect.attrib['width']) == pytest.approx((100*count+20*(count+1))*72/150)
+    assert float(clip_rect.attrib['height']) == pytest.approx(500*72/150)
     assert 'Custom chart title' in (tmp_path/'shown'/'retention.svg').read_text()
     hidden = {**view, **{key: False for key in ['showTitle','showCategoryLabels',
               'showTickLabels','showAxisTitle','showValues','showLegend','showCounts']}}
