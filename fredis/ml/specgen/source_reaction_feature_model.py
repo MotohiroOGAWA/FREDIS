@@ -110,7 +110,7 @@ class SourceReactionFeatureModel(nn.Module):
             molecules.append(encoded)
         source_h = torch.cat(molecules)
         kwargs = {
-            name: getattr(data, name).to(device)
+            name: getattr(data.reactions, name).to(device)
             for name in (
                 "reaction_type",
                 "reaction_tree_index",
@@ -136,10 +136,10 @@ class SourceReactionFeatureModel(nn.Module):
         reaction = (
             self.reaction_instance_encoder(
                 source_mol_h=source,
-                reaction_type=data.reaction_type,
-                reaction_tree_index=data.reaction_tree_index,
-                reaction_source_atom_ptr=data.reaction_source_atom_ptr,
-                reaction_source_atom_index=data.reaction_source_atom_index,
+                reaction_type=data.reactions.reaction_type,
+                reaction_tree_index=data.reactions.reaction_tree_index,
+                reaction_source_atom_ptr=data.reactions.reaction_source_atom_ptr,
+                reaction_source_atom_index=data.reactions.reaction_source_atom_index,
                 source_atom_features=data.source_graph.x,
                 source_edge_index=data.source_graph.edge_index,
                 source_edge_attr=data.source_graph.edge_attr,

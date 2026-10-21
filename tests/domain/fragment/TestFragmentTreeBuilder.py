@@ -211,25 +211,26 @@ class TestReactionSequenceSearch(unittest.TestCase):
         self.assertEqual(relations.invalidation_mask, (0, 1))
         self.assertEqual(relations.rejection((0, 1)), 'invalidated_reaction')
 
-    def test_redundancy_preserves_surviving_cut_and_order_updates(self) -> None:
+    def test_compatible_reactions_are_preserved(self) -> None:
         deletion = reaction(2, (3, 4), retained=(1, 2, 3))
         no_effect = reaction(0, (1, 2))
-        self.assertEqual(ReactionSequence((deletion, no_effect)).reactions, (deletion,))
+        self.assertEqual(set(ReactionSequence((deletion, no_effect)).reactions), {deletion, no_effect})
         for edit in (reaction(0, (1, 2), matched=((1, 2),), cuts=((1, 2),)),
                      reaction(0, (1, 2), matched=((1, 2),), updates=((1, 2, Chem.BondType.DOUBLE),))):
             with self.subTest(edit=edit):
                 self.assertEqual(len(ReactionSequence((deletion, edit)).reactions), 2)
         search = ReactionSequenceSearch((deletion, no_effect), max_reaction_count=2)
-        self.assertTrue(all(len(c.reaction_sequence.reactions) <= 2 for c in search.enumerate()))
-        self.assertGreater(search.stats.num_redundancy_pruned, 0)
+        sequences = {c.reaction_sequence for c in search.enumerate()}
+        self.assertTrue(all(len(s.reactions) <= 2 for s in sequences))
+        self.assertIn(ReactionSequence((deletion, no_effect)), sequences)
 
-    def test_limit_uses_normalized_reaction_count(self) -> None:
+    def test_limit_counts_all_distinct_reactions(self) -> None:
         a = reaction(0, (1,))
         b = reaction(1, (2,), retained=(1, 2, 3))
         c = reaction(2, (1, 2), matched=((1, 2),), cuts=((1, 2),))
         search = ReactionSequenceSearch((a, b, c), max_reaction_count=2)
         sequences = {candidate.reaction_sequence for candidate in search.enumerate()}
-        self.assertIn(ReactionSequence((a, b, c)), sequences)
+        self.assertNotIn(ReactionSequence((a, b, c)), sequences)
         self.assertTrue(all(len(sequence.reactions) <= 2 for sequence in sequences))
 
     def test_discarding_another_reaction_center_rejects_combination(self) -> None:

@@ -142,7 +142,7 @@ def test_all_parents_survive_reaction_set_deduplication():
     from fredis.ml.specgen.components.reaction.reaction_decoder import ReactionPool,ReactionDecoderOutput,with_all_transitions
     from fredis.ml.specgen.components.reaction.reaction_compatibility import ReactionCompatibilityEngine
     masks=torch.zeros((1,2,2),dtype=torch.bool)
-    pool=ReactionPool(torch.tensor([[0,1]]),torch.ones((1,2),dtype=torch.bool),torch.randn(1,2,4),masks,masks,masks,torch.ones((1,2,1),dtype=torch.bool),torch.ones((1,1),dtype=torch.bool))
+    pool=ReactionPool(torch.tensor([[0,1]]),torch.ones((1,2),dtype=torch.bool),torch.randn(1,2,4),masks,masks,torch.ones((1,2,1),dtype=torch.bool),torch.ones((1,1),dtype=torch.bool))
     decoded=ReactionDecoderOutput(torch.zeros(4,dtype=torch.long),torch.tensor([[-1,-1],[0,-1],[1,-1],[0,1]]),torch.zeros(4),torch.tensor([False,False,False,True]),torch.tensor([-1,0,0,1]),torch.tensor([-1,0,1,1]),pool)
     result=with_all_transitions(decoded,ReactionCompatibilityEngine(2))
     assert set(result.transition_parent_index[result.transition_child_index==3].tolist())=={1,2}

@@ -92,7 +92,7 @@ def _node_view(structure, samples, source_smiles, file_path):
         builder=fragmenter.fragment_ion_tree_builder
         original_reactions=list(builder.create_reaction_instances(source))
         reaction_patterns={pattern.pattern_id:pattern for pattern in builder.reaction_pattern_set}
-        if len(original_reactions)!=len(structure.reaction_type): original_reactions=[]
+        if len(original_reactions)!=len(structure.reactions.reaction_type): original_reactions=[]
         registry=restore_reaction_registry(structure,source_smiles,fragmenter_params)
     def reaction_id(reaction):
         if reaction is None:return None
@@ -148,7 +148,7 @@ def inspect_structure(file_path: Path) -> dict:
     # Incremental preparation seeds contain ReactionSequence objects. They are
     # persisted for reuse by preparation, but are not part of the viewer data.
     metadata.pop("reaction_sequence_compounds", None)
-    required = ("teacher_node_reaction_ptr", "sample_branch_group_index", "reaction_type")
+    required = ("teacher_node_reaction_ptr", "sample_branch_group_index", "reactions")
     if not all(hasattr(structure, name) for name in required):
         raise TypeError("This .preft.pt file is not a prepared fragment-tree training structure.")
 
@@ -227,7 +227,7 @@ def inspect_structure(file_path: Path) -> dict:
         "summary": {
             **totals,
             "samples": num_samples,
-            "primitiveReactions": int(structure.reaction_type.shape[0]),
+            "primitiveReactions": int(structure.reactions.reaction_type.shape[0]),
             "teacherNodes": len(states),
             "positiveBranches": structure.transition_added_reaction_index.numel(),
             "branchGroups": int(structure.num_branch_groups),

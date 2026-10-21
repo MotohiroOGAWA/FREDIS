@@ -18,7 +18,6 @@ class ReactionPool:
     embeddings: Tensor
     conflict: Tensor
     invalidation: Tensor
-    dominance: Tensor
     retained: Tensor
     source_atom_valid: Tensor
 
@@ -35,7 +34,7 @@ def build_reaction_pool(reaction_h: Tensor, data: object) -> ReactionPool:
         if data.branch_group_tree_index.numel()
         else data.sample_tree_index
     )
-    eligible = data.reaction_tree_index[None, :] == trees[:, None]
+    eligible = data.reactions.reaction_tree_index[None, :] == trees[:, None]
     width = int(eligible.sum(1).max().item()) if s else 0
     ids = torch.argsort(eligible.to(torch.int8), dim=1, descending=True, stable=True)[
         :, :width
@@ -49,41 +48,17 @@ def build_reaction_pool(reaction_h: Tensor, data: object) -> ReactionPool:
     inverse[:, a] = -1
     sample = torch.arange(s, device=device)[:, None]
 
-    def dense(pairs: Tensor) -> Tensor:
-        matrix = torch.zeros((s, width, width), dtype=torch.bool, device=device)
-        left, right = inverse[:, pairs[0]], inverse[:, pairs[1]]
-        okay = (left >= 0) & (right >= 0)
-        rows = sample.expand_as(left)[okay]
-        matrix[rows, left[okay], right[okay]] = True
-        return matrix
-
-    # Packed Source-local retained regions avoid [expansions, atoms] memory.
-    capacity = data.source_atom_capacity or data.source_graph.num_nodes
-    words = (capacity + 63) // 64
-    starts = data.source_graph.ptr[trees]
-    sizes = data.source_graph.ptr[trees + 1] - starts
-    word_bits = (
-        sizes[:, None] - 64 * torch.arange(words, device=device)[None, :]
-    ).clamp(0, 64)
-    atom_valid = (torch.ones_like(word_bits) << word_bits.clamp_max(63)) - 1
-    atom_valid = atom_valid.masked_fill(word_bits == 64, -1)
-    retained = torch.zeros((s, width, words), dtype=torch.long, device=device)
-    pair = data.reaction_retained_index
-    local = inverse[:, pair[0]]
-    atom = pair[1][None, :] - starts[:, None]
-    okay = local >= 0
-    rows = sample.expand_as(local)[okay]
-    slots = local[okay]
-    atom = atom[okay]
-    bits = torch.ones_like(atom) << (atom % 64)
-    retained.index_put_((rows, slots, atom // 64), bits, accumulate=True)
+    registry = data.reactions
+    retained, atom_valid = registry.retained_bitsets(
+        inverse, data.source_graph.ptr, trees,
+        data.source_atom_capacity or data.source_graph.num_nodes, width,
+    )
     return ReactionPool(
         chosen_ids.masked_fill(~valid, -1),
         valid,
         padded_h[chosen_ids],
-        dense(data.reaction_conflict_index),
-        dense(data.reaction_invalidation_index),
-        dense(data.reaction_dominance_index),
+        registry.relation_mask(registry.reaction_conflict_index, inverse, width),
+        registry.relation_mask(registry.reaction_invalidation_index, inverse, width),
         retained,
         atom_valid,
     )
@@ -133,7 +108,6 @@ def with_all_transitions(output, compatibility):
         pool_valid=output.pool.valid,
         pool_conflict=output.pool.conflict,
         pool_invalidation=output.pool.invalidation,
-        pool_dominance=output.pool.dominance,
         pool_retained=output.pool.retained,
         source_atom_valid=output.pool.source_atom_valid,
     )
@@ -225,7 +199,6 @@ class BranchingReactionDecoder(nn.Module):
             pool_valid=pool.valid,
             pool_conflict=pool.conflict,
             pool_invalidation=pool.invalidation,
-            pool_dominance=pool.dominance,
             pool_retained=pool.retained,
             source_atom_valid=pool.source_atom_valid,
         )

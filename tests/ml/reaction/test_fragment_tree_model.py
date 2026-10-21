@@ -62,7 +62,6 @@ def test_candidate_mask_requires_mutual_reaction_center_retention():
         pool_valid=torch.ones((1,4),dtype=torch.bool),
         pool_conflict=torch.zeros((1,4,4),dtype=torch.bool),
         pool_invalidation=invalidation,
-        pool_dominance=torch.zeros((1,4,4),dtype=torch.bool),
         pool_retained=torch.full((1,4,1),15,dtype=torch.long),
         source_atom_valid=torch.full((1,1),15,dtype=torch.long))
     assert expansion.valid.tolist()==[False,True,False,False]

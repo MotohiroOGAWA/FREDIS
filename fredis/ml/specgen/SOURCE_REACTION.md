@@ -13,7 +13,7 @@ pattern readout. Reaction-set attention uses a BOS token.
 The main precursor adduct conditions branch selection; CE does not change the
 structural search. Each (molecule, main adduct) shares a branch graph across CE.
 
-Batch prediction computes conflict, invalidation, and dominance relations in
+Batch prediction computes conflict and invalidation relations in
 CPU preparation workers, once per unique molecule. Inference reuses them.
 Search retains the best proposal score per reaction set, then restores all
 valid edges between accepted sets before materializing chemical structures.

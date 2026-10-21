@@ -18,6 +18,7 @@ from fredis.domain.fragment.reaction import ReactionInstance, ReactionSequence
 from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
 from fredis.libs.mmkit.mmkit import Compound
 from ..mol.graph_builder import MolGraphBuilder
+from .reaction_tensor_data import ReactionTensorData
 
 SCHEMA = "fredis.fragment-tree-training"
 
@@ -32,10 +33,6 @@ class UnresolvedPrecursorError(ValueError):
     """
 
 
-def coo(pairs: Sequence[tuple[int, int]]) -> Tensor:
-    return torch.tensor(pairs, dtype=torch.long).reshape(-1, 2).T.contiguous()
-
-
 def csr(rows: Sequence[Sequence[int]]) -> tuple[Tensor, Tensor]:
     counts = torch.tensor([len(row) for row in rows], dtype=torch.long)
     return torch.cat((counts.new_zeros(1), counts.cumsum(0))), torch.tensor(
@@ -46,14 +43,7 @@ def csr(rows: Sequence[Sequence[int]]) -> tuple[Tensor, Tensor]:
 @dataclass(frozen=True)
 class SourceReactionStructure:
     source_graph: Batch
-    reaction_tree_index: Tensor
-    reaction_type: Tensor
-    reaction_source_atom_ptr: Tensor
-    reaction_source_atom_index: Tensor
-    reaction_conflict_index: Tensor
-    reaction_invalidation_index: Tensor
-    reaction_dominance_index: Tensor
-    reaction_retained_index: Tensor
+    reactions: ReactionTensorData
     sample_tree_index: Tensor
     condition_features: Tensor
     teacher_node_branch_group_index: Tensor
@@ -163,7 +153,7 @@ class SourceReactionStructure:
 
     @property
     def device(self) -> torch.device:
-        return self.reaction_type.device
+        return self.reactions.reaction_type.device
 
     def to(self, device: str | torch.device) -> SourceReactionStructure:
         return replace(
@@ -204,6 +194,10 @@ class SourceReactionStructure:
             raise TypeError(
                 "Prepared structure must be SourceReactionStructure; regenerate the dataset"
             )
+        if not isinstance(getattr(result, "reactions", None), ReactionTensorData) or any(
+            not hasattr(result.reactions, name) for name in ReactionTensorData.field_names()
+        ):
+            raise ValueError("Unsupported reaction tensors; regenerate the prepared dataset")
         return result.to(device)
 
     @classmethod
@@ -212,29 +206,8 @@ class SourceReactionStructure:
     ) -> SourceReactionStructure:
         if not structures:
             raise ValueError("Cannot collate an empty batch")
-        graphs, reaction_types, atom_rows, retained, sample_trees, conditions = (
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
-        relations = {
-            name: []
-            for name in (
-                "reaction_conflict_index",
-                "reaction_invalidation_index",
-                "reaction_dominance_index",
-            )
-        }
-        state_samples, state_rows, next_rows, eos, tree_indices = (
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
+        graphs, sample_trees, conditions = [], [], []
+        state_samples, state_rows, next_rows, eos = [], [], [], []
         atom_offset = reaction_offset = tree_offset = sample_offset = group_offset = (
             state_offset
         ) = node_offset = 0
@@ -318,23 +291,6 @@ class SourceReactionStructure:
                 spectrum_batches.append(item.spectrum_batch)
                 node_offset += len(item.spectrum_batch.decoded.compounds)
             graphs.extend(item.source_graph.to_data_list())
-            reaction_types.append(item.reaction_type)
-            tree_indices.append(item.reaction_tree_index + tree_offset)
-            for start, stop in zip(
-                item.reaction_source_atom_ptr[:-1], item.reaction_source_atom_ptr[1:]
-            ):
-                atom_rows.append(
-                    (item.reaction_source_atom_index[start:stop] + atom_offset).tolist()
-                )
-            retained.append(
-                item.reaction_retained_index
-                + torch.tensor(
-                    [[reaction_offset], [atom_offset]],
-                    device=item.reaction_retained_index.device,
-                )
-            )
-            for name in relations:
-                relations[name].append(getattr(item, name) + reaction_offset)
             sample_trees.append(item.sample_tree_index + tree_offset)
             conditions.append(item.condition_features)
             state_samples.append(item.teacher_node_branch_group_index + group_offset)
@@ -414,12 +370,11 @@ class SourceReactionStructure:
                     )
             eos.append(item.teacher_node_observed)
             atom_offset += item.source_graph.num_nodes
-            reaction_offset += item.reaction_type.shape[0]
+            reaction_offset += item.reactions.reaction_type.shape[0]
             tree_offset += item.source_graph.num_graphs
             sample_offset += item.sample_tree_index.numel()
             group_offset += item.num_branch_groups
         graph = Batch.from_data_list(graphs)
-        atom_ptr, atom_index = csr(atom_rows)
         state_ptr, state_index = csr(state_rows)
         next_ptr, next_index = csr(next_rows)
         valid_ptr, valid_reactions = csr(valid_rows)
@@ -445,12 +400,11 @@ class SourceReactionStructure:
             )
         return cls(
             graph,
-            torch.cat(tree_indices),
-            torch.cat(reaction_types),
-            atom_ptr,
-            atom_index,
-            *(torch.cat(relations[name], dim=1) for name in relations),
-            torch.cat(retained, dim=1),
+            ReactionTensorData.collate(
+                [item.reactions for item in structures],
+                [item.source_graph.num_nodes for item in structures],
+                [item.source_graph.num_graphs for item in structures],
+            ),
             torch.cat(sample_trees),
             torch.cat(conditions),
             torch.cat(state_samples),
@@ -531,20 +485,6 @@ def prepare_source_reactions(
         for i, atom in enumerate(graph_builder.graph_atoms(source))
     }
     raw_graph = graph_builder.build(source)
-    atom_ptr, atom_index = csr(
-        [
-            tuple(maps[v] for v in reaction.source_atom_maps if v in maps)
-            for reaction in reactions
-        ]
-    )
-    retained = coo(
-        [
-            (i, maps[v])
-            for i, reaction in enumerate(reactions)
-            for v in sorted(reaction.retained_atom_maps)
-            if v in maps
-        ]
-    )
 
     sample_count = condition_features.shape[0]
     if sample_branch_group_index is None:
@@ -755,20 +695,7 @@ def prepare_source_reactions(
     graph = Batch.from_data_list([raw_graph])
     return SourceReactionStructure(
         graph,
-        torch.zeros(len(reactions), dtype=torch.long),
-        torch.tensor(
-            [
-                (a.reaction_pattern_id, a.reaction_rule_id, a.product_molecule_id)
-                for a in reactions
-            ],
-            dtype=torch.long,
-        ).reshape(-1, 3),
-        atom_ptr,
-        atom_index,
-        coo(relations.conflict_pairs),
-        coo(relations.invalidation_pairs),
-        coo(relations.dominance_pairs),
-        retained,
+        ReactionTensorData.from_reactions(reactions, maps, relations),
         torch.zeros(sample_count, dtype=torch.long),
         condition_features,
         torch.tensor(owners),

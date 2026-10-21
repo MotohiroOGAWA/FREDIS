@@ -17,7 +17,6 @@ class ReactionSequenceSearchStats:
     num_raw_combinations: int = 0
     num_hard_conflict_pruned: int = 0
     num_invalidated_reaction_pruned: int = 0
-    num_redundancy_pruned: int = 0
     num_duplicate_sequence_pruned: int = 0
     num_duplicate_effect_pruned: int = 0
     num_compiled_sequences: int = 0
@@ -71,8 +70,8 @@ class _ReactionSequenceCandidate:
 class ReactionSequenceSearch:
     """Explore unordered collections using increasing primitive indices.
 
-    A cursor is separate from the normalized history, since normalization may
-    remove a reaction. Different cursors can expose different remaining reactions;
+    A cursor tracks the remaining primitive reaction indices.
+    Different cursors can expose different remaining reactions;
     histories are deduplicated independently from these enumeration positions.
     For a repeated history only its smallest (most permissive) cursor expands.
     Seed reactions are fixed anchors; added indices increase from -1, allowing
@@ -135,7 +134,7 @@ class ReactionSequenceSearch:
         is yielded, so no further candidate reaches RDKit materialization.
         """
         connections: set[_ReactionSequenceCandidate] = set()
-        # Heap prioritizes the normalized reaction count, with a stable serial tie-break.
+        # Heap prioritizes the reaction count, with a stable serial tie-break.
         frontier: list[tuple[int, int, ReactionSequence | None, int]] = []
         minimum_cursor: dict[ReactionSequence | None, int] = {}
         serial = 0
@@ -185,8 +184,6 @@ class ReactionSequenceSearch:
                         self.stats.num_invalidated_reaction_pruned += 1
                     continue
                 sequence = ReactionSequence((*previous, reaction))
-                if len(sequence.reactions) < len(previous) + 1:
-                    self.stats.num_redundancy_pruned += 1
                 if (
                     not sequence.retained_atom_maps
                     or len(sequence.reactions) > self.max_reaction_count

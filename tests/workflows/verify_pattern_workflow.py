@@ -147,7 +147,7 @@ with torch.no_grad():
     actual = updated.feature_model.encode_static(data)[0]
 torch.testing.assert_close(expected,actual,rtol=0,atol=0)
 assert expected.numel() > 0
-assert len(set(data.reaction_type[:,0].tolist())) > 1
+assert len(set(data.reactions.reaction_type[:,0].tolist())) > 1
 base_data = torch.load(next((out/'data_base/train_structures').rglob('*.preft.pt')),
                        map_location='cpu',weights_only=False)['structure']
 base_model = load_generator(model_path=str(base_ckpt),params_path=None,device=torch.device('cpu'),strict=True)
@@ -159,10 +159,10 @@ for checkpoint_path in (carbonyl_ckpt, ether_ckpt, sequential_ckpt, merged, head
     expanded = load_generator(model_path=str(checkpoint_path),params_path=None,device=torch.device('cpu'),strict=True)
     new_ids = {p.key:p.pattern_id for p in expanded.fragmenter.reaction_pattern_set.patterns}
     remap = {p.pattern_id:new_ids[p.key] for p in base_patterns}
-    types = base_data.reaction_type.clone()
+    types = base_data.reactions.reaction_type.clone()
     types[:,0] = torch.tensor([remap[pid] for pid in types[:,0].tolist()])
     with torch.no_grad():
-        features = expanded.feature_model.encode_static(replace(base_data,reaction_type=types))[0]
+        features = expanded.feature_model.encode_static(replace(base_data,reactions=replace(base_data.reactions,reaction_type=types)))[0]
     max_feature_roundoff = max(max_feature_roundoff,float((base_features-features).abs().max()))
     torch.testing.assert_close(base_features,features,rtol=1e-5,atol=1e-6)
 

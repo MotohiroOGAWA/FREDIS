@@ -15,7 +15,7 @@ model. Its `forward()` returns reaction selection only; `predict_batches()` and
 SMILES + precursor adduct + collision energy (CE)
   -> CPU preparation per unique molecule
      -> concrete reaction instances
-     -> conflict / invalidation / dominance relations
+     -> conflict / invalidation relations
      -> molecular graphs and reaction input tensors
   -> shared MolEncoder and pattern-owned reaction encoders
   -> main-adduct-conditioned reaction-set search (no CE)
@@ -80,9 +80,8 @@ For a molecule with R concrete reaction instances, CPU preparation computes:
 
 - Conflict: two reactions change overlapping bonds.
 - Invalidation: one reaction discards atoms required by the other's match.
-- Dominance: one reaction makes another redundant under the exact normalization rule.
 
-These are conceptually three `[R,R]` relations. Workers return sparse index
+These are conceptually two `[R,R]` relations. Workers return sparse index
 pairs and domain relation data. `prepare_source_reactions()` reuses them;
 it does not repeat pairwise chemistry in the prediction phase.
 
@@ -91,7 +90,6 @@ it does not repeat pairwise chemistry in the prediction phase.
 ```text
 pool.conflict      [G, Rmax, Rmax] bool
 pool.invalidation  [G, Rmax, Rmax] bool
-pool.dominance     [G, Rmax, Rmax] bool
 pool.retained      packed per-reaction retained-atom bitsets
 ```
 
@@ -343,7 +341,7 @@ keys selected by state group   [4,3,128]
 logits = dot(query,key)/sqrt(128) -> [4,3]
 ```
 
-Chemical expansion checks pair relations, removes dominated reactions,
+Chemical expansion checks pair relations,
 intersects retained-atom bitsets, and rejects repeated/no-op/over-budget sets.
 Invalid logits become `-inf`. Current fragment molecular embeddings and CE do
 not enter branch logits.

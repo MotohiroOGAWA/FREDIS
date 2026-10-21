@@ -23,7 +23,7 @@ def load_prepared_structure(file_path: str | Path):
     required = (
         "teacher_node_reaction_ptr",
         "sample_branch_group_index",
-        "reaction_type",
+        "reactions",
     )
     if not all(hasattr(structure, name) for name in required):
         raise TypeError("This is not a prepared fragment-tree training structure.")
@@ -57,7 +57,7 @@ def restore_reaction_registry(
     originals = list(
         fragmenter.fragment_ion_tree_builder.create_reaction_instances(source)
     )
-    if len(originals) != len(structure.reaction_type):
+    if len(originals) != len(structure.reactions.reaction_type):
         originals = []
     patterns = {
         pattern.pattern_id: pattern
@@ -66,10 +66,10 @@ def restore_reaction_registry(
     atoms = list(source.mapped_mol.GetAtoms())
     if len(atoms) != structure.source_graph.num_nodes:
         atoms = [atom for atom in atoms if atom.GetAtomicNum() != 1]
-    pointers = structure.reaction_source_atom_ptr.tolist()
-    atom_indexes = structure.reaction_source_atom_index.tolist()
+    pointers = structure.reactions.reaction_source_atom_ptr.tolist()
+    atom_indexes = structure.reactions.reaction_source_atom_index.tolist()
     rows = []
-    for index, category in enumerate(structure.reaction_type.tolist()):
+    for index, category in enumerate(structure.reactions.reaction_type.tolist()):
         reaction = originals[index] if originals else None
         pattern = patterns.get(category[0])
         rule = (

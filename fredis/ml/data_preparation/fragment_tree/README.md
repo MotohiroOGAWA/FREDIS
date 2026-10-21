@@ -139,7 +139,6 @@ Most raw combinations never reach RDKit:
 |---|---|---|
 | Hard conflict | `num_hard_conflict_pruned` | Two reactions change the same bond. |
 | Invalidated reaction | `num_invalidated_reaction_pruned` | One reaction discards atoms that another reaction's match needs. Reactions are simultaneous, so no order can fix this. |
-| Redundancy | `num_redundancy_pruned` | Normalization dropped a reaction dominated by another. The normalized combination **continues**; this only counts the absorption. |
 | Duplicate sequence | `num_duplicate_sequence_pruned` | The normalized history equals its parent (skipped), or it was already visited. An already-visited history is still yielded once per new parent, as an alternative route. |
 | Duplicate effect | `num_duplicate_effect_pruned` | A different history has the same net effect (retained atoms, cuts, bond updates) as one already materialized, so the cached product is reused without running RDKit. |
 
@@ -615,7 +614,6 @@ source's fragment tree is built.
 | `num_raw_combinations` | yes | (parent, reaction) pairs examined by the search over all sizes, before pruning; bounded by `max_reaction_combinations` |
 | `num_hard_conflict_pruned` | skipped only | Pairs rejected because two reactions change the same bond |
 | `num_invalidated_reaction_pruned` | skipped only | Pairs rejected because one reaction removes atoms another needs |
-| `num_redundancy_pruned` | skipped only | Pairs whose normalization absorbed a dominated reaction (not discarded) |
 | `num_duplicate_sequence_pruned` | skipped only | Pairs that normalized to their parent or to an already visited history |
 | `num_duplicate_effect_pruned` | skipped only | Histories that reused a cached product of an identical effect |
 | `num_compiled_sequences` | yes | Unique effects compiled into a reaction |

@@ -9,7 +9,6 @@ from rdkit import Chem
 from fredis.libs.mmkit.mmkit import Compound
 from itertools import combinations
 from .ReactionInstance import ReactionInstance
-from .ReactionRelations import reaction_dominates
 
 if TYPE_CHECKING:
     from .CompositeReaction import CompositeReaction
@@ -42,9 +41,7 @@ class ReactionSequence:
                 raise ValueError(
                     "Every reaction must retain every other reaction's Source match"
                 )
-        # Retained-set inclusion alone cannot remove additional cuts between surviving atoms.
-        kept = [a for a in unique if not any(reaction_dominates(b, a) for b in unique)]
-        object.__setattr__(self, "reactions", tuple(kept))
+        object.__setattr__(self, "reactions", unique)
 
     @classmethod
     def from_reactions(cls, reactions: Iterable[ReactionInstance]) -> ReactionSequence:
