@@ -4,12 +4,17 @@ Install the packaged VSIX in VS Code, open the FREDIS workspace and run **FREDIS
 
 The sidebar contains **Home**, **Data**, **Training**, **Prediction**, **Visualization** and **Settings**. Documentation, GitHub, theme and help controls remain in the top toolbar.
 
-The low-emphasis **Data → Data Evaluation…** item opens the standalone
-Evaluation window rather than adding another full Workbench page. It evaluates
-`.mssim` cosine similarities by metadata column, collision energy or molecular
-descriptor, and can compare multiple tools or datasets with grouped box/violin
-plots. The same window remains available from **FREDIS: Open Evaluation** in the
-command palette.
+Evaluation tools open in their own window from the command palette
+(**Ctrl+Shift+P**), independently of the Workbench:
+
+- **FREDIS: Open Evaluation** opens the evaluation tools with both tabs.
+- **FREDIS: Evaluation: Column Summary** opens column-based evaluation directly.
+- **FREDIS: Evaluation: Compare Tools and Datasets** opens grouped comparison directly.
+
+Evaluate `.mssim` cosine similarities by metadata column, collision energy,
+molecular descriptor or SMARTS matches, and compare multiple tools or datasets
+with grouped box/violin plots. Saved `.evalcol.pft` and `.evalgroup.pft` files
+continue to open in the standalone Evaluation editor.
 
 ## Home
 

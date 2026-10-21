@@ -23,8 +23,8 @@ const input=(name,value)=>{form.elements[name].value=value;form.elements[name].d
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
 (async()=>{
-  document.getElementById('openDataEvaluation').click();
-  assert.equal(messages.at(-1).type,'openEvaluation');
+  assert.equal(document.getElementById('openDataEvaluation'),null);
+  assert.equal(document.getElementById('openEvaluation'),null);
   assert(form.classList.contains('preparation-page'));
   assert.equal(form.querySelectorAll('[data-predict-step]').length,5);
   assert(document.getElementById('predictLoadConfig').classList.contains('config-drop'));
@@ -87,6 +87,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   assert(messages.some(message=>message.type==='chemistry'&&message.payload?.smiles==='CO'));
   const stop=document.getElementById('predictStop');stop.disabled=false;stop.click();
   assert.equal(messages.at(-1).type,'stopSpectrumPrediction');
+  await tick();
   assert.deepEqual(errors,[]);
   console.log('Batch stepper and single-page prediction result interactions passed.');
   dom.window.close();

@@ -51,6 +51,8 @@ function activate(context) {
     vscode.commands.registerCommand('fredis.openWorkbench', () => openWorkbench(context, output)),
     vscode.commands.registerCommand('fredis.openResult', openResultPicker),
     vscode.commands.registerCommand('fredis.openEvaluation', () => evaluation.open(context, output, projectRoot)),
+    vscode.commands.registerCommand('fredis.openColumnEvaluation', () => evaluation.open(context, output, projectRoot, 'column')),
+    vscode.commands.registerCommand('fredis.openGroupedEvaluation', () => evaluation.open(context, output, projectRoot, 'grouped')),
     vscode.window.registerCustomEditorProvider('fredis.resultViewer', provider, {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true
@@ -201,8 +203,6 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         }
       } else if (message.type === 'openResult') {
         await openResultPicker();
-      } else if (message.type === 'openEvaluation') {
-        evaluation.open(context, output, projectRoot);
       } else if (message.type === 'copyText') {
         await vscode.env.clipboard.writeText(String(message.text || ''));
       } else if (message.type === 'copyCommand') {
@@ -817,7 +817,7 @@ function webviewScript() { return `
     setConfig(initial);setFormConfig(trainingForm,initialTraining);setFormConfig(predictForm,initialPrediction);if(initialPrediction.adductType)predictForm.elements.adductType.dataset.restoreValue=initialPrediction.adductType;setPredictEnabled(false); document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>vscode.postMessage({type:'pick',form:b.dataset.form||'data',field:b.dataset.pick,kind:b.dataset.kind}));
     document.querySelectorAll('[data-app]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-app]').forEach(x=>x.classList.toggle('active',x===button));const app=button.dataset.app;if(app==='reactionPatterns'){document.getElementById('reactionPatternPageMount').append(document.getElementById('reactionPatternApp'));onReactionPatternChange=()=>{};}if(app==='adduct'){document.getElementById('adductPageMount').append(document.getElementById('adductApp'));onAdductChange=()=>{};}document.getElementById('homePage').hidden=true;document.getElementById('modelsPage').hidden=true;document.getElementById('trainablePage').hidden=true;document.getElementById('jobPage').hidden=true;document.getElementById('environmentPage').hidden=true;document.getElementById('spectrumViewerApp').hidden=true;document.getElementById('smartsApp').hidden=app!=='smarts';document.getElementById('fragmentTreeApp').hidden=app!=='fragmentTree';document.getElementById('reactionViewerApp').hidden=app!=='reactionViewer';document.getElementById('reactionPatternAnalysisApp').hidden=app!=='reactionPatternAnalysis';document.getElementById('reactionPatternApp').hidden=app!=='reactionPatterns';document.getElementById('adductApp').hidden=app!=='adduct';form.hidden=app!=='data';trainingForm.hidden=app!=='training';predictForm.hidden=app!=='predict';document.getElementById('dataActions').hidden=app!=='data';document.getElementById('appSubtitle').textContent=app==='smarts'?'SMARTS Search':app==='fragmentTree'?'Fragment Tree Visualization':app==='reactionViewer'?'Reaction Viewer':app==='reactionPatternAnalysis'?'Reaction Pattern Analysis':app==='reactionPatterns'?'Reaction Pattern Set Editor':app==='adduct'?'Fragment Ion Adduct Rule Set Editor':app==='training'?'Fragment Tree Training':app==='predict'?'Predict Spectrum':'Fragment Tree Data Preparation';if(app==='reactionViewer')window.dispatchEvent(new Event('reactionViewer/open'));if(app==='reactionPatternAnalysis')window.dispatchEvent(new Event('reactionPatternAnalysis/open'));});
     document.getElementById('reactionViewerLoadPatterns').onclick=()=>vscode.postMessage({type:'loadReactionPatternSet'});
-    document.getElementById('save').onclick=()=>vscode.postMessage({type:'saveConfig',config:getConfig()}); document.getElementById('load').onclick=()=>vscode.postMessage({type:'loadConfig'}); document.getElementById('openResult').onclick=()=>vscode.postMessage({type:'openResult'}); document.getElementById('openEvaluation').onclick=()=>vscode.postMessage({type:'openEvaluation'});
+    document.getElementById('save').onclick=()=>vscode.postMessage({type:'saveConfig',config:getConfig()}); document.getElementById('load').onclick=()=>vscode.postMessage({type:'loadConfig'}); document.getElementById('openResult').onclick=()=>vscode.postMessage({type:'openResult'});
     ${reactionPatternUi.script()}
     ${adductUi.script()}
     const initialAdductSet=initial.fragmenterParams?.fragment_ion_tree_builder?.fragment_ion_adduct_rule_set;if(initialAdductSet)window.dispatchEvent(new MessageEvent('message',{data:{type:'adductRuleSet',value:{fragment_ion_adduct_rule_set:JSON.parse(JSON.stringify(initialAdductSet))},path:''}}));

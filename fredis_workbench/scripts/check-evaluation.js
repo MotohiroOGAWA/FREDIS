@@ -2,13 +2,28 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const Module = require('module');
 
+const panels = [];
+const vscode = {
+  ViewColumn: { One: 1 },
+  window: {
+    createWebviewPanel(viewType, title) {
+      const panel = { viewType, title, handlers: [], messages: [] };
+      panel.webview = {
+        onDidReceiveMessage(handler) { panel.handlers.push(handler); },
+        async postMessage(message) { panel.messages.push(message); }
+      };
+      panels.push(panel);
+      return panel;
+    }
+  }
+};
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
-  if (request === 'vscode') return {};
+  if (request === 'vscode') return vscode;
   return originalLoad.call(this, request, parent, isMain);
 };
 const {
-  html, summaryArgs, groupedArgs, evaluationConfigDocument, parseEvaluationConfig,
+  open, html, summaryArgs, groupedArgs, evaluationConfigDocument, parseEvaluationConfig,
   evaluationConfigSuffix, ensureEvaluationConfigSuffix, ensureSvgSuffix
 } = require('../src/features/evaluation/editor');
 Module._load = originalLoad;
@@ -194,3 +209,26 @@ const smarts = summaryArgs({
 assert.deepEqual(smarts.slice(smarts.indexOf('--transform'), smarts.indexOf('--transform') + 2), ['--transform', 'smarts']);
 assert.deepEqual(JSON.parse(smarts[smarts.indexOf('--smarts-json') + 1]), [{ label: 'Aromatic', smarts: '[c]' }]);
 console.log('Evaluation webview and CLI argument checks passed.');
+
+
+(async () => {
+  const manifest = require('../package.json');
+  for (const command of ['fredis.openEvaluation', 'fredis.openColumnEvaluation', 'fredis.openGroupedEvaluation']) {
+    assert(manifest.contributes.commands.some(item => item.command === command));
+    assert(manifest.activationEvents.includes('onCommand:' + command));
+  }
+  for (const kind of [null, 'column', 'grouped']) {
+    const panel = open({}, {}, () => '', kind);
+    assert.equal(panel.viewType, 'fredis.evaluation');
+    assert.equal(panel.title, 'FREDIS Evaluation');
+    assert.deepEqual(panel.messages, []); // Wait for the webview to attach its listeners.
+    for (const handler of panel.handlers) await handler({ type: 'evaluationReady' });
+    assert.deepEqual(panel.messages, kind ? [{ type: 'evaluationTabSelected', kind }] : []);
+    assert(panel.webview.html.includes('data-eval-tab="column"'));
+    assert(panel.webview.html.includes('data-eval-tab="grouped"'));
+  }
+  const count = panels.length;
+  assert.throws(() => open({}, {}, () => '', 'unknown'), /Unknown evaluation kind/);
+  assert.equal(panels.length, count);
+  console.log('Standalone evaluation commands and initial tab selection checks passed.');
+})().catch(error => { console.error(error); process.exitCode = 1; });

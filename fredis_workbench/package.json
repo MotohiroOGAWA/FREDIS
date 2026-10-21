@@ -22,6 +22,8 @@
     "onCommand:fredis.editAdductRules",
     "onCommand:fredis.openResult",
     "onCommand:fredis.openEvaluation",
+    "onCommand:fredis.openColumnEvaluation",
+    "onCommand:fredis.openGroupedEvaluation",
     "onCustomEditor:fredis.resultViewer",
     "onCustomEditor:fredis.reactionPatternAnalysisConfigEditor",
     "onCustomEditor:fredis.reactionPatternAnalysisResultEditor",
@@ -55,6 +57,14 @@
       {
         "command": "fredis.openEvaluation",
         "title": "FREDIS: Open Evaluation"
+      },
+      {
+        "command": "fredis.openColumnEvaluation",
+        "title": "FREDIS: Evaluation: Column Summary"
+      },
+      {
+        "command": "fredis.openGroupedEvaluation",
+        "title": "FREDIS: Evaluation: Compare Tools and Datasets"
       },
       {
         "command": "fredis.importDataset",
