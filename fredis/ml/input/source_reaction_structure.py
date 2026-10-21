@@ -46,7 +46,6 @@ def csr(rows: Sequence[Sequence[int]]) -> tuple[Tensor, Tensor]:
 @dataclass(frozen=True)
 class SourceReactionStructure:
     source_graph: Batch
-    source_graph_offset: Tensor
     reaction_tree_index: Tensor
     reaction_type: Tensor
     reaction_source_atom_ptr: Tensor
@@ -446,7 +445,6 @@ class SourceReactionStructure:
             )
         return cls(
             graph,
-            graph.ptr,
             torch.cat(tree_indices),
             torch.cat(reaction_types),
             atom_ptr,
@@ -757,7 +755,6 @@ def prepare_source_reactions(
     graph = Batch.from_data_list([raw_graph])
     return SourceReactionStructure(
         graph,
-        graph.ptr,
         torch.zeros(len(reactions), dtype=torch.long),
         torch.tensor(
             [
