@@ -1,3 +1,4 @@
+const fileFormats = require('../../file-formats');
 const { filteringHtml, filteringClient } = require('./filtering');
 const whiteLightTheme=require('../../light-theme').css;
 const vscode = require('vscode');
@@ -6,11 +7,11 @@ const path = require('path');
 const { groupedArgs, groupedHtml, groupedClient } = require('./grouped-boxplot');
 const pathDrop = require('../../webview-path-drop');
 
-const VIEW_TYPE = 'fredis.evaluationConfigEditor';
+const VIEW_TYPE = fileFormats.format('evaluation-trainable').viewType;
 // .pft (not .json) so VS Code's language-icon fallback actually shows the
 // FREDIS icon: virtually every icon theme already claims plain .json, which
 // always wins over a contributed language icon, but no theme claims .pft.
-const CONFIG_SUFFIXES = { filtering: '.evaltrainable.pft', column: '.evalcol.pft', grouped: '.evalgroup.pft' };
+const CONFIG_SUFFIXES = Object.fromEntries(fileFormats.formats.filter(item=>item.evaluationKind).map(item=>[item.evaluationKind,item.suffix]));
 
 function evaluationConfigSuffix(kind) {
   const suffix = CONFIG_SUFFIXES[kind];

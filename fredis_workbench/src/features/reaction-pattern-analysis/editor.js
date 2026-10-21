@@ -1,3 +1,4 @@
+const fileFormats=require('../../file-formats');
 const vscode=require('vscode');
 const path=require('path');
 const fs=require('fs');
@@ -25,9 +26,9 @@ ${resultsView.html()}
 
 function css(){return resultsView.css()+`.reaction-pattern-analysis-page textarea{width:100%;box-sizing:border-box}.analysis-log{max-height:13rem;overflow:auto;white-space:pre-wrap}.rpa-result-tabs{overflow-x:auto}.rpa-result-tabs button.active,[data-rpa-tab].active{border-color:var(--vscode-focusBorder);background:var(--vscode-button-secondaryBackground)}#rpaDistribution svg,#rpaCumulative svg{width:100%;height:auto;max-height:320px}.rpa-bar{fill:var(--vscode-charts-blue,#3794ff)}.rpa-axis{stroke:var(--vscode-foreground);opacity:.5}.rpa-line{fill:none;stroke:var(--vscode-charts-orange,#d18616);stroke-width:2}.reaction-pattern-analysis-page td code{white-space:nowrap}.rpa-drop-zone{border:1px dashed var(--vscode-panel-border);border-radius:6px;padding:12px;margin:8px 0}.rpa-drop-zone.path-drop-active{border-color:var(--vscode-focusBorder);background:var(--vscode-list-hoverBackground)}.rpa-source-detail{padding:10px;background:var(--vscode-editor-inactiveSelectionBackground)}.rpa-source-detail .grid select{width:100%}.rpa-tree ul{list-style:none;margin:0;padding-left:1.4rem;border-left:1px dashed var(--vscode-panel-border)}.rpa-tree>ul{padding-left:0;border-left:0}.rpa-tree-node{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem;padding:.3rem .5rem;margin:.25rem 0;border:1px solid var(--vscode-panel-border);border-radius:6px}.rpa-tree-label small{margin-left:.5rem}.rpa-tree-actions{display:flex;flex-wrap:wrap;gap:.25rem;align-items:center}.rpa-badge{font-size:.75em;padding:0 .45em;border-radius:999px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground)}.rpa-set-editor{margin-top:10px;padding:10px;border:1px solid var(--vscode-focusBorder);border-radius:6px}.rpa-calculation-progress{margin-top:12px;padding:10px;border:1px solid var(--vscode-panel-border);border-radius:6px}.rpa-calculation-progress>div{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px}.rpa-calculation-progress progress{display:block;width:100%;height:8px;accent-color:var(--vscode-progressBar-background)}`;}
 
-function script(options={}){return `(${client.toString()})();`+resultsView.script(options);}
+function script(options={}){return `(${client.toString()})(${JSON.stringify(fileFormats.format('reaction-analysis-result').suffix)});`+resultsView.script(options);}
 
-function client(){
+function client(resultSuffix){
 	 const el=id=>document.getElementById(id),esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let patternSets=[],treeNodes=[],computedNodes=new Set(),editingSet=null,analysisSources=[];
  const post=value=>vscode.postMessage(value);
  function tab(name){document.querySelectorAll('[data-rpa-tab]').forEach(x=>x.classList.toggle('active',x.dataset.rpaTab===name));document.querySelectorAll('[data-rpa-panel]').forEach(x=>x.hidden=x.dataset.rpaPanel!==name);}
@@ -96,7 +97,7 @@ function client(){
 	 el('rpaSaveConfig').onclick=()=>post({type:'reactionPatternAnalysis/saveConfig',config:config()});el('rpaLoadConfig').onclick=()=>post({type:'reactionPatternAnalysis/loadConfig'});
 	 const dropError=message=>{el('rpaRunStatus').textContent=message;el('rpaRunStatus').className='status error';};
 	 const configDrop=el('rpaLoadConfig');installFileDropZone(configDrop,{kind:'file',upload:false,onDrop:paths=>post({type:isResultPath(paths[0])?'reactionPatternAnalysis/openResult':'reactionPatternAnalysis/loadConfigFile',path:paths[0]}),onFiles:async files=>{const file=files[0];if(isResultPath(file.name))throw new Error('Reaction Pattern Analysis result must be dropped from VS Code Explorer so its companion compounds/ and details/ directories remain accessible.');if(file.size>2000000)throw new Error('Configuration exceeds 2 MB.');post({type:'reactionPatternAnalysis/loadConfigJSON',json:await file.text(),name:file.name});},onError:dropError});
-	 const isResultPath=value=>String(value||'').toLowerCase().endsWith('.reactionpatternanalysis.pft');
+	 const isResultPath=value=>String(value||'').toLowerCase().endsWith(resultSuffix);
 	 const resultDrop=el('rpaResultDrop');installFileDropZone(resultDrop,{kind:'file',requirePath:true,requirePathMessage:'Reaction Pattern Analysis result must be dropped from VS Code Explorer so its companion compounds/ and details/ directories remain accessible.',onDrop:paths=>post({type:'reactionPatternAnalysis/openResult',path:paths[0]}),onError:message=>{el('rpaResultInfo').textContent=message;}});
 	 el('rpaDatasetDrop').onclick=()=>post({type:'reactionPatternAnalysis/pickInputs'});el('rpaPickParams').onclick=()=>post({type:'reactionPatternAnalysis/pickParams'});el('rpaPickOutput').onclick=()=>post({type:'reactionPatternAnalysis/pickOutput'});el('rpaPickResult').onclick=()=>post({type:'reactionPatternAnalysis/pickResult'});el('rpaLoadPatterns').onclick=()=>post({type:'reactionPatternAnalysis/loadPatterns',path:el('rpaParams').value});el('rpaBrowsePatternSource').onclick=()=>post({type:'reactionPatternAnalysis/pickPatternFiles'});el('rpaApplyPatternSource').onclick=()=>{const path=el('rpaPatternSource').value.trim();if(path)post({type:'reactionPatternAnalysis/applyPatternFiles',paths:[path]});};el('rpaCopyCommand').onclick=()=>post({type:'reactionPatternAnalysis/copy',config:config()});el('rpaRun').onclick=()=>post({type:'reactionPatternAnalysis/run',config:config()});el('rpaStop').onclick=()=>post({type:'reactionPatternAnalysis/stop'});
 	 for(const [zone,type]of [[el('rpaDatasetDrop'),'sources'],[el('rpaPatternDrop'),'patterns']])installFileDropZone(zone,{kind:'file',multiple:true,onDrop:paths=>post({type:type==='sources'?'reactionPatternAnalysis/addSources':'reactionPatternAnalysis/applyPatternFiles',paths}),onError:dropError});
@@ -130,7 +131,7 @@ function patternSetFromFile(file){const value=JSON.parse(fs.readFileSync(file,'u
 function fragmenterPatternSet(file){const loaded=loadConfig(file);const name=path.basename(file).replace(/\.(json|pft)$/i,'');return {id:name,name,patterns:loaded.patterns.map(pattern=>{const copy=JSON.parse(JSON.stringify(pattern));delete copy.pattern_id;return copy;}),source:file};}
 function parseAnalysisConfiguration(value){return parseConfiguration(value,'reaction-pattern-analysis');}
 
-const RESULT_NAME='result.reactionpatternanalysis.pft',CHEMISTRY_CONFIG_NAME='reaction-pattern-analysis-chemistry-config.json';
+const RESULT_NAME='result'+fileFormats.format('reaction-analysis-result').suffix,CHEMISTRY_CONFIG_NAME='reaction-pattern-analysis-chemistry-config.json';
 // HDF5 results are binary: never JSON.parse them. A known suffix is enough;
 // other HDF5 files (e.g. .msds datasets) are confirmed by the backend schema check.
 async function isResultFile(context,root,file){
@@ -190,7 +191,7 @@ function attach(panel,context,output,projectRoot,initialDocument=null){
 	    const selected=await vscode.window.showSaveDialog({filters:{'SVG image':['svg']},defaultUri:vscode.Uri.file(name.endsWith('.svg')?name:name+'.svg')});
 	    if(selected){const target=selected.fsPath.toLowerCase().endsWith('.svg')?selected.fsPath:selected.fsPath+'.svg';await fs.promises.writeFile(target,svg);post({type:'reactionPatternAnalysis/svgExported',mode:'save',path:target});}
 	   }else if(message.type==='reactionPatternAnalysis/saveConfig'){
-	    const defaultName=path.join(message.config.outputDir||root,'config.reaction-pattern-analysis.pft');
+	    const defaultName=path.join(message.config.outputDir||root,'config'+fileFormats.format('reaction-analysis-config').suffix);
 	    const saved=await saveConfiguration('reaction-pattern-analysis',message.config,defaultName);
 	    if(saved)post({type:'reactionPatternAnalysis/status',status:'idle',text:'Configuration saved to '+saved+'.'});
 	   }else if(['reactionPatternAnalysis/loadConfig','reactionPatternAnalysis/loadConfigFile','reactionPatternAnalysis/loadConfigJSON'].includes(message.type)){

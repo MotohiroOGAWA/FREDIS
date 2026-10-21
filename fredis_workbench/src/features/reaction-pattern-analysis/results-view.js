@@ -7,7 +7,7 @@
 //   compound click   → that compound's B Parquet (compoundSummary + compoundPeaks)
 //   peak detail      → the C .preft.pt files on the node's path (peakDetail)
 
-const RESULT_SUFFIX='.reactionpatternanalysis.pft';
+const RESULT_SUFFIX=require('../../file-formats').format('reaction-analysis-result').suffix;
 
 function html(){return `<div id="rpaResults" hidden>
 <section><h3>Overall Summary</h3><div id="rpaOverall" class="cards"></div><p id="rpaOverallNote" class="muted"></p></section>

@@ -61,9 +61,12 @@ def evaluate(config, output_dir=None):
         target.mkdir(parents=True, exist_ok=True)
         (target/'results.json').write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
         saved_config = {**config, 'metadata': str(source.resolve()), 'tools': [{**t, 'path': str(Path(t['path']).expanduser().resolve())} for t in tools], 'resultPath': 'results.json'}
-        (target/'settings.evaltrainable.pft').write_text(json.dumps({'schema':'fredis.evaluation.config','schemaVersion':1,'kind':'filtering','config':saved_config}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+        registry = json.loads((Path(__file__).resolve().parent/'file-formats.json').read_text(encoding='utf-8'))
+        suffix = next(item['suffix'] for item in registry['formats'] if item['id'] == 'evaluation-trainable')
+        settings_path = target/('settings'+suffix)
+        settings_path.write_text(json.dumps({'schema':'fredis.evaluation.config','schemaVersion':1,'kind':'filtering','config':saved_config}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
         result['outputDir'] = str(target)
-        result['settingsPath'] = str(target/'settings.evaltrainable.pft')
+        result['settingsPath'] = str(settings_path)
     return {**result, **present(result, config.get('view', {}))}
 
 

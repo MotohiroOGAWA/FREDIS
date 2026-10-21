@@ -1,3 +1,4 @@
+const fileFormats = require('../../file-formats');
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
@@ -8,12 +9,12 @@ const reactionPatternPreview = require('./reaction-preview');
 const pathDrop = require('../../webview-path-drop');
 const host = require('./host');
 
-const VIEW_TYPE = 'fredis.reactionPatternSetEditor';
-const PATTERN_VIEW_TYPE = 'fredis.reactionPatternEditor';
+const VIEW_TYPE = fileFormats.format('reaction-set').viewType;
+const PATTERN_VIEW_TYPE = fileFormats.format('reaction').viewType;
 // .pft (not .json) so VS Code's contributed language icon actually shows:
 // every icon theme already claims plain .json, which always wins over a
 // contributed language icon, but no theme claims .pft.
-const FILE_SUFFIX = '.reactionset.pft';
+const FILE_SUFFIX = fileFormats.format('reaction-set').suffix;
 
 function emptyDocument() {
   return {
@@ -130,7 +131,7 @@ class ReactionPatternSetEditorProvider {
           const pattern = normalizePattern(message.pattern);
           const selected = await vscode.window.showSaveDialog({ filters: { 'FREDIS Reaction Pattern': ['pft'] }, defaultUri: vscode.Uri.file(document.uri.fsPath) });
           if (selected) {
-            const target = vscode.Uri.file(host.ensureFileSuffix(selected.fsPath, '.reaction.pft'));
+            const target = vscode.Uri.file(host.ensureFileSuffix(selected.fsPath, fileFormats.format('reaction').suffix));
             await fs.promises.writeFile(target.fsPath, `${JSON.stringify(pattern, null, 2)}\n`);
             vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
           }

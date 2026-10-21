@@ -1,3 +1,5 @@
+const fileFormats = require('./file-formats');
+const fileFormatPicker = require('./features/file-format-picker');
 const modelArchitecture=require('./features/model-architecture/editor');
 const reactionPatternUi = require('./features/reaction-pattern-set/ui');
 const {commonCss,formCss} = require('./features/reaction-pattern-set/styles');
@@ -36,11 +38,11 @@ const fragmenterEditor = require('./features/fragmenter/editor');
 const reactionPatternHost = require('./features/reaction-pattern-set/host');
 const { projectRoot, isFredisRoot, runChemistryBackend, showElementPicker, readReactionPatternImport, safeFileStem, ensureFileSuffix } = reactionPatternHost;
 
-const RESULT_NAME = 'fragment-tree.training-data.pft';
-const PREPARATION_CONFIG_NAME = 'fragment-tree.training-data-config.pft';
-const REACTION_PATTERN_ANALYSIS_CONFIG_VIEW_TYPE = 'fredis.reactionPatternAnalysisConfigEditor';
+const RESULT_NAME = 'fragment-tree' + fileFormats.format('training-data').suffix;
+const PREPARATION_CONFIG_NAME = 'fragment-tree' + fileFormats.format('training-data-config').suffix;
+const REACTION_PATTERN_ANALYSIS_CONFIG_VIEW_TYPE = fileFormats.format('reaction-analysis-config').viewType;
 // result.reactionpatternanalysis.pft is binary HDF5; it opens in the Workbench, never as text.
-const REACTION_PATTERN_ANALYSIS_RESULT_VIEW_TYPE = 'fredis.reactionPatternAnalysisResultEditor';
+const REACTION_PATTERN_ANALYSIS_RESULT_VIEW_TYPE = fileFormats.format('reaction-analysis-result').viewType;
 let runningProcess, predictionProcess;
 
 function activate(context) {
@@ -180,7 +182,7 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         }
       } else if (message.type === 'saveConfig') {
         const target = await vscode.window.showSaveDialog({ filters: { 'FREDIS training data configuration': ['training-data-config.pft'] }, defaultUri: vscode.Uri.file(PREPARATION_CONFIG_NAME) });
-        if (target) {const file=ensureFileSuffix(target.fsPath,'.training-data-config.pft');await fs.promises.writeFile(file, JSON.stringify(normalizeConfig(message.config), null, 2) + '\n');projects.record(context,'data',message.config,{label:path.basename(file),reason:'exported',sourcePath:file,base:projectRoot(context)});}
+        if (target) {const file=ensureFileSuffix(target.fsPath,fileFormats.format('training-data-config').suffix);await fs.promises.writeFile(file, JSON.stringify(normalizeConfig(message.config), null, 2) + '\n');projects.record(context,'data',message.config,{label:path.basename(file),reason:'exported',sourcePath:file,base:projectRoot(context)});}
       } else if (['loadConfig','loadConfigFile','loadConfigJSON'].includes(message.type)) {
         // Extension-agnostic: this always loads a data-preparation run
         // configuration by content (normalizeConfig), so any filename works.
@@ -267,7 +269,7 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         const pattern = normalizePattern(message.pattern);
         const selected = await vscode.window.showSaveDialog({ filters: { 'FREDIS Reaction Pattern': ['pft'] }, defaultUri: vscode.Uri.file(message.path || `${safeFileStem(pattern.name || 'pattern')}.reaction.pft`) });
         if (selected) {
-          const target = vscode.Uri.file(ensureFileSuffix(selected.fsPath, '.reaction.pft'));
+          const target = vscode.Uri.file(ensureFileSuffix(selected.fsPath, fileFormats.format('reaction').suffix));
           await fs.promises.writeFile(target.fsPath, `${JSON.stringify(pattern, null, 2)}\n`);
           vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
         }
@@ -531,7 +533,15 @@ class ResultEditorProvider {
   constructor(context, output) { this.context = context; this.output = output; }
   async openCustomDocument(uri) { return { uri, dispose() {} }; }
   async resolveCustomEditor(document, panel) {
-    if(document.uri.fsPath.toLowerCase().endsWith('.training-data-config.pft'))return new TrainingDataConfigEditorProvider(this.context,this.output).resolveCustomEditor(document,panel);
+    const entry = fileFormats.match(document.uri.fsPath);
+    if (!entry) return fileFormatPicker.attach(panel, document.uri, () => this.resolveResultEditor(document, panel));
+    if (entry.id === 'training-data-config') return new TrainingDataConfigEditorProvider(this.context,this.output).resolveCustomEditor(document,panel);
+    if (entry.id === 'reaction-analysis-result') return new ReactionPatternAnalysisConfigEditorProvider(this.context,this.output).resolveCustomEditor(document,panel);
+    if (entry.viewType !== fileFormats.fallback.viewType) return vscode.commands.executeCommand('vscode.openWith',document.uri,entry.viewType);
+    return this.resolveResultEditor(document,panel);
+  }
+  async resolveResultEditor(document, panel) {
+    if(document.uri.fsPath.toLowerCase().endsWith(fileFormats.format('training-data-config').suffix))return new TrainingDataConfigEditorProvider(this.context,this.output).resolveCustomEditor(document,panel);
     // The generic *.pft viewer reads JSON; route HDF5 Reaction Pattern Analysis results to their Workbench page.
     if (reactionPatternAnalysisResultView.isResultPath(document.uri.fsPath)) {
       panel.title = 'FREDIS Workbench · Reaction Pattern Analysis';
