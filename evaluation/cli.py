@@ -67,6 +67,10 @@ def _grouped_config(args: argparse.Namespace) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m evaluation", description="Group and summarize FREDIS result tables.")
     commands = parser.add_subparsers(dest="command", required=True)
+    presentation = commands.add_parser('filtering-view', help='Render or export cached filtering counts.')
+    presentation.add_argument('--request-json', required=True)
+    presentation.add_argument('--output-dir')
+    presentation.add_argument('--format', choices=['tsv','png','svg'])
     filtering = commands.add_parser("filtering", help="Audit trainable SpecID retention.")
     filtering.add_argument('--request-json', required=True)
     filtering.add_argument('--output-dir')
@@ -152,6 +156,10 @@ def execute(
     args: argparse.Namespace,
     progress: Callable[[int, str], None] | None = None,
 ) -> dict:
+    if args.command == 'filtering-view':
+        from .filtering import present
+        payload = json.load(sys.stdin) if args.request_json == '-' else json.loads(args.request_json)
+        return present(payload['result'], payload.get('view'), args.output_dir, [args.format] if args.format else [])
     if args.command == "filtering":
         from .filtering import evaluate, inspect_metadata
         config = json.loads(args.request_json)

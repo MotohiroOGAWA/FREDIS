@@ -157,7 +157,7 @@ assert.match(page, /evaluationReady/);
 const manifest = require('../package.json');
 const evaluationEditor = manifest.contributes.customEditors.find(item => item.viewType === 'fredis.evaluationConfigEditor');
 assert.deepEqual(evaluationEditor.selector.map(item => item.filenamePattern),
-  ['*.evalfilter.pft', '*.evalcol.pft', '*.evalgroup.pft']);
+  ['*.evaltrainable.pft', '*.evalcol.pft', '*.evalgroup.pft']);
 assert.match(fs.readFileSync(require.resolve('../src/extension'), 'utf8'), /evaluation\.register\(context, output, projectRoot\)/);
 const editorSource = fs.readFileSync(require.resolve('../src/features/evaluation/editor'), 'utf8');
 assert.match(editorSource, /FREDIS_PROGRESS/);
@@ -245,12 +245,30 @@ console.log('Evaluation webview and CLI argument checks passed.');
   assert.equal(d.querySelectorAll('[data-tool]').length,2);
   d.querySelector('[data-remove="1"]').click();
   assert.equal(d.querySelectorAll('[data-tool]').length,1);
-  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringConfigLoaded',path:'/tmp/settings.evalfilter.pft',config:{metadata:'/tmp/data.msds',idColumn:'SpecID',groupColumn:'Class',tools:[{name:'FREDIS',path:'/tmp/ids.txt',color:'#123456'}]}}}));
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringConfigLoaded',path:'/tmp/settings.evaltrainable.pft',config:{metadata:'/tmp/data.msds',idColumn:'SpecID',groupColumn:'Class',tools:[{name:'FREDIS',path:'/tmp/ids.txt',color:'#123456'}]}}}));
   w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringColumns',result:{columns:['SpecID','Class'],rows:4}}}));
   assert.equal(w.evalFiltering.request().groupColumn,'Class');
   assert.equal(w.evalFiltering.request().tools[0].name,'FREDIS');
   d.getElementById('filterRun').click();
   assert.equal(messages.at(-1).type,'filteringRun');
+  const beforeRestore=messages.length;
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringConfigLoaded',path:'/moved/settings.evaltrainable.pft',config:{metadata:'/missing/source.msds',idColumn:'SpecID',groupColumn:'Class',resultPath:'results.json',tools:[],view:{categories:['A'],tools:['Common'],showOverall:false}}}}));
+  assert.equal(messages.length,beforeRestore); // no metadata read on cached restore
+  const rows=[{scope:'category',category:'A',tool:'Common',totalN:2,retainedN:1,excludedN:1,retainedPercent:50}];
+  w.dispatchEvent(new w.MessageEvent('message',{data:{type:'filteringResult',restored:true,result:{rows,displayRows:rows,diagnostics:[],sourceN:2,title:'Cached',series:[{name:'Common',color:'#666666'}],png:''}}}));
+  assert.equal(d.getElementById('filterPresentation').hidden,false);
+  assert.equal(d.getElementById('filterOverall').checked,false);
+  d.getElementById('filterExportTsv').click();
+  assert.equal(messages.at(-1).type,'filteringExport');
+  assert.equal(messages.at(-1).format,'tsv');
+  assert.deepEqual(Array.from(messages.at(-1).view.categories),['A']);
+  assert.equal(messages.at(-1).request,undefined); // exports never recalculate inputs
+  d.getElementById('filterExportSvg').click();
+  assert.equal(messages.at(-1).format,'svg');
+  d.getElementById('filterApply').click();
+  assert.equal(messages.at(-1).type,'filteringView');
+  d.getElementById('filterSave').click();
+  assert.deepEqual(Array.from(messages.at(-1).config.view.tools),['Common']);
   d.querySelector('[data-eval-tab="column"]').click();
   assert.equal(d.getElementById('filteringEvaluation').hidden,true);
   assert.equal(d.getElementById('columnEvaluation').hidden,false);
@@ -258,7 +276,7 @@ console.log('Evaluation webview and CLI argument checks passed.');
 }
 
 // Saving repeatedly must keep exactly one evaluation extension.
-for (const [kind, suffix] of [['filtering','.evalfilter.pft'],['column','.evalcol.pft'],['grouped','.evalgroup.pft']]) {
+for (const [kind, suffix] of [['filtering','.evaltrainable.pft'],['column','.evalcol.pft'],['grouped','.evalgroup.pft']]) {
   const expected='/tmp/m_h_plus.msds'+suffix;
   let filename=expected;
   for(let i=0;i<5;i++) {
@@ -269,3 +287,5 @@ for (const [kind, suffix] of [['filtering','.evalfilter.pft'],['column','.evalco
   assert.equal(ensureEvaluationConfigSuffix('/tmp/result.evalcol.pft.evalgroup.pft',kind),'/tmp/result'+suffix);
 }
 assert.doesNotMatch(editorSource, /\[suffix\.slice\(1\)\]/);
+
+assert.equal(evaluationConfigSuffix('filtering'), '.evaltrainable.pft');

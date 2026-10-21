@@ -130,13 +130,39 @@ in tool lists are counted once. Diagnostics report duplicate list entries and
 IDs absent from metadata. This audits retention patterns, not the reasons each
 tool excluded a spectrum.
 
-Export to a selected directory writes `retention.csv`, `id_diagnostics.csv`,
-`retention.png`, and `settings.evalfilter.pft`. Open the settings file to restore
-the Evaluation tab and inputs; click Evaluate to rerun. Settings can also be
-saved and loaded independently. Exported settings contain absolute input paths.
+Click Evaluate and choose a directory to save the evaluation. This writes
+`results.json` (all computed counts) and `settings.evaltrainable.pft`, whose
+`resultPath` is relative to the settings file. Moving the directory keeps this
+link valid. Opening the settings file loads the cached counts automatically,
+without reading metadata or tool ID lists. If the result is missing or unreadable,
+the settings remain available and the UI reports the problem.
+
+Save Settings writes only the configuration file, display options, and a relative
+reference to the existing result, when available. It does not calculate or copy
+results. Save settings again after changing display options to preserve them.
+
+Under Result display, select categories and tools, toggle overall statistics,
+set a minimum N, choose category-name / N-descending / retention-ascending order,
+and edit the chart title. Apply display updates the table and chart using cached
+counts. Common always remains the intersection of **all evaluated tools**,
+even when some tools are hidden. Retention order uses the minimum retention
+among displayed tools per category.
+
+Export TSV, Export PNG, and Export SVG independently write the selected view to a chosen
+directory. TSV writes `retention.tsv` and the full tool-ID diagnostics as
+`id_diagnostics.tsv`; PNG writes `retention.png`; SVG writes `retention.svg`. Exports never read source
+data, recalculates retention, or writes settings. The displayed subset and order
+are used for all formats; original category denominators remain unchanged.
 
 The CLI exposes the same calculation:
 
 ```sh
 python -m evaluation filtering --request-json '{"metadata":"source.msds","idColumn":"SpecID","groupColumn":"Class","tools":[{"name":"FREDIS","path":"trainable_spec_ids.txt","color":"#36c5a2"}]}' --output-dir audit
 ```
+
+Rendering and export can also use a cached result through `filtering-view`:
+
+```sh
+python -m evaluation filtering-view --request-json '{"result":{"rows":[],"diagnostics":[],"series":[]},"view":{"showOverall":false}}' --output-dir figures --format png
+```
+

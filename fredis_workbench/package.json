@@ -151,7 +151,8 @@
         "displayName": "FREDIS Evaluation",
         "selector": [
           {
-            "filenamePattern": "*.evalfilter.pft"
+            "filenamePattern": "*.evaltrainable.pft"
+
           },
           {
             "filenamePattern": "*.evalcol.pft"
@@ -305,7 +306,7 @@
           ".fredis-result",
           ".reaction-pattern-analysis.pft",
           ".reactionpatternanalysis.pft",
-          ".evalfilter.pft",
+          ".evaltrainable.pft",
           ".evalcol.pft",
           ".evalgroup.pft",
           ".reaction.pft",

@@ -13,9 +13,6 @@ def inspect_metadata(config):
 
 
 def evaluate(config, output_dir=None):
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
     from matplotlib.colors import is_color_like
 
     source = Path(config['metadata']).expanduser()
@@ -56,31 +53,70 @@ def evaluate(config, output_dir=None):
         for name, kept, _ in series:
             n = len(ids & kept)
             rows.append({'scope': 'overall' if index == 0 else 'category', 'category': category, 'tool': name, 'totalN': len(ids), 'retainedN': n, 'excludedN': len(ids)-n, 'retainedPercent': 100*n/len(ids) if ids else None})
-    fig, ax = plt.subplots(figsize=(12, max(4, len(groups)*len(series)*.18)))
-    width = .8/len(series)
-    for j, (name, _, color) in enumerate(series):
-        values = [r['retainedPercent'] or 0 for r in rows if r['tool'] == name]
-        positions = [i-.4+width/2+j*width for i in range(len(groups))]
-        bars = ax.barh(positions, values, height=width, label=name, color=color)
-        ax.bar_label(bars, labels=[f"{r['retainedN']}/{r['totalN']} ({(r['retainedPercent'] or 0):.1f}%)" for r in rows if r['tool']==name], fontsize=7, padding=3)
-    ax.set_yticks(range(len(groups)), [f'{c} (N={len(ids)})' for c, ids in groups])
-    ax.invert_yaxis()
-    ax.set_xlim(0, 135)
-    ax.set_xlabel('Retained spectra (%) — denominator: metadata SpecIDs in category')
-    ax.set_title(config.get('title') or 'Training data filtering audit')
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    fig.tight_layout()
-    buffer = io.BytesIO()
-    fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    result = {'rows': rows, 'diagnostics': diagnostics, 'sourceN': len(universe), 'png': base64.b64encode(buffer.getvalue()).decode('ascii')}
+    result = {'rows': rows, 'diagnostics': diagnostics, 'sourceN': len(universe),
+              'series': [{'name': n, 'color': c} for n, _, c in series],
+              'title': config.get('title') or 'Training data filtering audit'}
     if output_dir:
         target = Path(output_dir).expanduser().resolve()
         target.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(rows).to_csv(target/'retention.csv', index=False)
-        pd.DataFrame(diagnostics).to_csv(target/'id_diagnostics.csv', index=False)
-        (target/'retention.png').write_bytes(buffer.getvalue())
-        saved_config = {**config, 'metadata': str(source.resolve()), 'tools': [{**t, 'path': str(Path(t['path']).expanduser().resolve())} for t in tools]}
-        (target/'settings.evalfilter.pft').write_text(json.dumps({'schema':'fredis.evaluation.config','schemaVersion':1,'kind':'filtering','config':saved_config}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+        (target/'results.json').write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
+        saved_config = {**config, 'metadata': str(source.resolve()), 'tools': [{**t, 'path': str(Path(t['path']).expanduser().resolve())} for t in tools], 'resultPath': 'results.json'}
+        (target/'settings.evaltrainable.pft').write_text(json.dumps({'schema':'fredis.evaluation.config','schemaVersion':1,'kind':'filtering','config':saved_config}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
         result['outputDir'] = str(target)
-    return result
+        result['settingsPath'] = str(target/'settings.evaltrainable.pft')
+    return {**result, **present(result, config.get('view', {}))}
+
+
+def present(result, view=None, output_dir=None, formats=()):
+    """Render/export cached counts without reading metadata or SpecID lists."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    view = view or {}
+    rows = list(result['rows'])
+    if 'categories' in view:
+        rows = [r for r in rows if r['scope'] == 'overall' or r['category'] in view['categories']]
+    if view.get('showOverall', True) is False:
+        rows = [r for r in rows if r['scope'] != 'overall']
+    if 'tools' in view:
+        rows = [r for r in rows if r['tool'] in view['tools']]
+    rows = [r for r in rows if r['totalN'] >= int(view.get('minN', 0))]
+    groups = list(dict.fromkeys((r['scope'], r['category']) for r in rows))
+    mode = view.get('sort', 'name')
+    def group_key(group):
+        subset = [r for r in rows if (r['scope'], r['category']) == group]
+        value = group[1] if mode == 'name' else (-subset[0]['totalN'] if mode == 'count' else min(r['retainedPercent'] or 0 for r in subset))
+        return (group[0] != 'overall', value, group[1])
+    groups.sort(key=group_key)
+    series = [s for s in result['series'] if any(r['tool'] == s['name'] for r in rows)]
+    lookup = {(r['scope'], r['category'], r['tool']): r for r in rows}
+    rows = [lookup[(*g, s['name'])] for g in groups for s in series]
+    fig, ax = plt.subplots(figsize=(12, max(4, len(groups)*max(1,len(series))*.18)))
+    width = .8/max(1,len(series))
+    for j, item in enumerate(series):
+        selected = [lookup[(*g, item['name'])] for g in groups]
+        positions = [i-.4+width/2+j*width for i in range(len(groups))]
+        bars = ax.barh(positions, [r['retainedPercent'] or 0 for r in selected], height=width, label=item['name'], color=view.get('colors', {}).get(item['name'], item['color']))
+        ax.bar_label(bars, labels=[f"{r['retainedN']}/{r['totalN']} ({(r['retainedPercent'] or 0):.1f}%)" for r in selected], fontsize=7, padding=3)
+    ax.set_yticks(range(len(groups)), [f"{g[1]} (N={lookup[(*g,series[0]['name'])]['totalN']})" for g in groups])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 135)
+    ax.set_xlabel('Retained spectra (%) — denominator: metadata SpecIDs in category')
+    ax.set_title(view.get('title') or result.get('title', 'Training data filtering audit'))
+    if series:
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    fig.tight_layout()
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+    if output_dir:
+        target = Path(output_dir).expanduser().resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        if 'tsv' in formats:
+            pd.DataFrame(rows, columns=['scope','category','tool','totalN','retainedN','excludedN','retainedPercent']).to_csv(target/'retention.tsv', sep='\t', index=False)
+            pd.DataFrame(result['diagnostics']).to_csv(target/'id_diagnostics.tsv', sep='\t', index=False)
+        if 'png' in formats:
+            (target/'retention.png').write_bytes(buffer.getvalue())
+        if 'svg' in formats:
+            fig.savefig(target/'retention.svg', format='svg', bbox_inches='tight')
+    plt.close(fig)
+    return {'displayRows': rows, 'png': base64.b64encode(buffer.getvalue()).decode('ascii')}

@@ -10,7 +10,7 @@ const VIEW_TYPE = 'fredis.evaluationConfigEditor';
 // .pft (not .json) so VS Code's language-icon fallback actually shows the
 // FREDIS icon: virtually every icon theme already claims plain .json, which
 // always wins over a contributed language icon, but no theme claims .pft.
-const CONFIG_SUFFIXES = { filtering: '.evalfilter.pft', column: '.evalcol.pft', grouped: '.evalgroup.pft' };
+const CONFIG_SUFFIXES = { filtering: '.evaltrainable.pft', column: '.evalcol.pft', grouped: '.evalgroup.pft' };
 
 function evaluationConfigSuffix(kind) {
   const suffix = CONFIG_SUFFIXES[kind];
@@ -40,7 +40,7 @@ function configFileStem(value, fallback) {
   return stem || fallback;
 }
 
-function runCli(context, projectRoot, args, output, onProgress) {
+function runCli(context, projectRoot, args, output, onProgress, inputData) {
   return new Promise((resolve, reject) => {
     const root = projectRoot(context);
     const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
@@ -50,6 +50,10 @@ function runCli(context, projectRoot, args, output, onProgress) {
       cwd: root,
       env: { ...process.env, PYTHONPATH: ['.', process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) }
     });
+    if (inputData !== undefined) {
+      child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
+      child.stdin.end(JSON.stringify(inputData));
+    }
     let stdout = '', stderr = '', stderrBuffer = '';
     child.stdout.on('data', chunk => { stdout += chunk.toString(); });
     const consumeStderrLine = line => {
@@ -149,6 +153,28 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
   panel.webview.html = html();
   pathDrop.attach(panel);
   const reportProgress = type => progress => panel.webview.postMessage({ type, ...progress });
+  let filteringResult = null, filteringResultFile = null;
+  const restoreFiltering = async (config, configPath) => {
+    filteringResult = null; filteringResultFile = null;
+    if (!config.resultPath) return;
+    const resultFile = path.resolve(path.dirname(configPath), config.resultPath);
+    try {
+      const raw = await vscode.workspace.fs.readFile(vscode.Uri.file(resultFile));
+      const cached = JSON.parse(Buffer.from(raw).toString('utf8'));
+      const rendered = await runCli(context, projectRoot, ['filtering-view','--request-json','-'], output, undefined, {result:cached,view:config.view});
+      filteringResult = cached; filteringResultFile = resultFile;
+      await panel.webview.postMessage({type:'filteringResult',result:{...cached,...rendered},restored:true});
+    } catch (error) {
+      await panel.webview.postMessage({type:'filteringError',message:'Saved results could not be loaded: '+error.message+' · Evaluate to calculate again.'});
+    }
+  };
+  const configForTarget = (document, target) => {
+    if (document.kind !== 'filtering') return document;
+    const config = {...document.config};
+    delete config.resultPath;
+    if (filteringResultFile) config.resultPath = path.relative(path.dirname(target), filteringResultFile);
+    return {...document,config};
+  };
   panel.webview.onDidReceiveMessage(async message => {
     try {
       if (message.type === 'evaluationReady') {
@@ -163,6 +189,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           type: `${initialDocument.kind}ConfigLoaded`, config: initialDocument.config,
           path: initialDocument.path
         });
+        if (initialDocument.kind === 'filtering') await restoreFiltering(initialDocument.config, initialDocument.path);
       } else if (message.type === 'saveEvaluationConfig') {
         const configDocument = evaluationConfigDocument(message.kind, message.config);
         const suffix = evaluationConfigSuffix(message.kind);
@@ -178,7 +205,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
         if (selected) {
           const target = vscode.Uri.file(ensureEvaluationConfigSuffix(selected.fsPath, message.kind));
           await vscode.workspace.fs.writeFile(
-            target, Buffer.from(JSON.stringify(configDocument, null, 2) + '\n', 'utf8')
+            target, Buffer.from(JSON.stringify(configForTarget(configDocument, target.fsPath), null, 2) + '\n', 'utf8')
           );
           panel.webview.postMessage({ type: `${message.kind}ConfigSaved`, path: target.fsPath });
           vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
@@ -202,7 +229,7 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
         }
         const target = vscode.Uri.file(ensureEvaluationConfigSuffix(targetPath, message.kind));
         await vscode.workspace.fs.writeFile(
-          target, Buffer.from(JSON.stringify(configDocument, null, 2) + '\n', 'utf8')
+          target, Buffer.from(JSON.stringify(configForTarget(configDocument, target.fsPath), null, 2) + '\n', 'utf8')
         );
         panel.webview.postMessage({ type: `${message.kind}ConfigSaved`, path: target.fsPath });
         vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
@@ -218,23 +245,43 @@ function attach(panel, context, output, projectRoot, initialDocument = null, ini
           panel.webview.postMessage({
             type: `${message.kind}ConfigLoaded`, config, path: selected[0].fsPath
           });
+          if (message.kind === 'filtering') await restoreFiltering(config, selected[0].fsPath);
         }
       } else if (message.type === 'filteringPick') {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false });
         if (picked && picked[0]) panel.webview.postMessage({type:'filteringPicked',metadata:message.metadata,index:message.index,path:picked[0].fsPath});
-      } else if (['filteringInspect','filteringRun','filteringExport'].includes(message.type)) {
+      } else if (['filteringInspect','filteringRun'].includes(message.type)) {
         let directory;
-        if (message.type === 'filteringExport') {
-          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Export here'});
+        if (message.type === 'filteringRun') {
+          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Save evaluation here'});
           if (!picked || !picked[0]) return;
           directory = picked[0].fsPath;
         }
-        panel.webview.postMessage({type:'filteringBusy',message:'Auditing SpecID retention…'});
+        panel.webview.postMessage({type:'filteringBusy',message:directory?'Calculating and saving evaluation…':'Loading metadata columns…'});
         const args = ['filtering','--request-json',JSON.stringify(message.request)];
         if (message.type === 'filteringInspect') args.push('--inspect');
         if (directory) args.push('--output-dir',directory);
         const result = await runCli(context, projectRoot, args, output);
+        if (directory) {
+          filteringResult = {...result};
+          delete filteringResult.png; delete filteringResult.displayRows;
+          filteringResultFile = path.join(directory,'results.json');
+        }
         panel.webview.postMessage({type:message.type === 'filteringInspect'?'filteringColumns':'filteringResult',result});
+      } else if (['filteringView','filteringExport'].includes(message.type)) {
+        if (!filteringResult) throw new Error('Evaluate or load saved results first.');
+        const args = ['filtering-view','--request-json','-'];
+        let directory;
+        if (message.type === 'filteringExport') {
+          if (!['tsv','png','svg'].includes(message.format)) throw new Error('Select TSV, PNG, or SVG.');
+          const picked = await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:'Export '+message.format.toUpperCase()+' here'});
+          if (!picked || !picked[0]) return;
+          directory = picked[0].fsPath;
+          args.push('--output-dir',directory,'--format',message.format);
+        }
+        panel.webview.postMessage({type:'filteringBusy',message:directory?'Exporting displayed results…':'Updating display…'});
+        const rendered = await runCli(context, projectRoot, args, output, undefined, {result:filteringResult,view:message.view});
+        panel.webview.postMessage({type:'filteringPresentation',result:rendered,exported:directory});
       } else if (message.type === 'pickGroupedInput') {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Similarity result': ['mssim'] } });
         if (picked && picked[0]) panel.webview.postMessage({
