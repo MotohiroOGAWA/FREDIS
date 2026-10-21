@@ -252,6 +252,20 @@ precursor adducts, intensity targets and peak annotations.
 The payload uses schema `fredis.fragment-tree-training`. No format conversion is provided;
 regenerate `.preft.pt` files after a format change.
 
+## Open preparation settings in Workbench
+
+Each preparation run writes `fragment-tree.training-data-config.pft` in its
+output root. Click this file in VS Code Explorer to open **Data / Training Data**
+in the FREDIS Workbench with its datasets, column mappings, split settings and
+Fragmenter settings restored. Opening it does not start preparation.
+**Save Configuration** uses the same `.training-data-config.pft` extension.
+
+`preparation_config.json` remains available for compatibility and can still be
+loaded with **Load Configuration**. Existing JSON settings can also be copied
+to a filename ending in `.training-data-config.pft` without changing their
+contents. The per-split `fragment-tree.training-data.pft` files continue to open
+the generated-data results viewer.
+
 ## Train / validation / test split
 
 Workbench uses a **dataset list**. Add any number of files; each card has its

@@ -91,6 +91,9 @@ class TestDatasetList(unittest.TestCase):
                     preview=backend.validate(payload)
                     main(['--datasets-json',json.dumps(entries),'--dataset-mode',mode,'--output-dir',str(output),
                           '--params-json',json.dumps(self.config),'--validation-ratio','0.25','--test-ratio','0.25','--validation-seed','3'])
+                clickable=json.loads((output/'fragment-tree.training-data-config.pft').read_text())
+                self.assertEqual(clickable,json.loads((output/'preparation_config.json').read_text()))
+                self.assertEqual(clickable['workbench_config']['datasetMode'],mode)
                 manifest=json.loads((output/'split_manifest.json').read_text())
                 self.assertEqual(manifest['mode'],mode)
                 for name in ('train','validation','test'):

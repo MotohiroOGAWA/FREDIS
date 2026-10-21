@@ -46,11 +46,10 @@ def dataset_chemistry_config(directory):
     if directory.name == "data":
         directory = directory.parent
     candidates = []
-    files = [(directory / "preparation_config.json", "preparation_config.json")]
+    config_names = ("fragment-tree.training-data-config.pft", "preparation_config.json")
+    files = [(directory / name, name) for name in config_names]
     if directory.name in ("train_structures", "validation_structures", "test_structures"):
-        files.append(
-            (directory.parent / "preparation_config.json", "../preparation_config.json")
-        )
+        files.extend((directory.parent / name, "../" + name) for name in config_names)
     files.extend(
         (directory / filename, filename)
         for filename in ("fragment-tree.training-data.pft", "reaction_statistics.json")

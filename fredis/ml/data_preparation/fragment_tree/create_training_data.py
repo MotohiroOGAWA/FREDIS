@@ -1111,6 +1111,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if workbench_path.exists():
             previous = json.loads(workbench_path.read_text())
+        elif (output / "fragment-tree.training-data-config.pft").exists():
+            previous = json.loads((output / "fragment-tree.training-data-config.pft").read_text()).get(
+                "workbench_config", {}
+            )
         elif (output / "preparation_config.json").exists():
             previous = json.loads((output / "preparation_config.json").read_text()).get(
                 "workbench_config", {}
@@ -1186,9 +1190,8 @@ def main(argv: list[str] | None = None) -> None:
         restored.pop("datasets", None)
         restored.pop("datasetMode", None)
     preparation_config["workbench_config"] = restored
-    (output / "preparation_config.json").write_text(
-        json.dumps(preparation_config, indent=2)
-    )
+    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
+        (output / name).write_text(json.dumps(preparation_config, indent=2))
     (output / "split_manifest.json").write_text(json.dumps({
         "version": 1, "key": "rdkit-canonical-isomeric-smiles", "seed": args.validation_seed,
         "validationRatio": args.validation_ratio, "testRatio": args.test_ratio,
@@ -1231,9 +1234,8 @@ def main(argv: list[str] | None = None) -> None:
             json.dumps(split_config, indent=2)
         )
     (output / "invalid_records.json").write_text(json.dumps(reports, indent=2))
-    (output / "preparation_config.json").write_text(
-        json.dumps(preparation_config, indent=2)
-    )
+    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
+        (output / name).write_text(json.dumps(preparation_config, indent=2))
 
 
 if __name__ == "__main__":
