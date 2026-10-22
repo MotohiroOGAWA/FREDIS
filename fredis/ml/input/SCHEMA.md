@@ -1,10 +1,16 @@
 # SourceReactionStructure schema
 
-The sections below describe the implemented Batch tables and annotation references
-in schema `fredis.annotated-spectrum-training`. External references are shown by name,
+Sections 2.1–2.9 describe the implemented tables. Sections 2.10–2.13 propose
+a Compound-node / Reaction-edge graph and its teacher paths for review.
+The existing Python implementation is unchanged. The saved schema identifier remains `fredis.annotated-spectrum-training`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
-## 2.1 SourceCompound: independent Batch structure
+The References links below each diagram are ordinary Markdown links to the
+corresponding sections. Diagram node navigation depends on the preview's Mermaid support.
+
+## 2.1 SourceCompound
+
+**independent Batch structure**
 
 The actual molecular graph storage is `source_graph: torch_geometric.data.Batch`,
 including `ptr` and `batch`. This section describes that physical Batch first,
@@ -153,7 +159,9 @@ Implementation references:
 [atom features](../mol/atom_feature.py),
 [bond features](../mol/bond_feature.py).
 
-## 2.2 Reaction: concrete reaction Batch
+## 2.2 Reaction
+
+**concrete reaction Batch**
 
 Actual storage is `SourceReactionStructure.reactions: ReactionTensorData`.
 R is the total number of concrete reactions in the current Batch. A reaction ID
@@ -194,18 +202,23 @@ flowchart TB
     KEEP -->|"Source atom row IDs"| SOURCEATOM
     CONFLICT -->|"both rows contain reaction IDs"| TYPE
     INVALID -->|"both rows contain reaction IDs"| TYPE
+    click SOURCEROW "SCHEMA.md#21-sourcecompound" "SourceCompound"
+    click SOURCEATOM "SCHEMA.md#21-sourcecompound" "SourceCompound"
 ```
+
+References: [SourceCompound](#21-sourcecompound)
+
 
 ### Fields, values, and foreign-row references
 
 | Field / relation | Type and shape | Concrete logical value | Reference target |
 |---|---|---|---|
-| `reaction_source_compound_index` | int64 `[R]` | `[0,0,1]` | → `SourceCompound:source_smiles` (Source row m) |
+| `reaction_source_compound_index` | int64 `[R]` | `[0,0,1]` | → [SourceCompound](#21-sourcecompound):`source_smiles` (Source row m) |
 | `reaction_type` | int64 `[R,3]` | `[[10,0,0],[11,0,0],[10,1,0]]` | Pattern/rule definitions; product slot is a value, not a Compound FK |
-| `reaction_source_atom (CSR)` | int64; R variable-length lists | `[[0,1],[0,1,2],[4,5,6]]` | → `SourceCompound:source_graph.x` |
-| `reaction_retained_atom (CSR)` | int64; R variable-length lists | `[[1,2],[0,1],[3,4,5]]` | → `SourceCompound:source_graph.x` |
-| `reaction_conflict_index (COO)` | int64 `[2,N_conflict]` | `[[0,1],[1,0]]` | Both endpoints → `Reaction:reaction_type` |
-| `reaction_invalidation_index (COO)` | int64 `[2,N_invalidation]` | `[[0],[1]]` | Both endpoints → `Reaction:reaction_type` |
+| `reaction_source_atom (CSR)` | int64; R variable-length lists | `[[0,1],[0,1,2],[4,5,6]]` | → [SourceCompound](#21-sourcecompound):`source_graph.x` |
+| `reaction_retained_atom (CSR)` | int64; R variable-length lists | `[[1,2],[0,1],[3,4,5]]` | → [SourceCompound](#21-sourcecompound):`source_graph.x` |
+| `reaction_conflict_index (COO)` | int64 `[2,N_conflict]` | `[[0,1],[1,0]]` | Both endpoints → [Reaction](#22-reaction):`reaction_type` |
+| `reaction_invalidation_index (COO)` | int64 `[2,N_invalidation]` | `[[0],[1]]` | Both endpoints → [Reaction](#22-reaction):`reaction_type` |
 
 `reaction_source_compound_index[r]=m` selects `source_smiles[m]` and
 atom rows `source_graph.ptr[m]:source_graph.ptr[m+1]`. The referenced ID is the
@@ -275,7 +288,9 @@ those semantics. Its tensors are the prepared model inputs and constraints.
 Implementation: [ReactionTensorData](reaction_tensor_data.py),
 [ReactionRelations](../../domain/fragment/reaction/ReactionRelations.py).
 
-## 2.3 ReactionSet: independent reaction-set CSR table
+## 2.3 ReactionSet
+
+**independent reaction-set CSR table**
 
 The implemented `ReactionSet` class (`structure.reaction_sets`) contains only
 canonical membership. Group, Compound, topology, and teacher information are
@@ -295,11 +310,15 @@ flowchart TB
     end
     REACTION["Reaction:reaction_type"]
     MEMBERS -->|"Batch-global reaction row IDs"| REACTION
+    click REACTION "SCHEMA.md#22-reaction" "Reaction"
 ```
+
+References: [Reaction](#22-reaction)
+
 
 | Field / relation | Type / logical shape | Example | Reference |
 |---|---|---|---|
-| `reaction (CSR)` | int64; `N_reaction_set` variable-length rows | `[[],[0],[1],[0,1],[2]]` | → `Reaction:reaction_type` |
+| `reaction (CSR)` | int64; `N_reaction_set` variable-length rows | `[[],[0],[1],[0,1],[2]]` | → [Reaction](#22-reaction):`reaction_type` |
 
 `reaction` is a logical name for one CSR relation. The schema does not draw its
 physical index and ptr arrays as two fields. Its physical pointer length is
@@ -341,7 +360,11 @@ flowchart TB
     end
     SETROW["ReactionSet:reaction_set_id (implicit)"]
     SETS -->|"reaction-set row IDs"| SETROW
+    click SETROW "SCHEMA.md#23-reactionset" "ReactionSet"
 ```
+
+References: [ReactionSet](#23-reactionset)
+
 
 | Compound row | generating_reaction_sets (CSR) | Meaning |
 |---|---|---|
@@ -410,7 +433,9 @@ can be refined independently of canonical set identity.
 Implementation: [SourceCompound](source_compound.py),
 [ReactionSet](reaction_set.py), [ReactionContextData](reaction_context_data.py).
 
-## 2.4 CompoundBatch: unique product compounds and their generating sets
+## 2.4 CompoundBatch
+
+**unique product compounds and their generating sets**
 
 This is the implemented `CompoundBatch` class at
 `structure.annotations.compounds`. Distinguish a single **mmkit.Compound** molecule object from the
@@ -429,13 +454,17 @@ flowchart TB
     end
     SETROW["ReactionSet:reaction_set_id<br/>(implicit row ID)"]
     SETS -->|"generating ReactionSet IDs"| SETROW
+    click SETROW "SCHEMA.md#23-reactionset" "ReactionSet"
 ```
+
+References: [ReactionSet](#23-reactionset)
+
 
 | Field / relation | Type / shape | Concrete example | Reference / meaning |
 |---|---|---|---|
 | `compounds` | tuple[mmkit.Compound, ...], length N_compound | Five objects whose SMILES are CCO, C, CO, CC, O | One object per unique structure |
 | `graph` | PyG Batch | 5 graphs, 9 atoms, 8 directed edges | One structural-feature graph per `compounds` row |
-| `generating_reaction_sets (CSR)` | int64; N_compound variable-length rows | `[[0],[1,5],[2],[3],[4]]` | → `ReactionSet:reaction_set_id` |
+| `generating_reaction_sets (CSR)` | int64; N_compound variable-length rows | `[[0],[1,5],[2],[3],[4]]` | → [ReactionSet](#23-reactionset):`reaction_set_id` |
 
 The Compound ID is the implicit index into `compounds` and the graph rows.
 There is no separately stored `compound_id` vector. `compounds[i]` means one
@@ -481,10 +510,10 @@ configuration. The actual example uses F_atom=35 and F_bond=9.
 | Graph field | Type / shape | Concrete example / reference |
 |---|---|---|
 | `graph.x` | float32 [N_atom,F_atom] | [9,35] |
-| `graph.edge_index` | int64 [2,N_edge] | [2,8]; -> `CompoundBatch:graph.x` |
+| `graph.edge_index` | int64 [2,N_edge] | [2,8]; -> [CompoundBatch](#24-compoundbatch):`graph.x` |
 | `graph.edge_attr` | float32 [N_edge,F_bond] | [8,9] |
 | `graph.ptr` | int64 [N_compound+1] | [0,3,4,6,8,9] |
-| `graph.batch` | int64 [N_atom] | [0,0,0,1,2,2,3,3,4]; -> `CompoundBatch:compound_id` |
+| `graph.batch` | int64 [N_atom] | [0,0,0,1,2,2,3,3,4]; -> [CompoundBatch](#24-compoundbatch):`compound_id` |
 
 `graph.ptr` delimits atom rows; generating_reaction_sets CSR delimits set-ID
 lists. Both have N_compound+1 boundaries, but they index different arrays.
@@ -500,7 +529,9 @@ relation generating_reaction_sets (CSR). `smiles` is a derived read-only view of
 The saved format is `fredis.annotated-spectrum-training` without a version suffix. Implementation: [CompoundBatch](compound_batch.py),
 [normalization and reference tables](annotated_spectrum_data.py).
 
-## 2.5 AdductData: shared adduct rules and hydrogen shifts
+## 2.5 AdductData
+
+**shared adduct rules and hydrogen shifts**
 
 `structure.adducts` stores [AdductData](adduct_data.py).
 This shared schema centralizes main adducts, fragment ion adducts, and signed
@@ -525,7 +556,7 @@ flowchart TB
 |---|---|---|---|
 | `main_adducts` | tuple[str, ...], N_main_adduct | `("[M+H]+","[M+Na]+")` | Registered main-adduct labels; row IDs are implicit |
 | `fragment_ion_adducts` | tuple[str, ...], N_fragment_ion_adduct | `("[M+H]+","[M+H-H2O]+","[M+Na]+")` | Unique fragment-ion adduct labels |
-| `fragment_ion_adduct (CSR)` | int64, N_main_adduct variable-length rows | `[[0,1],[2]]` | Fragment ion adducts belonging to each main adduct; references `AdductData:fragment_ion_adducts` |
+| `fragment_ion_adduct (CSR)` | int64, N_main_adduct variable-length rows | `[[0,1],[2]]` | Fragment ion adducts belonging to each main adduct; references [AdductData](#25-adductdata):`fragment_ion_adducts` |
 | `hydrogen_shifts` | int64 [N_hydrogen_shift] | `[-1,0,1]` | Signed hydrogen-count adjustments; an index into this array differs from its value |
 
 The physical CSR arrays in this example are
@@ -535,9 +566,11 @@ The lists are configured by the preparation chemistry rules, not inferred from
 label spelling. A shared fragment-adduct row may be referenced by multiple main
 adducts when configured. Hydrogen shifts form a shared vocabulary; listing a
 shift does not assert that every adduct/shift combination is chemically valid.
-`BranchGroup:main_adduct_index` references `AdductData:main_adducts`.
+[BranchGroup](#27-branchgroup):`main_adduct_index` references [AdductData](#25-adductdata):`main_adducts`.
 
-## 2.6 FormulaData: unique charged formulas
+## 2.6 FormulaData
+
+**unique charged formulas**
 
 A FormulaData row is one unique elemental-count vector including charge.
 Different Compounds and fragment-ion conditions can produce the same charged
@@ -555,7 +588,11 @@ flowchart TB
     end
     ELEMENTS["AnnotatedSpectrumData:elements"]
     COMPOSITION -->|"element-column ordering"| ELEMENTS
+    click ELEMENTS "annotated_spectrum_data.py" "AnnotatedSpectrumData"
 ```
+
+References: [AnnotatedSpectrumData](annotated_spectrum_data.py)
+
 
 | Field / relation | Type / shape | Illustrative value | Meaning |
 |---|---|---|---|
@@ -566,7 +603,9 @@ flowchart TB
 FormulaData contains only formula identities and their properties. It does not
 own an explanation CSR. FormulaExplanationData references each formula directly.
 
-### FormulaExplanationData: Compound / fragment ion adduct / hydrogen shift
+### FormulaExplanationData
+
+**Compound / fragment ion adduct / hydrogen shift**
 
 Each row registers a Formula and its Compound / fragment ion adduct / hydrogen
 shift explanation. Its formula_index is a direct foreign key to FormulaData.
@@ -589,7 +628,14 @@ flowchart TB
     C --> CR
     A --> AR
     H --> HR
+    click FR "SCHEMA.md#26-formuladata" "FormulaData"
+    click CR "SCHEMA.md#24-compoundbatch" "CompoundBatch"
+    click AR "SCHEMA.md#25-adductdata" "AdductData"
+    click HR "SCHEMA.md#25-adductdata" "AdductData"
 ```
+
+References: [FormulaData](#26-formuladata) · [CompoundBatch](#24-compoundbatch) · [AdductData](#25-adductdata)
+
 
 For an illustrative registry where Compound rows 0 and 1 are ethanol (`CCO`)
 and dimethyl ether (`COC`), the following rows explain the formulas above:
@@ -614,7 +660,9 @@ Runtime condition rows reference explanations through the separate
 `runtime_explanations.formula_explanation_index` and `runtime_explanations.sample_index`
 arrays; these are not additional FormulaExplanationData identity columns.
 
-## 2.7 BranchGroup: SourceCompound and main-adduct context
+## 2.7 BranchGroup
+
+**SourceCompound and main-adduct context**
 
 A BranchGroup row identifies one `(SourceCompound, main adduct)` pair.
 It supplies the context in which branch predictions/topology are shared.
@@ -638,12 +686,17 @@ flowchart TB
     ADDUCTROW["AdductData:main_adducts"]
     SOURCE -->|"SourceCompound row ID"| SOURCEROW
     ADDUCT -->|"registered main-adduct vocabulary index"| ADDUCTROW
+    click SOURCEROW "SCHEMA.md#21-sourcecompound" "SourceCompound"
+    click ADDUCTROW "SCHEMA.md#25-adductdata" "AdductData"
 ```
+
+References: [SourceCompound](#21-sourcecompound) · [AdductData](#25-adductdata)
+
 
 | Logical field | Type / shape | Concrete example | Reference |
 |---|---|---|---|
-| `source_compound_index` | int64 [N_branch_group] | [0,0,1] | → `SourceCompound:source_smiles` |
-| `main_adduct_index` | int64 [N_branch_group] | [0,1,0] | → `AdductData:main_adducts` |
+| `source_compound_index` | int64 [N_branch_group] | [0,0,1] | → [SourceCompound](#21-sourcecompound):`source_smiles` |
+| `main_adduct_index` | int64 [N_branch_group] | [0,1,0] | → [AdductData](#25-adductdata):`main_adducts` |
 
 `main_adduct_index` references the shared AdductData main-adduct rows defined
 in section 2.5. It is not an independent PreparationContext vocabulary.
@@ -684,7 +737,9 @@ rows. Its Source and main-adduct information are obtained through the group.
 
 Implementation: [BranchGroup](branch_group.py), [AdductData](adduct_data.py).
 
-## 2.8 SpectrumData: observed spectrum rows and peak lists
+## 2.8 SpectrumData
+
+**observed spectrum rows and peak lists**
 
 This schema is implemented by `structure.annotations.spectra`.
 One row is one observed spectrum. N_spectrum counts spectra and N_peak counts
@@ -712,11 +767,15 @@ flowchart TB
     end
     GROUPROW["BranchGroup:group_id<br/>(implicit row ID)"]
     GROUP -->|"branch-group row ID"| GROUPROW
+    click GROUPROW "SCHEMA.md#27-branchgroup" "BranchGroup"
 ```
+
+References: [BranchGroup](#27-branchgroup)
+
 
 | Field / relation | Type / shape | Concrete value | Reference / meaning |
 |---|---|---|---|
-| `branch_group_index` | int64 [N_spectrum] | [0,0] | → `BranchGroup:group_id`; implicit group row |
+| `branch_group_index` | int64 [N_spectrum] | [0,0] | → [BranchGroup](#27-branchgroup):`group_id`; implicit group row |
 | `collision_energy` | float64 [N_spectrum] | [10.0,40.0] | Observational CE in eV |
 | `precursor_mz` | float64 [N_spectrum] | [62.060588876,62.060588876] | Precursor m/z recorded for each spectrum |
 | `metadata` | tuple[dict, ...], length N_spectrum | Dictionaries in the example below | Remaining per-spectrum annotations |
@@ -802,10 +861,12 @@ is defined in section 2.9. This section only defines SpectrumData.
 
 Implementation: [SpectrumData and normalization](annotated_spectrum_data.py).
 
-## 2.9 PeakAssignmentData: structural explanations assigned to observed peaks
+## 2.9 PeakAssignmentData
+
+**structural explanations assigned to observed peaks**
 
 This table is separate from TeacherData. Each implicit row corresponds to the
-same flattened peak row in `SpectrumData:mz`. A single CSR lists the
+same flattened peak row in [SpectrumData](#28-spectrumdata):`mz`. A single CSR lists the
 FormulaExplanationData rows assigned to each peak.
 
 ```mermaid
@@ -819,11 +880,16 @@ flowchart TB
     EROW["FormulaExplanationData:formula_index"]
     ROW -->|"same implicit row ID"| PEAK
     ASSIGNMENT -->|"explanation row IDs"| EROW
+    click PEAK "SCHEMA.md#28-spectrumdata" "SpectrumData"
+    click EROW "SCHEMA.md#formulaexplanationdata" "FormulaExplanationData"
 ```
+
+References: [SpectrumData](#28-spectrumdata) · [FormulaExplanationData](#formulaexplanationdata)
+
 
 | Field / relation | Type / shape | Concrete value | Reference |
 |---|---|---|---|
-| `formula_explanation (CSR)` | int64, N_peak variable-length rows | `[[0,1],[0,2],[]]` | → `FormulaExplanationData:formula_index` |
+| `formula_explanation (CSR)` | int64, N_peak variable-length rows | `[[0,1],[0,2],[]]` | → [FormulaExplanationData](#formulaexplanationdata):`formula_index` |
 
 ```python
 formula_explanation_ptr = [0,2,4,4]       # int64 [N_peak + 1]
@@ -846,143 +912,249 @@ remains an independent mass-tolerance annotation.
 Implementation: [PeakAssignmentData](annotated_spectrum_data.py). The only stored
 assignment fields are `formula_explanation_ptr` and `formula_explanation_index`.
 
-## 2.10 TeacherData: reaction supervision and alternative paths per observed peak
+## 2.10 CompoundReactionGraph
 
-`structure.teacher` stores training labels and paths. PeakAssignmentData records
-chemical explanations of peaks; TeacherData records which reaction additions and
-paths are supported by the prepared observations. It does not duplicate peak
-intensities, formulas, Compound objects, or ReactionSet memberships.
+**CompoundBatch nodes and concrete-reaction edges**
 
-### Reaction labels: one row per active reaction context
-
-N_active_context is the number of Q rows in ReactionContextData, namely the
-length of `ReactionContextData:candidate_index`. Each Q row selects a candidate
-context (V row), whose identity is a BranchGroup and a ReactionSet. Teacher label
-rows follow the same Q-row order; there is no separate stored context_index.
-Reaction IDs always reference the Batch-global concrete Reaction registry.
+The proposed `structure.compound_graph` stores the structural graph. A node ID is directly a
+CompoundBatch row ID; there is no separate node table or reaction-history node.
+Each edge is one `(source Compound, target Compound, Reaction)` triple. The same
+Compound has one node across all histories and BranchGroups. Distinct reactions
+between the same nodes remain separate edges; identical triples are shared.
 
 ```mermaid
 flowchart TB
-    subgraph TL["TeacherData: context labels"]
-        ROW["same active-context row order<br/>N_active_context rows"]
-        OBS["observed<br/>bool [N_active_context]"]
-        POS["positive_reaction (CSR)<br/>N_active_context rows<br/>int64 references"]
-        NEG["negative_reaction (CSR)<br/>N_active_context rows<br/>int64 references"]
-        ROW ~~~ OBS ~~~ POS ~~~ NEG
+    subgraph CG["CompoundReactionGraph: shared edge rows"]
+        SOURCE["source_compound_index<br/>int64 [N_compound_edge]"]
+        TARGET["target_compound_index<br/>int64 [N_compound_edge]"]
+        REACTION["reaction_index<br/>int64 [N_compound_edge]"]
+        SOURCE ~~~ TARGET ~~~ REACTION
     end
-    CONTEXT["ReactionContextData:candidate_index<br/>active-context rows (Q)"]
-    REACTION["Reaction:reaction_type"]
-    ROW -->|"same implicit row ID"| CONTEXT
-    POS -->|"positive added reaction IDs"| REACTION
-    NEG -->|"weak-negative added reaction IDs"| REACTION
-```
-
-| Field / relation | Type / logical shape | Concrete example | Meaning / reference |
-|---|---|---|---|
-| `observed` | bool [N_active_context] | `[False,True,False,True]` | Context is the endpoint of at least one retained nonempty observed-peak path |
-| `positive_reaction (CSR)` | int64, N_active_context rows | `[[0,1],[1],[0],[]]` | → `Reaction:reaction_type`; additions present in retained teacher paths |
-| `negative_reaction (CSR)` | int64, N_active_context rows | `[[2],[2],[2],[]]` | → `Reaction:reaction_type`; chemically valid additions absent from the positive set |
-
-For this illustrative example, all four Q rows belong to group 0 and reference
-ReactionSets `[]`, `[0]`, `[1]`, `[0,1]` respectively. These memberships describe
-the example and are not stored in TeacherData. Reaction 2 is assumed valid at
-the first three contexts but unsupported by their teacher paths; the last context
-has no eligible continuation under the configured limit.
-
-The physical arrays for these relations are:
-
-```python
-positive_reaction_ptr   = [0,2,3,4,4]  # int64 [N_active_context + 1]
-positive_reaction_index = [0,1,1,0]    # int64 [N_positive_addition]
-negative_reaction_ptr   = [0,1,2,3,3]  # int64 [N_active_context + 1]
-negative_reaction_index = [2,2,2]      # int64 [N_weak_negative_addition]
-observed = [False,True,False,True]     # bool [N_active_context]
-```
-
-Positives are the union of outgoing reactions on retained paths across all
-spectra in the same BranchGroup, including different CE observations. Weak
-negatives are valid continuations minus that union; chemically invalid additions
-are excluded. Positive and negative IDs are sorted and unique within each row.
-`observed=True` is an endpoint annotation, not a stop/EOS label: context 1 in
-this example explains one peak and also continues toward context 3 for another.
-
-### Peak supervision: peak items, alternative paths, and ordered steps
-
-N_supervised_peak counts teacher peak items, not all observed peaks. The current
-builder creates an item only when a peak has at least one retained nonempty
-reaction path. Consequently, teacher row h need not equal observed peak row h;
-`peak_index` is an explicit foreign key. N_teacher_path counts all alternative
-paths and N_path_step counts all their steps.
-
-```mermaid
-flowchart TB
-    subgraph TP["TeacherData: peak items"]
-        PEAK["peak_index<br/>int64 [N_supervised_peak]"]
-        GROUP["peak_branch_group_index<br/>int64 [N_supervised_peak]"]
-        PATH["peak_path (CSR)<br/>N_supervised_peak rows<br/>contiguous alternative-path rows"]
-        PEAK ~~~ GROUP ~~~ PATH
-    end
-    subgraph TS["TeacherData: path rows"]
-        STEP["path_step (CSR)<br/>N_teacher_path rows<br/>ordered (parent context, added reaction)"]
-    end
-    PR["SpectrumData:mz"]
-    GR["BranchGroup:group_id<br/>(implicit row ID)"]
-    QR["ReactionContextData:candidate_index<br/>active-context rows (Q)"]
+    COMPOUND["CompoundBatch:compounds"]
     RR["Reaction:reaction_type"]
-    PEAK -->|"flattened observed peak ID"| PR
-    GROUP -->|"branch-group ID"| GR
-    PATH -->|"implicit contiguous path row IDs"| STEP
-    STEP -->|"path_step_state_index: parent Q row"| QR
-    STEP -->|"path_step_reaction_index: added reaction"| RR
+    SOURCE --> COMPOUND
+    TARGET --> COMPOUND
+    REACTION --> RR
+    click COMPOUND "SCHEMA.md#24-compoundbatch" "CompoundBatch"
+    click RR "SCHEMA.md#22-reaction" "Reaction"
 ```
 
-| Field / relation | Type / logical shape | Concrete example | Reference / interpretation |
+References: [CompoundBatch](#24-compoundbatch) · [Reaction](#22-reaction)
+
+| Field | Type / shape | Example | Direct reference |
 |---|---|---|---|
-| `peak_index` | int64 [N_supervised_peak] | `[1,3]` | → `SpectrumData:mz`; flattened observed peak rows |
-| `peak_branch_group_index` | int64 [N_supervised_peak] | `[0,0]` | → `BranchGroup:group_id`; must agree with the owning spectrum's group |
-| `peak_path (CSR)` | N_supervised_peak variable-length rows | `[[0],[1,2]]` | → `TeacherData:path_step (CSR)`; implicit path row IDs |
-| `path_step (CSR)` | N_teacher_path variable-length rows of pairs | `[[(0,0)],[(0,0),(1,1)],[(0,1),(2,0)]]` | Pairs reference parent Q-context rows and added concrete Reaction rows |
+| `source_compound_index` | int64 [N_compound_edge] | `[0,0,1,2,0]` | → [CompoundBatch](#24-compoundbatch):`compounds` |
+| `target_compound_index` | int64 [N_compound_edge] | `[1,2,3,3,4]` | → [CompoundBatch](#24-compoundbatch):`compounds` |
+| `reaction_index` | int64 [N_compound_edge] | `[0,1,1,0,2]` | → [Reaction](#22-reaction):`reaction_type` |
+
+The example has edges 0: A→B by reaction 0, 1: A→C by reaction 1,
+2: B→D by reaction 1, 3: C→D by reaction 0, and 4: A→E by reaction 2. D is one Compound node,
+even though it has two incoming routes. Edge IDs are implicit row numbers.
+A reaction that changes history while preserving structure is a self-loop;
+these edges are retained too. No ReactionSet ID belongs to a structural node.
+
+The edge registry is shared across BranchGroups; group selection and labels
+belong to [ReactionContextData](#211-reactioncontextdata). The registry contains
+both supported and unsupported valid candidates. reaction_index is retained:
+multiple generating ReactionSets per Compound prevent recovering a unique
+reaction by subtracting the sets associated with two Compound rows.
+
+If Compound sharing creates cycles or structure-preserving reaction edges,
+the current DAG propagator cannot consume them directly. Enforce history/depth
+constraints in a finite execution view or explicitly choose another propagation
+strategy. Canonical Compound nodes remain shared. This is a schema proposal only.
+
+## 2.11 ReactionContextData
+
+**Proposed CE-independent branch candidates and edge labels**
+
+This replaces the former Q/V reaction-context proposal. One CSR row corresponds
+to one BranchGroup; there is no candidate_branch_group_index vector, candidate
+ReactionSet foreign key, or occurrence-row reference in this proposed table.
+The shared structural edge registry remains in CompoundReactionGraph.
+
+```mermaid
+flowchart TB
+    subgraph RC["ReactionContextData: BranchGroup rows"]
+        ROW["same BranchGroup row order<br/>N_branch_group rows"]
+        ROOT["root_compound_index<br/>int64 [N_branch_group]"]
+        EDGE["edge (CSR)<br/>N_branch_group rows<br/>edge IDs"]
+        LABEL["edge_label<br/>int8 [N_group_edge_link]<br/>aligned with edge IDs"]
+        ROW ~~~ ROOT ~~~ EDGE ~~~ LABEL
+    end
+    BR["BranchGroup:group_id"]
+    CR["CompoundBatch:compounds"]
+    ER["CompoundReactionGraph:reaction_index"]
+    ROW --> BR
+    ROOT --> CR
+    EDGE --> ER
+    click BR "SCHEMA.md#27-branchgroup" "BranchGroup"
+    click CR "SCHEMA.md#24-compoundbatch" "CompoundBatch"
+    click ER "SCHEMA.md#210-compoundreactiongraph" "CompoundReactionGraph"
+```
+
+References: [BranchGroup](#27-branchgroup) · [CompoundBatch](#24-compoundbatch) · [CompoundReactionGraph](#210-compoundreactiongraph)
+
+| Field / relation | Type / shape | Example | Meaning / reference |
+|---|---|---|---|
+| `root_compound_index` | int64 [N_branch_group] | `[0,0]` | → [CompoundBatch](#24-compoundbatch):`compounds`; initial Source node for each group |
+| `edge (CSR)` | N_branch_group variable-length rows | `[[0,1,2,3,4],[0,1,2,3]]` | → [CompoundReactionGraph](#210-compoundreactiongraph):`reaction_index`; edge row IDs |
+| `edge_label` | int8 [N_group_edge_link] | `[1,1,1,1,0, 1,1,0,-1]` | 1 supported candidate; 0 weak negative; -1 excluded from branch loss |
 
 ```python
-# Teacher peak item 0 -> observed peak 1; item 1 -> observed peak 3.
-peak_index = [1,3]
-peak_branch_group_index = [0,0]
-peak_path_ptr = [0,1,3]              # int64 [N_supervised_peak + 1]
-
-# Path rows 0,1,2 contain 1,2,2 ordered steps respectively.
-path_step_ptr = [0,1,3,5]            # int64 [N_teacher_path + 1]
-path_step_state_index = [0,0,1,0,2]  # int64 [N_path_step]
-path_step_reaction_index = [0,0,1,1,0]  # int64 [N_path_step]
+root_compound_index = [0,0]
+edge_ptr = [0,5,9]                   # int64 [N_branch_group + 1]
+edge_index = [0,1,2,3,4, 0,1,2,3]   # int64 [N_group_edge_link]
+edge_label = [1,1,1,1,0, 1,1,0,-1]  # int8  [N_group_edge_link]
 ```
 
-`peak_path_ptr` partitions contiguous path rows, so no peak_path_index array is
-stored. `path_step_ptr` partitions two aligned step arrays; there is no separate
-pointer for reaction IDs. Step k is the pair of parent Q context and added
-Reaction at position k. The resulting child is resolved through
-ReactionContextData's transitions; it is not another stored Teacher column.
+Group 0 and group 1 can be the same Source with [M+H]+ and [M+Na]+ respectively.
+They share edge rows but select and label them independently. Index and label
+positions are paired and have one shared pointer. -1 means the edge is retained
+for computation but contributes no branch-label loss; it is different from an
+edge omitted from the group's candidate graph. Valid outgoing candidates at
+intermediate nodes are included too: for A→B→C, the CSR contains candidates
+leaving A and candidates leaving B, not only the observed path's edges.
+Root node IDs reference CompoundBatch, not SourceCompound's separate row space.
+An isolated root is retained even for an empty edge slice.
 
-Observed peak 1 has path `[] --0--> [0]`. Observed peak 3 has alternatives
-`[] --0--> [0] --1--> [0,1]` and `[] --1--> [1] --0--> [0,1]`.
-The final ReactionSet and Q context are shared, while the ordered teacher paths
-remain distinct. Steps preserve order; they must not be sorted as reaction sets.
-All parent contexts on a path belong to its peak item's BranchGroup.
-The initial Source/root marker has no reaction addition and is not a step.
+### Edge-level branch objective
 
-### Intensity targets and teacher-free data
+For each selected edge predict a logit z(group, edge), conditioned on the group's
+main adduct and the source Compound, target Compound, and concrete Reaction.
+CE is not an input to this branch objective. Train labelled entries with weighted
+binary cross entropy: positive loss softplus(-z), weak-negative loss
+negative_weight * softplus(z); mask label -1. Normalize over supervised entries
+or their weights with an explicit consistent choice; a group without labelled
+entries contributes zero. This is an edge-classification objective, replacing
+the current path MIL rather than reproducing its alternative-path semantics.
 
-`spectrum_targets(annotations)` derives runtime intensity targets on demand.
-It follows peak assignments to their formulas, takes the maximum assigned peak
-intensity for each `(spectrum, formula)` pair, and projects that value to runtime
-explanation rows. Unassigned formula pairs receive zero; formulas marked invalid
-receive zero. Multiple structural explanations of one formula share that target.
-The intensities themselves remain in SpectrumData, not TeacherData.
+A positive label means the edge is useful in at least one retained explanation
+at some CE, not that its physical occurrence has been established. A weak
+negative must be chemically admissible in some reachable history but unsupported
+by all retained explanations in the group. If any history supports an edge,
+the group/edge summary is positive; it cannot simultaneously be a weak negative
+in this table. Invalid or uncertain cases are omitted or masked, not strong
+negative facts. Labels summarize support, not history-specific applicability.
+Search and propagation must still enforce used-reaction, conflict and depth
+constraints where needed. There is no required peak-path CSR for this branch loss.
 
-`without_teacher()` clears active Q supervision and returns empty TeacherData,
-while keeping candidate contexts, ReactionSets, chemical annotations, and
-observations. Empty default CSR pointers are `[0]`, and observed is empty;
-`spectrum_targets()` then returns None. No stored EOS, predicted intensity, or
-confidence column is defined by this schema.
+## 2.12 SpectrumExplanationData
 
-Implementation: [TeacherData](reaction_context_data.py),
-[teacher preparation](source_reaction_structure.py),
-[path and weak-negative losses](../training/fragment_tree_training/model.py).
+**Proposed spectrum-to-FormulaExplanationData candidates for intensity prediction**
+
+This relation connects each spectrum to candidate chemical explanations. It
+references FormulaExplanationData directly and does not use FragmentOccurrenceData.
+Rows follow SpectrumData order; no duplicate spectrum_index column is needed.
+
+```mermaid
+flowchart TB
+    subgraph SE["SpectrumExplanationData"]
+        ROW["same SpectrumData row order<br/>N_spectrum rows"]
+        E["formula_explanation (CSR)<br/>N_spectrum rows<br/>candidate explanation IDs"]
+        ROW ~~~ E
+    end
+    SR["SpectrumData:branch_group_index"]
+    FR["FormulaExplanationData:compound_index"]
+    ROW --> SR
+    E --> FR
+    click SR "SCHEMA.md#28-spectrumdata" "SpectrumData"
+    click FR "SCHEMA.md#formulaexplanationdata" "FormulaExplanationData"
+```
+
+References: [SpectrumData](#28-spectrumdata) · [FormulaExplanationData](#formulaexplanationdata)
+
+| Relation | Type / shape | Example | Direct reference |
+|---|---|---|---|
+| `formula_explanation (CSR)` | N_spectrum rows of int64 IDs | `[[0,1,2],[0,1,2]]` | → [FormulaExplanationData](#formulaexplanationdata):`compound_index`; explanation row IDs |
+
+```python
+formula_explanation_ptr = [0,3,6]       # int64 [N_spectrum + 1]
+formula_explanation_index = [0,1,2,0,1,2]  # int64 [N_spectrum_explanation]
+```
+
+Assume explanation rows 0 and 1 refer to Compound B and D, share Formula F0,
+and row 2 refers to Compound C and Formula F1. A spectrum selects its graph
+through SpectrumData.branch_group_index. Propagation on that graph supplies
+retained probabilities for the Compound IDs referenced by these explanation
+rows; conditional fragment-adduct/hydrogen-shift predictions split the retained
+probability into candidate ion contributions. All valid routes reaching one
+Compound contribute to its probability; an explanation need not pick one route.
+Thus no additional stored explanation-to-path relation is required for the
+current intensity objective, which sums indistinguishable explanations.
+
+Preparation checks Compound reachability from the group's root, allowed fragment
+adduct membership under its main adduct, allowed hydrogen shifts, and formula
+validity. Include unsupported/unobserved candidate ions as well as matched ones:
+PeakAssignmentData alone lists matches and cannot define the whole negative
+candidate universe. Keep branch weak negatives and masked branch edges as
+intensity candidates when valid. PeakAssignmentData remains the independent
+observed-peak-to-explanation annotation; this CSR defines candidates per spectrum.
+The diagram shows direct references only.
+
+For spectrum s and explanation e, conceptually compute
+q(s, compound[e]) * p(fragment adduct[e], hydrogen shift[e] | s, compound[e]).
+Sum contributions sharing (spectrum, Formula) before comparing to the targets
+below. An intermediate Compound may retain almost no observed intensity while
+transmitting substantial probability to descendants; zero intensity does not
+make its incoming/outgoing reaction edges false.
+
+## 2.13 SpectrumFormulaTarget
+
+**Proposed spectrum-specific supervision view, derived from annotations**
+
+The identity is (spectrum, Formula), not (spectrum, reaction edge) or Compound.
+A branch candidate supported at some CE may yield no observed ion at another CE.
+This does not make the underlying reaction edge false: an unobserved intermediate
+can still transmit probability to an observed descendant.
+
+```mermaid
+flowchart TB
+    subgraph FT["SpectrumFormulaTarget: derived supervision"]
+        S["spectrum_index<br/>int64 [N_spectrum_formula]"]
+        F["formula_index<br/>int64 [N_spectrum_formula]"]
+        O["observed<br/>bool [N_spectrum_formula]"]
+        I["intensity<br/>float32 [N_spectrum_formula]"]
+        M["supervision_mask<br/>bool [N_spectrum_formula]"]
+        S ~~~ F ~~~ O ~~~ I ~~~ M
+    end
+    SR["SpectrumData:branch_group_index"]
+    FR["FormulaData:composition"]
+    S --> SR
+    F --> FR
+    click SR "SCHEMA.md#28-spectrumdata" "SpectrumData"
+    click FR "SCHEMA.md#26-formuladata" "FormulaData"
+```
+
+References: [SpectrumData](#28-spectrumdata) · [FormulaData](#26-formuladata)
+
+| Field | Type / shape | Example |
+|---|---|---|
+| `spectrum_index` | int64 [N_spectrum_formula] | `[0,0,1,1]` |
+| `formula_index` | int64 [N_spectrum_formula] | `[0,1,0,1]` |
+| `observed` | bool [N_spectrum_formula] | `[True,False,False,True]` |
+| `intensity` | float32 [N_spectrum_formula] | `[1.0,0.0,0.0,1.0]` |
+| `supervision_mask` | bool [N_spectrum_formula] | `[True,True,True,True]` |
+
+For example, spectra 0 and 1 are CE 10 and 40 observations of the same group.
+An observed flag means at least one retained peak assignment supports the formula;
+False means unobserved, not proven chemical absence. The mask excludes invalid
+formulas and unavailable supervision. Valid surveyed candidates without matched
+peaks can receive zero intensity as weak non-observation targets.
+
+This is a derived view: measured intensities stay in SpectrumData and chemical
+assignments stay in PeakAssignmentData. To match the current target construction,
+take the maximum assigned intensity per (spectrum, Formula). Multiple structural
+explanations share a formula target; their predicted contributions are summed
+before loss evaluation. Ambiguous peak-to-formula assignments remain available
+rather than being asserted to identify a unique structural explanation.
+
+Keep the current intensity-distribution cross entropy and cosine loss, including
+its full-spectrum and precursor-excluded evaluations. observed is useful target
+metadata, not a newly introduced presence classifier or BCE loss. Samples with
+no positive target intensity are skipped by the current objective. An independent
+presence loss, if desired later, requires a separate model/loss decision.
+
+This section is a schema proposal only; no Python implementation is changed.
+The proposed edge-level branch loss replaces the current branch MIL; the current
+intensity objective can be retained using the explanation-to-formula aggregation above.
