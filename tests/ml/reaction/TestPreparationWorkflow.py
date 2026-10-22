@@ -1214,10 +1214,6 @@ process.stdout.write(JSON.stringify({config,args:buildArgs(config)}));
                 for path in files:
                     data = SourceReactionStructure.load(path)
                     # This dataset observes only precursor peaks: no positive branches.
-                    self.assertFalse((data.reaction_contexts.edge_label >= 0).any())
-                    if save_all:
-                        self.assertGreater(data.compound_graph.reaction_index.numel(), 0)
-                        self.assertTrue((data.reaction_contexts.edge_label == -1).all())
-                    else:
-                        self.assertEqual(data.compound_graph.reaction_index.numel(), 0)
-                        self.assertEqual(len(data.compounds.compounds), 1)
+                    # Root continuations are weak negatives even without positives.
+                    self.assertGreater(data.compound_graph.reaction_index.numel(), 0)
+                    self.assertTrue((data.reaction_contexts.edge_label == 0).all())

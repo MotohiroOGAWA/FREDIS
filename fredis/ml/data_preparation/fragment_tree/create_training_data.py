@@ -833,7 +833,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", required=True, type=output_directory)
     parser.add_argument(
         "--save-all-edges", action="store_true",
-        help="Save all candidate edges and nodes; edges outside positive source nodes are ignored by branch loss.",
+        help="Save all candidate edges and nodes; edges beyond the root and positive-path endpoints are ignored by branch loss.",
     )
     configure_chemistry_options(parser)
     parser.add_argument(

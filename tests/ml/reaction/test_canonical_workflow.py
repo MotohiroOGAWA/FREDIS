@@ -505,15 +505,32 @@ def test_branch_frontier_storage_preserves_supervised_edges(tmp_path):
         return result
 
     all_entries, selected = entries(full), entries(compact)
-    positive_sources = {
-        (key[0], key[1]) for key, label in all_entries.items() if label == 1
+    supported_nodes = {
+        (key[0], node)
+        for key, label in all_entries.items()
+        if label == 1
+        for node in key[1:3]
     }
-    assert positive_sources
+    supported_nodes.update(
+        (g, full.source_smiles[int(source)])
+        for g, source in enumerate(full.branch_groups.source_compound_index)
+    )
+    assert supported_nodes
     assert any(label == -1 for label in all_entries.values())
     for key, label in all_entries.items():
         if label != 1:
-            assert label == (0 if (key[0], key[1]) in positive_sources else -1)
+            assert label == (0 if (key[0], key[1]) in supported_nodes else -1)
     assert selected == {key: label for key, label in all_entries.items() if label >= 0}
+    positive_sources = {(k[0], k[1]) for k, label in all_entries.items() if label == 1}
+    terminal_nodes = {
+        (k[0], k[2]) for k, label in all_entries.items() if label == 1
+    } - positive_sources
+    terminal_edges = {
+        k: label for k, label in all_entries.items() if (k[0], k[1]) in terminal_nodes
+    }
+    assert terminal_edges, "Fixture must exercise positive terminal continuations"
+    assert all(label == 0 for label in terminal_edges.values())
+    assert all(k in selected for k in terminal_edges)
     endpoints = set(compact.source_compounds.compound_index.tolist())
     endpoints.update(compact.compound_graph.source_compound_index.tolist())
     endpoints.update(compact.compound_graph.target_compound_index.tolist())
@@ -581,16 +598,29 @@ def test_branch_node_balancing_and_sum():
         [0] * 12 + [1] * 12,
     )
     torch.testing.assert_close(doubled[0], 2 * actual)
-    # A positive-only node has no 1+w divisor; negative-only nodes are excluded.
+    # Positive-only and negative-only terminal nodes use their class mean.
     z, output = loss([0.2, 0.7, 4.0], [1, 0, -1], [0, 1, 0], [0, 0, 0])
-    torch.testing.assert_close(output[0], torch.nn.functional.softplus(-z[0]))
+    torch.testing.assert_close(
+        output[0],
+        torch.nn.functional.softplus(-z[0]) + torch.nn.functional.softplus(z[1]),
+    )
     output[0].backward()
-    assert z.grad[1] == 0 and z.grad[2] == 0
+    assert z.grad[1] > 0 and z.grad[2] == 0
     # Zero negative weight and empty batches remain differentiable.
     z, output = loss([0.2, 0.7], [1, 0], [0, 0], [0, 0], weight=0)
     torch.testing.assert_close(output[0], torch.nn.functional.softplus(-z[0]))
     output[0].backward()
     assert z.grad[1] == 0
+    z, terminal = loss([0.7, -0.2], [0, 0], [0, 0], [0, 0])
+    torch.testing.assert_close(terminal[0], torch.nn.functional.softplus(z).mean())
+    terminal[0].backward()
+    torch.testing.assert_close(z.grad, z.detach().sigmoid() / 2)
+    _, replicated_terminal = loss([0.7, -0.2] * 5, [0] * 10, [0] * 10, [0] * 10)
+    torch.testing.assert_close(terminal[0], replicated_terminal[0])
+    # Terminal-only sources also honor zero negative weight.
+    z, output = loss([0.7, -0.2], [0, 0], [0, 0], [0, 0], weight=0)
+    output[0].backward()
+    assert output[0] == 0 and (z.grad == 0).all()
     z, output = loss([], [], [], [])
     output[0].backward()
     assert output[0] == 0 and z.grad.numel() == 0

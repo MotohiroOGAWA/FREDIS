@@ -40,18 +40,20 @@ adduct, without CE. The weighted binary cross entropy is
 P_s = mean_positive_at_source_s softplus(-logit)
 N_s = mean_weak_negative_at_source_s softplus(logit)
 L_s = (P_s + negative_weight * N_s) / (1 + negative_weight)  # with negatives
-L_s = P_s                                                       # otherwise
+L_s = P_s                                                       # positive only
+L_s = N_s                                                       # negative only, weight > 0
 L_branch = sum_s L_s
 ```
 
-Each source is a (BranchGroup, source Compound) pair with at least one positive
-edge. Class counts are averaged separately within each source; source losses are
+Each source is a (BranchGroup, source Compound) pair with supervised edges.
+Negative-only terminal nodes use L_s = N_s when negative_weight > 0; with zero
+negative_weight they contribute zero. Class counts are averaged separately
+within each source; source losses are
 summed, not averaged across sources or the batch. Thus batch source count affects
 branch loss scale relative to spectrum loss. Diagnostic `branch_positive_loss`
 and `branch_negative_loss` sum the respective source means before weighting.
-An empty objective gives differentiable zero. Labels excluded with -1 and nodes
-without positives contribute no loss or gradient. `--reaction-edge-layers`
-controls this MLP's hidden layers.
+An empty objective gives differentiable zero. Labels excluded with -1 contribute
+no loss or gradient. `--reaction-edge-layers` controls this MLP's hidden layers.
 Prediction uses the same tables through `SpectrumPredictionData`, without
 observations, targets or edge labels. See [input components](../../input/README.md).
 
@@ -116,7 +118,8 @@ Head configuration: `--fragment-fc-dims`, `--fragment-dropout`, `--state-fc-dims
 in Workbench. Old coupled-head checkpoints require retraining.
 
 Weak negatives are limited to admissible outgoing edges whose source Compound
-has at least one positive outgoing edge in the same branch group. Positive
+is the precursor root or an endpoint of a positive edge in the same branch group
+(including positive terminal nodes). Positive
 evidence is pooled across CE measurements before selecting these sources.
 By default, preparation saves only positive/weak-negative edges, their endpoint
 Compounds, and source roots (including isolated roots). Use `--save-all-edges`

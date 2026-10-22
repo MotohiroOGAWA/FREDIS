@@ -235,7 +235,8 @@ states**: sets of primitive-reaction indices, starting from the empty state.
 - For every state below `max_reaction_count`, each other reaction is checked for
   chemical validity (relations, then an actual RDKit run cached per effect):
   - In the saved canonical graph, unsupported valid edges become **weak negatives**
-    only when their source Compound has a positive outgoing edge in the same group.
+    when their source Compound is the precursor root or an endpoint of a positive
+    edge in the same group, including terminal nodes.
     Other unsupported edges are omitted by default, or labelled **ignored (-1)**
     with `--save-all-edges`. This option also keeps all candidate nodes; it does
     not change the positive/weak-negative training examples.

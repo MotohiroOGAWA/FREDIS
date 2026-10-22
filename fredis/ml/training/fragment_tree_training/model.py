@@ -16,7 +16,7 @@ def branch_edge_loss(
     """Sum class-balanced losses over (branch group, source Compound) pairs.
 
     Diagnostic positive/negative losses are sums of the corresponding node means.
-    Nodes without positive edges and ignored edges contribute no loss.
+    Negative-only terminal nodes are supervised; ignored edges contribute no loss.
     """
     if labels is None:
         raise ValueError("Branch training requires edge labels")
@@ -52,9 +52,12 @@ def branch_edge_loss(
 
     positive_mean, positive_count = node_means(positive, F.softplus(-logits[positive]))
     negative_mean, negative_count = node_means(negative, F.softplus(logits[negative]))
-    supervised = positive_count > 0
-    weight = 1 + negative_weight * (negative_count > 0).to(logits.dtype)
-    node_loss = (positive_mean + negative_weight * negative_mean) / weight
+    weight = (positive_count > 0).to(logits.dtype) + negative_weight * (
+        negative_count > 0
+    ).to(logits.dtype)
+    supervised = weight > 0
+    divisor = torch.where(supervised, weight, torch.ones_like(weight))
+    node_loss = (positive_mean + negative_weight * negative_mean) / divisor
     return (
         node_loss[supervised].sum() + zero,
         positive_mean[supervised].sum() + zero,

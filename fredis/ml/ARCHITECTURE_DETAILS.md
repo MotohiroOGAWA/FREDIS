@@ -1178,7 +1178,8 @@ and -1 (excluded). The implemented objective is
 P_s = mean_positive_at_source_s softplus(-logit)
 N_s = mean_negative_at_source_s softplus(logit)
 L_s = (P_s + negative_weight * N_s) / (1 + negative_weight)  # with negatives
-L_s = P_s                                                       # otherwise
+L_s = P_s                                                       # positive only
+L_s = N_s                                                       # negative only, weight > 0
 L_branch = sum_s L_s
 ```
 
@@ -1215,14 +1216,14 @@ flowchart TB
 |---|---|
 | Logits and labels | `[N_edge_use]` each; labels must be int8 with values -1, 0 or 1 |
 | `negative_weight` | Finite nonnegative scalar; default 0.5 |
-| `branch_loss` | Scalar sum over (branch group, source Compound) pairs with positives |
+| `branch_loss` | Scalar sum over (branch group, source Compound) pairs with supervised edges |
 | Diagnostic positive/negative means | Sums of per-source unweighted class means; used for metrics |
 
 For `z=[0,0,0]`, labels `[1,0,-1]` and weight 0.5, the numerator is
 `1.5*log(2)` and denominator 1.5, giving loss `log(2)`. The third logit has
 zero gradient. A zero negative weight also gives weak negatives zero weight.
 The implementation averages each class independently per (branch group, source
-Compound) pair. Pairs without positive edges are excluded. Pair losses are
+Compound) pair. Negative-only terminal pairs use their negative mean (zero if negative_weight=0). Pair losses are
 summed without batch/source averaging; the number of source nodes therefore
 affects the branch-to-spectrum loss scale. Entries remain per group-edge pair,
 not per CE row. Separate batches may revisit the same group.

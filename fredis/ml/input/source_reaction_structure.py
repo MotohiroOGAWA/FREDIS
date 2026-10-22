@@ -916,10 +916,18 @@ class SourceReactionStructure(SpectrumPredictionData):
             group = int(h.branch_group_index[parent])
             groups[group].add(key)
             positive[group].add(key)
-        positive_sources = [{key[0] for key in edges} for edges in positive]
+        # Supervise the root and every endpoint of a supported path, including
+        # terminal nodes. Never recursively expand the weak-negative frontier.
+        supported_nodes = [
+            {a.compounds.smiles.index(raw.source_smiles[int(source)])}
+            | {node for key in positive[group] for node in key[:2]}
+            for group, source in enumerate(
+                raw.branch_groups.source_compound_index.tolist()
+            )
+        ]
         if not save_all_edges:
             groups = [
-                {key for key in edges if key[0] in positive_sources[g]}
+                {key for key in edges if key[0] in supported_nodes[g]}
                 for g, edges in enumerate(groups)
             ]
         keys = sorted(set().union(*groups))
@@ -930,7 +938,7 @@ class SourceReactionStructure(SpectrumPredictionData):
                 (
                     1
                     if keys[i] in positive[g]
-                    else (0 if keys[i][0] in positive_sources[g] else -1)
+                    else (0 if keys[i][0] in supported_nodes[g] else -1)
                 )
                 for g, row in enumerate(rows(ep, ei))
                 for i in row

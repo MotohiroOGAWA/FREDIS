@@ -70,7 +70,8 @@ history/occurrence tables are not the persisted model input or public schema.
 Neural forward passes use prepared tensors without running reaction chemistry.
 
 Weak negatives are limited to admissible outgoing edges whose source Compound
-has at least one positive outgoing edge in the same branch group. Positive
+is the precursor root or an endpoint of a positive edge in the same branch group
+(including positive terminal nodes). Positive
 evidence is pooled across CE measurements before selecting these sources.
 By default, preparation saves only positive/weak-negative edges, their endpoint
 Compounds, and source roots (including isolated roots). Use `--save-all-edges`
