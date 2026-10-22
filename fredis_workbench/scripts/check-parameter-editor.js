@@ -64,9 +64,10 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  assert.equal(ionArgs[ionArgs.indexOf('--max-fragment-nodes')+1],'100');
  assert(!ionArgs.includes('--ion-prediction-threshold'));
  assert(!ionArgs.includes('--fragment-loss-weight'));
- const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',intensityLossWeight:0.4,cosineLossWeight:1});
+ const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',intensityLossWeight:0.4,cosineLossWeight:1,intensityExponent:0.5});
  assert.equal(lossArgs[lossArgs.indexOf('--intensity-loss-weight')+1],'0.4');
  assert.equal(lossArgs[lossArgs.indexOf('--cosine-loss-weight')+1],'1');
+ assert.equal(lossArgs[lossArgs.indexOf('--intensity-exponent')+1],'0.5');
  // Neighborhood settings are owned by the per-pattern architecture editor.
  const neighborhoodRoot=new Element('div');createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
  assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode'));

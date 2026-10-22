@@ -340,6 +340,7 @@ def train_reactions(
     negative_weight: float = 0.5,
     intensity_loss_weight: float = 1.0,
     cosine_loss_weight: float = 1.0,
+    intensity_exponent: float = 0.5,
     max_samples: int = 128,
     seed: int = 42,
     warmup_steps: int = 100,
@@ -459,7 +460,7 @@ def train_reactions(
         branch_weight = settings["branch_weight"]
         negative_weight = settings["negative_weight"]
         for key in SPECTRUM_LOSS_KEYS:
-            settings[key] = prior[key]
+            settings[key] = prior.get(key, 1.0 if key == "intensity_exponent" else settings[key])
         spectrum_loss = SpectrumLossSettings(
             **{key: settings[key] for key in SPECTRUM_LOSS_KEYS}
         )
@@ -1239,6 +1240,10 @@ MODEL_OPTION_HELP = {
 }
 # Training objective of the spectrum model: (default, help).
 SPECTRUM_LOSS_OPTIONS = {
+    "intensity-exponent": (
+        0.5,
+        "Positive intensity exponent: transforms target cross-entropy weights and both cosine inputs (0.5: square root; 1: unchanged).",
+    ),
     "intensity-loss-weight": (
         1.0,
         "Weight of the independent spectrum intensity objective.",

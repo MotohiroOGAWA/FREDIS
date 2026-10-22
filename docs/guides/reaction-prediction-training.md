@@ -85,3 +85,5 @@ Regression coverage includes CE-shared branch trees, cumulative probability,
 multi-depth negatives, cross-CE protection, equivalent-candidate grouping,
 candidate-count invariance, simultaneous ion peaks, CE-dependent intensities,
 and a strict forward/loss/backward test with chemistry entry points disabled.
+
+Spectrum loss uses `--intensity-exponent` (default `0.5`, positive finite values only). Target intensities are raised to this power before normalization into cross-entropy weights; both predicted and target intensities are raised to this power for cosine similarity. Use `1` for the original objective. Prediction output intensities are unchanged. Resuming an older checkpoint without this setting retains exponent `1`.

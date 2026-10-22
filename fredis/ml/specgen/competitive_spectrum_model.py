@@ -783,6 +783,7 @@ class CompetitiveSpectrumModel(nn.Module):
         precursor_peak = precursor_peak.bool()
 
         def objective(probability, target):
+            target = target.pow(settings.intensity_exponent)
             target_total = probability.new_zeros(sample_count).scatter_add_(
                 0, peak_sample, target
             )
@@ -792,6 +793,12 @@ class CompetitiveSpectrumModel(nn.Module):
             weights = target / target_total[peak_sample].clamp_min(1e-12)
             cross_entropy = -(weights * probability.clamp_min(1e-12).log()).sum()
             cross_entropy = cross_entropy / observed.sum()
+            # Keep zero predictions exactly zero with finite gradients for roots.
+            probability = torch.where(
+                probability > 0,
+                probability.clamp_min(1e-12).pow(settings.intensity_exponent),
+                torch.zeros_like(probability),
+            )
             dot = probability.new_zeros(sample_count).scatter_add_(
                 0, peak_sample, probability * target
             )

@@ -486,7 +486,8 @@ def test_annotation_mz_uses_adduct_charge(adduct_type):
 
 
 @pytest.mark.parametrize("precursor_adduct", ["[M+H]+", "[M+H-H2O]+"])
-def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct):
+@pytest.mark.parametrize("exponent", [0.5, 1.0])
+def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct, exponent):
     from types import SimpleNamespace
     from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
 
@@ -511,15 +512,15 @@ def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct
         sample,
         formulas,
         1,
-        SpectrumLossSettings(cosine_loss_weight=0),
+        SpectrumLossSettings(cosine_loss_weight=0, intensity_exponent=exponent),
     )
     full_expected = (
         -(
-            100 * torch.log(torch.tensor(0.9))
+            100 ** exponent * torch.log(torch.tensor(0.9))
             + torch.log(torch.tensor(0.09))
             + torch.log(torch.tensor(0.01))
         )
-        / 102
+        / (100 ** exponent + 2)
     )
     fragment_expected = (
         -(torch.log(torch.tensor(0.9)) + torch.log(torch.tensor(0.1))) / 2
@@ -537,11 +538,19 @@ def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct
     # Precursor amplitude cannot change the conditional fragment objective.
     changed = torch.tensor([0.05, 0.81, 0.09, 0.05])
     _, _, changed_metrics = model._spectrum_loss(
-        data, changed, sample, formulas, 1, SpectrumLossSettings(cosine_loss_weight=0)
+        data, changed, sample, formulas, 1, SpectrumLossSettings(cosine_loss_weight=0, intensity_exponent=exponent)
     )
     torch.testing.assert_close(
         changed_metrics["spectrum_loss_without_precursor"], fragment_expected
     )
+    _, _, cosine_metrics = model._spectrum_loss(
+        data, probability, sample, formulas, 1,
+        SpectrumLossSettings(intensity_exponent=exponent),
+    )
+    pred = torch.tensor([0.9, 0.09, 0.01]).pow(exponent)
+    truth = torch.tensor([100.0, 1.0, 1.0]).pow(exponent)
+    expected_cosine = torch.nn.functional.cosine_similarity(pred, truth, dim=0)
+    torch.testing.assert_close(cosine_metrics["full_spectrum_cosine"], expected_cosine)
     data.target_intensity = torch.tensor([100.0, 0.0, 0.0, 100.0])
     _, only_precursor_loss, metrics = model._spectrum_loss(
         data, probability, sample, formulas, 1, SpectrumLossSettings()
@@ -602,7 +611,7 @@ def test_precursor_loss_excludes_hydrogen_shifts_but_keeps_other_ions(precursor_
         torch.zeros(8, dtype=torch.long),
         formulas,
         1,
-        SpectrumLossSettings(cosine_loss_weight=0),
+        SpectrumLossSettings(cosine_loss_weight=0, intensity_exponent=1),
     )
     expected = -torch.tensor([0.2, 0.2, 0.2, 0.4]).log().mean()
     torch.testing.assert_close(metrics["spectrum_loss_without_precursor"], expected)
@@ -850,3 +859,10 @@ def test_cuda_spectrum_loss_matches_cpu_and_backpropagates():
         p.grad is not None and torch.isfinite(p.grad).all() and p.grad.abs().sum() > 0
         for p in gpu.spectrum_model.state_heads.parameters()
     )
+
+
+@pytest.mark.parametrize("exponent", [0, -0.5, float("nan"), float("inf")])
+def test_invalid_intensity_exponent(exponent):
+    from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
+    with pytest.raises(ValueError, match="intensity_exponent"):
+        SpectrumLossSettings(intensity_exponent=exponent)

@@ -128,3 +128,5 @@ retain the complete candidate graph. Additional edges have label -1 and do not
 change branch supervision or its normalization. Spectrum candidate coverage can
 change with graph retention; this option guarantees identical branch labels,
 not identical spectrum losses.
+
+Spectrum loss uses `--intensity-exponent` (default `0.5`, positive finite values only). Target intensities are raised to this power before normalization into cross-entropy weights; both predicted and target intensities are raised to this power for cosine similarity. Use `1` for the original objective. Prediction output intensities are unchanged. Resuming an older checkpoint without this setting retains exponent `1`.

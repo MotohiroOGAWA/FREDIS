@@ -446,12 +446,14 @@ def training_checkpoint(payload):
         "validation_fraction": "validationFraction",
         "intensity_loss_weight": "intensityLossWeight",
         "cosine_loss_weight": "cosineLossWeight",
+        "intensity_exponent": "intensityExponent",
     }
     restored = {
         field: checkpoint.get("training_settings", {})[key]
         for key, field in fields.items()
         if key in checkpoint.get("training_settings", {})
     }
+    restored.setdefault("intensityExponent", 1.0)
     params = config
     restored["dropout"] = params.get("reaction_model_params", {}).get("edge_dropout", 0)
     return {

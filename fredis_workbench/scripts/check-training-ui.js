@@ -35,6 +35,8 @@ assert(!form.querySelector('[data-parameter-path$="loss_weight"]'));
 for(const key of ['branch_path_threshold','max_fragment_nodes','peak_intensity_threshold'])assert(form.querySelector('[data-parameter-path="generation_params.'+key+'"]'));
 assert.equal(form.elements.negativeWeight.value,'0.5');
 assert.equal(form.elements.cosineLossWeight.value,'1');
+assert.equal(form.elements.intensityExponent.value,'0.5');
+assert(form.elements.negativeWeight.closest('label').textContent.includes('Branch weak negative weight'));
 for(const input of form.querySelectorAll('#trainingLossFields input')){
  assert(input.closest('label').dataset.help.length>20, input.name+' has hover help');
 }
