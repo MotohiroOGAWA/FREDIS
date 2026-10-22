@@ -118,7 +118,7 @@ def state_reaction_combinations(
 ) -> dict[tuple[int, int], list[tuple[int, ...]]]:
     """Map ``(branch group, fragment node)`` to every saved reaction combination."""
     pointers = structure.states.candidate_reaction_ptr.tolist()
-    indexes = structure.states.candidate_reaction_index.tolist()
+    indexes = structure.candidate_reaction_registry_index.tolist()
     groups = structure.states.candidate_branch_group_index.tolist()
     nodes = structure.states.candidate_fragment_index.tolist()
     result: dict[tuple[int, int], list[tuple[int, ...]]] = defaultdict(list)

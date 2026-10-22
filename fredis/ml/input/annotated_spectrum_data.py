@@ -65,9 +65,9 @@ class CompoundData:
     occurrence_index: Tensor
     # [V]: chemical reaction-state row -> unique compound; -1 if not materialized.
     state_index: Tensor
-    # [C + 1], [Kstate]: inverse CSR, compound -> materialized V-state rows.
-    state_ptr: Tensor
-    state_rows: Tensor
+    # [C + 1], [Kstate]: inverse CSR, compound -> reaction-set IDs (V rows).
+    reaction_set_ptr: Tensor
+    reaction_set_index: Tensor
 
     def to(self, device):
         return replace(
@@ -166,19 +166,19 @@ class AnnotatedSpectrumData:
         occurrence = torch.tensor(occurrence, dtype=torch.long, device=device)
         node_rows = decoded.materialized_node_index if state_nodes is None else state_nodes
         materialized = torch.where(node_rows >= 0, occurrence[node_rows.clamp_min(0)], node_rows)
-        state_rows = [[] for _ in smiles]
+        reaction_set_index = [[] for _ in smiles]
         for row, compound in enumerate(materialized.tolist()):
             if compound >= 0:
-                state_rows[compound].append(row)
-        state_ptr, state_rows = csr(state_rows, device)
+                reaction_set_index[compound].append(row)
+        reaction_set_ptr, reaction_set_index = csr(reaction_set_index, device)
         compounds = CompoundData(
             tuple(smiles),
             Batch.from_data_list([graphs[i] for i in representatives]),
             tuple(decoded.compounds[i] for i in representatives),
             occurrence,
             materialized,
-            state_ptr,
-            state_rows,
+            reaction_set_ptr,
+            reaction_set_index,
         )
         composition, formula_inverse = torch.unique(
             batch.state_formula_tensor, dim=0, return_inverse=True
@@ -387,7 +387,7 @@ class AnnotatedSpectrumData:
             raise ValueError("Formula columns must match elements followed by charge")
         check_csr("spectrum->peak", spectra.peak_ptr, spectra.mz, scount)
         check_csr("formula->ion", formulas.ion_ptr, formulas.ion_index, fcount)
-        check_csr("compound->state", compounds.state_ptr, compounds.state_rows, ccount)
+        check_csr("compound->state", compounds.reaction_set_ptr, compounds.reaction_set_index, ccount)
         check_csr(
             "peak->formula", assignment.formula_ptr, assignment.formula_index, len(spectra.mz)
         )
@@ -395,7 +395,7 @@ class AnnotatedSpectrumData:
         for name, values, size, missing in (
             ("occurrence->compound", compounds.occurrence_index, ccount, False),
             ("state->compound", compounds.state_index, ccount, True),
-            ("compound->state", compounds.state_rows, len(compounds.state_index), False),
+            ("compound->state", compounds.reaction_set_index, len(compounds.state_index), False),
             ("formula->ion", formulas.ion_index, icount, False),
             ("ion->compound", ions.compound_index, ccount, False),
             ("ion->formula", ions.formula_index, fcount, False),
@@ -407,6 +407,18 @@ class AnnotatedSpectrumData:
             ("peak->ion", assignment.ion_index, icount, False),
         ):
             check_index(name, values, size, missing)
+        # The inverse CSR must contain each materialized reaction set exactly
+        # once, grouped by its resulting Compound. Multiple sets may share one
+        # Compound/node; reaction order does not add another set row.
+        materialized = (compounds.state_index >= 0).nonzero().flatten()
+        if not torch.equal(compounds.reaction_set_index.sort().values, materialized):
+            raise ValueError("Compound reaction-set CSR must cover each materialized set once")
+        owner = torch.repeat_interleave(
+            torch.arange(ccount, device=compounds.state_index.device),
+            compounds.reaction_set_ptr[1:] - compounds.reaction_set_ptr[:-1],
+        )
+        if not torch.equal(compounds.state_index[compounds.reaction_set_index], owner):
+            raise ValueError("Compound reaction-set CSR disagrees with state->compound")
         for name, value in (("intensity", spectra.intensity), ("precursor", spectra.precursor)):
             if value.shape != spectra.mz.shape:
                 raise ValueError(f"Observed peak {name} shape differs from m/z")
@@ -491,11 +503,11 @@ class AnnotatedSpectrumData:
             mo += sc
             go += gc
         state_index = torch.cat(states)
-        state_rows = [[] for _ in smiles]
+        reaction_set_index = [[] for _ in smiles]
         for row, compound in enumerate(state_index.tolist()):
             if compound >= 0:
-                state_rows[compound].append(row)
-        cp, ci = csr(state_rows, device)
+                reaction_set_index[compound].append(row)
+        cp, ci = csr(reaction_set_index, device)
         c = CompoundData(
             tuple(smiles),
             Batch.from_data_list(graphs),

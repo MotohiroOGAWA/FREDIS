@@ -42,7 +42,8 @@ class ReactionStateData(TensorTable):
     )
     # [V + 1]: CSR boundaries of candidate reaction sets.
     candidate_reaction_ptr: Tensor = field(default_factory=lambda: torch.zeros(1, dtype=torch.long))
-    # [L]: candidate concrete reaction IDs.
+    # [L]: group-local reaction IDs in strictly ascending order within each set.
+    # Local vocabulary: ascending registry rows belonging to the group's Source.
     candidate_reaction_index: Tensor = field(
         default_factory=lambda: torch.empty(0, dtype=torch.long)
     )
@@ -70,7 +71,7 @@ class ReactionStateData(TensorTable):
 
     @property
     def reaction_index(self):
-        """Runtime reaction IDs gathered from the canonical V-state CSR table."""
+        """Group-local reaction IDs gathered from the canonical V-state CSR table."""
         counts = self.reaction_count
         ptr = self.reaction_ptr
         starts = self.candidate_reaction_ptr[self.candidate_index]

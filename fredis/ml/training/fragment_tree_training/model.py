@@ -134,8 +134,9 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             dtype=torch.long,
             device=ids.device,
         )
-        local = inverse[owners[row], data.states.reaction_index]
-        if torch.any(local < 0):
+        # Candidate sets already store ascending group-local pool indices.
+        local = data.states.reaction_index
+        if torch.any(local < 0) or torch.any(local >= pool.valid.sum(1)[owners[row]]):
             raise ValueError("Prepared state reaction is absent from its branch group")
         state[row, position] = local
         sentinel = pool.valid.shape[1]

@@ -22,7 +22,7 @@ from .reaction_tensor_data import ReactionTensorData
 from .reaction_state_data import ReactionStateData, TeacherData
 from .annotated_spectrum_data import AnnotatedSpectrumData
 
-SCHEMA = "fredis.annotated-spectrum-training.v2"
+SCHEMA = "fredis.annotated-spectrum-training.v3"
 
 
 class UnresolvedPrecursorError(ValueError):
@@ -66,7 +66,7 @@ class SourceReactionStructure:
     observations: InitVar[tuple[dict, ...] | None] = field(default=None, kw_only=True)
     formula_elements: tuple[str, ...] = field(default=(), kw_only=True)
     # Runtime view: expanded group-local graph topology and sample/ion rows.
-    # Redundant graphs/formulas/targets are omitted from serialized v2 data.
+    # Redundant graphs/formulas/targets are omitted from serialized v3 data.
     spectrum_batch: object | None = None
 
     # Spectrum -> (compound, main adduct) branch group. Collision energy is
@@ -134,7 +134,7 @@ class SourceReactionStructure:
     def __getstate__(self):
         """Serialize normalized tables plus topology; omit expanded runtime caches.
 
-        This is the v2 representation only, not a migration path. Formula rows,
+        This is the v3 representation only, not a migration path. Formula rows,
         molecular graphs and targets are restored from annotations on unpickling.
         """
         state = dict(self.__dict__)
@@ -200,6 +200,30 @@ class SourceReactionStructure:
     @property
     def device(self) -> torch.device:
         return self.reactions.reaction_type.device
+
+    def reaction_registry_index(self, group_index: Tensor, reaction_index: Tensor) -> Tensor:
+        """Resolve group-local reaction IDs to rows in the concrete registry.
+
+        Each group orders its Source reactions by ascending registry row. Local
+        IDs remain unchanged when structures are collated or spectra selected.
+        """
+        eligible = (
+            self.reactions.reaction_tree_index[None, :]
+            == self.branch_group_tree_index[:, None]
+        )
+        counts = eligible.sum(1)
+        ptr = torch.cat((counts.new_zeros(1), counts.cumsum(0)))
+        registry_rows = eligible.nonzero(as_tuple=True)[1]
+        return registry_rows[ptr[group_index] + reaction_index]
+
+    @property
+    def candidate_reaction_registry_index(self) -> Tensor:
+        """Candidate CSR values converted to batch-global reaction registry IDs."""
+        ptr = self.states.candidate_reaction_ptr
+        group = torch.repeat_interleave(
+            self.states.candidate_branch_group_index, ptr[1:] - ptr[:-1]
+        )
+        return self.reaction_registry_index(group, self.states.candidate_reaction_index)
 
     def to(self, device: str | torch.device) -> SourceReactionStructure:
         return replace(
@@ -356,7 +380,7 @@ class SourceReactionStructure:
                 item.states.candidate_reaction_ptr[1:],
             ):
                 transition_state_rows.append(
-                    (item.states.candidate_reaction_index[start:stop] + reaction_offset).tolist()
+                    item.states.candidate_reaction_index[start:stop].tolist()
                 )
             teacher_transition_states.append(item.states.candidate_index + transition_state_offset)
             transition_state_offset += item.states.candidate_branch_group_index.numel()
