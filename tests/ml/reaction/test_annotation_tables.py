@@ -20,12 +20,13 @@ def assert_csr(ptr, index, rows):
 def assert_tables(data):
     a = data.annotations
     states = data.states
+    data.reaction_sets.validate(data.reactions.reaction_source_compound_index)
+    candidate_ptr, candidate_values = data.candidate_reactions()
     keys = []
     for group, start, stop in zip(
-        states.candidate_branch_group_index,
-        states.candidate_reaction_ptr[:-1], states.candidate_reaction_ptr[1:],
+        states.candidate_branch_group_index, candidate_ptr[:-1], candidate_ptr[1:],
     ):
-        ids = states.candidate_reaction_index[start:stop]
+        ids = candidate_values[start:stop]
         assert ids.dtype == torch.int64
         assert (ids[1:] > ids[:-1]).all()
         keys.append((int(group), tuple(ids.tolist())))
@@ -37,11 +38,12 @@ def assert_tables(data):
     assert_csr(matches.formula_ptr, matches.formula_index, len(s.mz))
     assert_csr(matches.ion_ptr, matches.ion_index, len(s.mz))
     assert_csr(c.reaction_set_ptr, c.reaction_set_index, len(c.smiles))
-    assert c.state_index.shape == data.states.candidate_branch_group_index.shape
-    assert torch.equal(c.state_index, data.states.compound_index)
+    assert c.context_compound_index.shape == data.states.candidate_branch_group_index.shape
+    assert torch.equal(a.context_reaction_set_index, data.states.candidate_reaction_set_index)
     for compound in range(len(c.smiles)):
         rows = c.reaction_set_index[c.reaction_set_ptr[compound] : c.reaction_set_ptr[compound + 1]]
-        assert c.state_index[rows].eq(compound).all()
+        expected = a.context_reaction_set_index[c.context_compound_index == compound].unique(sorted=True)
+        assert torch.equal(rows, expected)
     for formula in range(len(f.composition)):
         rows = f.ion_index[f.ion_ptr[formula] : f.ion_ptr[formula + 1]]
         assert ions.formula_index[rows].eq(formula).all()
@@ -165,9 +167,9 @@ def test_compound_reaction_set_csr_keeps_sets_without_duplicating_nodes():
         branch_group_adduct_index=torch.tensor([0]), max_reaction_count=2,
         teacher_paths=[[paths]],
     )
-    assert data.states.candidate_reaction_ptr.tolist() == [0, 0, 1, 3, 4]
-    assert data.states.candidate_reaction_index.tolist() == [0, 0, 1, 1]
-    full = (data.states.reaction_count == 2).nonzero().item()
+    assert data.reaction_sets.reaction_ptr.tolist() == [0, 0, 1, 3, 4]
+    assert data.reaction_sets.reaction_index.tolist() == [0, 0, 1, 1]
+    full = (data.state_reaction_count == 2).nonzero().item()
     assert (data.states.transition_child_index == full).sum() == 2
     assert data.teacher.peak_path_ptr.tolist() == [0, 2]
 
@@ -191,49 +193,49 @@ def test_compound_reaction_set_csr_keeps_sets_without_duplicating_nodes():
                  "adduct": "[M+H]+", "peaks": []},),
         torch.tensor([0]), torch.tensor([0]), generator.tensorizer.element_order,
         torch.tensor([0, 0, 0, 0]),
+        context_reaction_set_index=data.states.candidate_reaction_set_index,
     )
     annotation.validate()
     compounds = annotation.compounds
     assert compounds.graph.num_graphs == 1
     assert compounds.reaction_set_ptr.tolist() == [0, 4]  # C + 1, not V + 1
     assert compounds.reaction_set_index.tolist() == [0, 1, 2, 3]
-    assert compounds.state_index.tolist() == [0, 0, 0, 0]
+    assert compounds.context_compound_index.tolist() == [0, 0, 0, 0]
     # A duplicate/missing reaction-set ID must not silently pass validation.
     invalid = replace(annotation, compounds=replace(
         compounds, reaction_set_index=torch.tensor([0, 1, 2, 2]),
     ))
-    with pytest.raises(ValueError, match="each materialized set once"):
+    with pytest.raises(ValueError, match="each materialized pair once"):
         invalid.validate()
 
 
-def test_group_local_reaction_sets_survive_collation_selection_and_save(tmp_path):
-    generator, data = prepared_two_ce()
+def test_independent_reaction_sets_survive_collation_selection_and_save(tmp_path):
+    _, data = prepared_two_ce()
     batch = SourceReactionStructure.from_structures([data, data])
-    count = data.states.candidate_reaction_index.numel()
-    assert torch.equal(batch.states.candidate_reaction_index[:count],
-                       batch.states.candidate_reaction_index[count:])
-    # Registry IDs shift for the second source; the stored local IDs do not.
-    global_ids = batch.candidate_reaction_registry_index
-    assert torch.equal(global_ids[count:], global_ids[:count] + len(data.reactions.reaction_type))
+    original = data.reaction_sets.rows()
+    combined = batch.reaction_sets.rows()
+    assert combined.count([]) == 1
+    offset = len(data.reactions.reaction_type)
+    assert all(row in combined for row in original)
+    assert all([r + offset for r in row] in combined for row in original)
     selected = select_samples(batch, [3])
     assert_tables(selected)
-    torch.testing.assert_close(selected.states.candidate_reaction_index,
-                               data.states.candidate_reaction_index)
+    assert selected.reaction_sets is batch.reaction_sets
     compound = selected.annotations.compounds
     assert compound.reaction_set_ptr.shape == (len(compound.smiles) + 1,)
-    path = tmp_path / "local-reaction-sets.preft.pt"
+    path = tmp_path / "independent-reaction-sets.preft.pt"
     selected.save(path)
     loaded = SourceReactionStructure.load(path)
     assert_tables(loaded)
-    torch.testing.assert_close(loaded.states.candidate_reaction_index,
-                               selected.states.candidate_reaction_index)
+    torch.testing.assert_close(loaded.reaction_sets.reaction_index,
+                               selected.reaction_sets.reaction_index)
     torch.testing.assert_close(loaded.annotations.compounds.reaction_set_ptr,
                                compound.reaction_set_ptr)
     torch.testing.assert_close(loaded.annotations.compounds.reaction_set_index,
                                compound.reaction_set_index)
 
 
-def test_training_uses_group_local_sets_after_source_registry_offsets():
+def test_training_resolves_shared_sets_after_source_registry_offsets():
     from fredis.ml.training.fragment_tree_training.model import ReactionFragmentTreeTrainingModel
 
     generator, data = prepared_two_ce()

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import torch
 from fredis.libs.mmkit.mmkit import Compound, Adduct
 from fredis.domain.fragment.reaction import FragmentTreeLimitExceeded
+from .reaction_set import ReactionSet
 from .source_reaction_structure import (
     SourceReactionStructure,
     prepare_source_reactions,
@@ -233,10 +234,9 @@ class ReactionStructureBuilder:
         )
         # Materialization adds its own Source bookkeeping root. Teacher depth
         # zero is the shared empty reaction state for each branch group.
-        rows = [
-            tuple(data.states.reaction_index[a:b].tolist())
-            for (a, b) in zip(data.states.reaction_ptr[:-1], data.states.reaction_ptr[1:])
-        ]
+        active_ptr, active_reactions = data.active_reactions()
+        rows = [tuple(active_reactions[a:b].tolist())
+                for a, b in zip(active_ptr[:-1], active_ptr[1:])]
         samples = data.states.branch_group_index.tolist()
         dense_rows = []
         dense_sample = []
@@ -442,12 +442,9 @@ class ReactionStructureBuilder:
             target.append(max(matches, default=0.0))
         # The base state universe includes all materialized chemistry, not only
         # paths selected by the teacher or its one-step negative continuations.
-        candidate_rows = [
-            tuple(data.states.candidate_reaction_index[a:b].tolist())
-            for a, b in zip(
-                data.states.candidate_reaction_ptr[:-1], data.states.candidate_reaction_ptr[1:]
-            )
-        ]
+        set_rows = data.reaction_sets.rows()
+        candidate_rows = [set_rows[i] for i in data.states.candidate_reaction_set_index.tolist()]
+        candidate_rows = [tuple(row) for row in candidate_rows]
         candidate_groups = data.states.candidate_branch_group_index.tolist()
         known = set(zip(candidate_groups, candidate_rows))
         for group, row in zip(dense_sample, dense_rows):
@@ -456,7 +453,7 @@ class ReactionStructureBuilder:
                 known.add(key)
                 candidate_groups.append(group)
                 candidate_rows.append(key[1])
-        candidate_ptr, candidate_reactions = csr(candidate_rows)
+        reaction_sets, context_set_ids = ReactionSet.from_rows(candidate_rows)
         candidate_nodes = torch.tensor(
             [
                 node_by_state.get((group, row), -1)
@@ -467,6 +464,7 @@ class ReactionStructureBuilder:
         return (
             replace(
                 data,
+                reaction_sets=reaction_sets,
                 formula_elements=tuple(generator.tensorizer.element_order),
                 observations=tuple(annotations),
                 spectrum_batch=replace(spectrum_batch, target_intensity=torch.tensor(target)),
@@ -475,8 +473,7 @@ class ReactionStructureBuilder:
                     fragment_node_index=state_nodes,
                     candidate_fragment_index=candidate_nodes,
                     candidate_branch_group_index=torch.tensor(candidate_groups),
-                    candidate_reaction_ptr=candidate_ptr,
-                    candidate_reaction_index=candidate_reactions,
+                    candidate_reaction_set_index=context_set_ids,
                 ),
             ),
             kept,

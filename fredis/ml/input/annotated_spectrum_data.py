@@ -12,7 +12,7 @@ from dataclasses import dataclass, fields, replace
 import torch
 from torch import Tensor
 from torch_geometric.data import Batch
-from .reaction_state_data import TensorTable
+from .reaction_context_data import TensorTable
 
 
 def csr(rows, device=None):
@@ -63,9 +63,10 @@ class CompoundData:
     compounds: tuple
     # [N]: runtime fragment occurrence -> unique compound; runtime rows preserve group topology.
     occurrence_index: Tensor
-    # [V]: chemical reaction-state row -> unique compound; -1 if not materialized.
-    state_index: Tensor
-    # [C + 1], [Kstate]: inverse CSR, compound -> reaction-set IDs (V rows).
+    # [V]: context row -> unique Compound; -1 if not materialized.
+    # Context is (branch group, independent ReactionSet ID), not membership.
+    context_compound_index: Tensor
+    # [C + 1], [K_pairs]: inverse CSR, Compound -> unique independent set IDs.
     reaction_set_ptr: Tensor
     reaction_set_index: Tensor
 
@@ -130,8 +131,8 @@ class AnnotatedSpectrumData:
     ion_adducts: tuple[str, ...]
     # Element columns of formulas.composition, excluding the final charge column.
     elements: tuple[str, ...]
-    # [V]: IDs into ReactionStateData.candidate_*; distinct states can share a compound.
-    reaction_state_index: Tensor
+    # [V]: context -> independent ReactionSet row; shared across branch groups.
+    context_reaction_set_index: Tensor
     # Length N: runtime group ID for each fragment occurrence (used for display, not identity).
     occurrence_group_index: Tensor
 
@@ -143,13 +144,14 @@ class AnnotatedSpectrumData:
             formulas=self.formulas.to(device),
             ions=self.ions.to(device),
             assignments=self.assignments.to(device),
-            reaction_state_index=self.reaction_state_index.to(device),
+            context_reaction_set_index=self.context_reaction_set_index.to(device),
             occurrence_group_index=self.occurrence_group_index.to(device),
         )
 
     @classmethod
     def from_runtime(
-        cls, batch, observations, source_index, branch_group_index, elements=(), state_nodes=None
+        cls, batch, observations, source_index, branch_group_index, elements=(), state_nodes=None,
+        *, context_reaction_set_index: Tensor
     ):
         """Normalize prepared chemistry; no losses, positives or negative labels are created."""
         decoded = batch.decoded
@@ -169,8 +171,10 @@ class AnnotatedSpectrumData:
         reaction_set_index = [[] for _ in smiles]
         for row, compound in enumerate(materialized.tolist()):
             if compound >= 0:
-                reaction_set_index[compound].append(row)
-        reaction_set_ptr, reaction_set_index = csr(reaction_set_index, device)
+                reaction_set_index[compound].append(int(context_reaction_set_index[row]))
+        reaction_set_ptr, reaction_set_index = csr(
+            [sorted(set(ids)) for ids in reaction_set_index], device
+        )
         compounds = CompoundData(
             tuple(smiles),
             Batch.from_data_list([graphs[i] for i in representatives]),
@@ -270,7 +274,7 @@ class AnnotatedSpectrumData:
             PeakAssignmentData(fp, fi, ip, ii),
             batch.ion_type_strs,
             tuple(elements),
-            torch.arange(len(materialized), device=device),
+            context_reaction_set_index,
             decoded.node_sample_index,
         )
 
@@ -394,8 +398,9 @@ class AnnotatedSpectrumData:
         check_csr("peak->ion", assignment.ion_ptr, assignment.ion_index, len(spectra.mz))
         for name, values, size, missing in (
             ("occurrence->compound", compounds.occurrence_index, ccount, False),
-            ("state->compound", compounds.state_index, ccount, True),
-            ("compound->state", compounds.reaction_set_index, len(compounds.state_index), False),
+            ("state->compound", compounds.context_compound_index, ccount, True),
+            ("compound->set", compounds.reaction_set_index,
+             int(self.context_reaction_set_index.max()) + 1 if self.context_reaction_set_index.numel() else 0, False),
             ("formula->ion", formulas.ion_index, icount, False),
             ("ion->compound", ions.compound_index, ccount, False),
             ("ion->formula", ions.formula_index, fcount, False),
@@ -407,24 +412,28 @@ class AnnotatedSpectrumData:
             ("peak->ion", assignment.ion_index, icount, False),
         ):
             check_index(name, values, size, missing)
-        # The inverse CSR must contain each materialized reaction set exactly
-        # once, grouped by its resulting Compound. Multiple sets may share one
-        # Compound/node; reaction order does not add another set row.
-        materialized = (compounds.state_index >= 0).nonzero().flatten()
-        if not torch.equal(compounds.reaction_set_index.sort().values, materialized):
-            raise ValueError("Compound reaction-set CSR must cover each materialized set once")
+        context_compound = compounds.context_compound_index
+        context_sets = self.context_reaction_set_index
+        if context_sets.shape != context_compound.shape or bool((context_sets < 0).any()):
+            raise ValueError("Materialization contexts must reference one ReactionSet each")
+        expected = sorted(set(
+            (compound, reaction_set)
+            for compound, reaction_set in zip(context_compound.tolist(), context_sets.tolist())
+            if compound >= 0
+        ))
         owner = torch.repeat_interleave(
-            torch.arange(ccount, device=compounds.state_index.device),
+            torch.arange(ccount, device=context_compound.device),
             compounds.reaction_set_ptr[1:] - compounds.reaction_set_ptr[:-1],
         )
-        if not torch.equal(compounds.state_index[compounds.reaction_set_index], owner):
-            raise ValueError("Compound reaction-set CSR disagrees with state->compound")
+        actual = list(zip(owner.tolist(), compounds.reaction_set_index.tolist()))
+        if actual != expected:
+            raise ValueError("Compound reaction-set CSR must contain each materialized pair once")
         for name, value in (("intensity", spectra.intensity), ("precursor", spectra.precursor)):
             if value.shape != spectra.mz.shape:
                 raise ValueError(f"Observed peak {name} shape differs from m/z")
 
     @classmethod
-    def collate(cls, items, source_counts, group_counts):
+    def collate(cls, items, source_counts, group_counts, reaction_set_maps):
         """Batch normalized tables directly; never round-trip through viewer dictionaries."""
         if not items:
             raise ValueError("Cannot collate empty annotations")
@@ -482,18 +491,20 @@ class AnnotatedSpectrumData:
         ion_maps = all_ion_map.split([len(a.ions.compound_index) for a in items])
         occurrence = []
         states = []
+        context_sets = []
         runtime = []
         runtime_sample = []
         source = []
         groups = []
         occurrence_groups = []
         so = go = mo = 0
-        for a, cm, im, sc, gc in zip(
-            items, compound_maps, ion_maps, source_counts, group_counts, strict=True
+        for a, cm, im, sc, gc, set_map in zip(
+            items, compound_maps, ion_maps, source_counts, group_counts, reaction_set_maps, strict=True
         ):
             occurrence.append(cm[a.compounds.occurrence_index])
-            old = a.compounds.state_index
+            old = a.compounds.context_compound_index
             states.append(torch.where(old >= 0, cm[old.clamp_min(0)], old))
+            context_sets.append(set_map[a.context_reaction_set_index])
             runtime.append(im[a.ions.runtime_index])
             runtime_sample.append(a.ions.runtime_sample_index + so)
             source.append(a.spectra.source_index + mo)
@@ -503,11 +514,12 @@ class AnnotatedSpectrumData:
             mo += sc
             go += gc
         state_index = torch.cat(states)
+        context_reaction_set_index = torch.cat(context_sets)
         reaction_set_index = [[] for _ in smiles]
         for row, compound in enumerate(state_index.tolist()):
             if compound >= 0:
-                reaction_set_index[compound].append(row)
-        cp, ci = csr(reaction_set_index, device)
+                reaction_set_index[compound].append(int(context_reaction_set_index[row]))
+        cp, ci = csr([sorted(set(ids)) for ids in reaction_set_index], device)
         c = CompoundData(
             tuple(smiles),
             Batch.from_data_list(graphs),
@@ -551,7 +563,7 @@ class AnnotatedSpectrumData:
             assignments,
             adducts,
             items[0].elements,
-            torch.arange(len(state_index), device=device),
+            context_reaction_set_index,
             torch.cat(occurrence_groups),
         )
         result.validate()

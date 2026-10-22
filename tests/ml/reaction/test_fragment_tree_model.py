@@ -103,8 +103,8 @@ def test_multi_depth_states_and_cross_ce_negative_protection():
     assert data.collision_energy_eV.dtype == torch.float32
     assert data.branch_group_adduct_index.dtype == torch.int64
     assert data.branch_group_adduct_index[data.sample_branch_group_index].tolist() == [0, 0]
-    assert {0, 1, 2} <= set(data.states.reaction_count.tolist())
-    prefix_row = next((row for (row, depth) in enumerate(data.states.reaction_count.tolist()) if depth == 1))
+    assert {0, 1, 2} <= set(data.state_reaction_count.tolist())
+    prefix_row = next((row for (row, depth) in enumerate(data.state_reaction_count.tolist()) if depth == 1))
     (start, stop) = data.teacher.negative_reaction_ptr[prefix_row:prefix_row + 2]
     assert second not in data.teacher.negative_reaction_index[start:stop].tolist()
     assert torch.all(data.states.next_state_index >= 0)
@@ -164,6 +164,6 @@ def test_prepared_payload_has_schema_without_version(tmp_path):
     _,data=prepared_two_ce();path=tmp_path/'data.preft.pt';data.save(path)
     payload=torch.load(path,weights_only=False)
     assert set(payload)=={'schema','structure'}
-    assert payload['schema']=='fredis.annotated-spectrum-training.v3'
+    assert payload['schema']=='fredis.annotated-spectrum-training.v4'
     loaded=SourceReactionStructure.load(path)
     assert loaded.num_branch_groups==1

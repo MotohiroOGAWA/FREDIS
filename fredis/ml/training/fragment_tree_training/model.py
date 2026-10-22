@@ -125,18 +125,19 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
         inverse[:, reactions] = -1
         state_count = data.states.branch_group_index.numel()
         owners = data.states.branch_group_index
-        counts = data.states.reaction_ptr[1:] - data.states.reaction_ptr[:-1]
+        reaction_ptr, reaction_index = data.active_reactions()
+        counts = reaction_ptr[1:] - reaction_ptr[:-1]
         row = torch.repeat_interleave(torch.arange(state_count, device=ids.device), counts)
-        position = torch.arange(row.numel(), device=ids.device) - data.states.reaction_ptr[row]
+        position = torch.arange(row.numel(), device=ids.device) - reaction_ptr[row]
         state = torch.full(
             (state_count, self.feature_model.max_reaction_count),
             -1,
             dtype=torch.long,
             device=ids.device,
         )
-        # Candidate sets already store ascending group-local pool indices.
-        local = data.states.reaction_index
-        if torch.any(local < 0) or torch.any(local >= pool.valid.sum(1)[owners[row]]):
+        # Independent set members reference the global concrete registry.
+        local = inverse[owners[row], reaction_index]
+        if torch.any(local < 0):
             raise ValueError("Prepared state reaction is absent from its branch group")
         state[row, position] = local
         sentinel = pool.valid.shape[1]
@@ -167,12 +168,12 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             "num_teacher_paths": logits.new_tensor(float(path_scores.numel())),
         }
         max_depth = (
-            int(data.states.reaction_count.max().item())
-            if data.states.reaction_count.numel()
+            int(data.state_reaction_count.max().item())
+            if data.state_reaction_count.numel()
             else -1
         )
         for depth in range(max_depth + 1):
-            mask = data.states.reaction_count == depth
+            mask = data.state_reaction_count == depth
             metrics[f"branch_recall_depth_{depth}"] = (
                 predicted[mask] & positive[mask]
             ).sum() / positive[mask].sum().clamp_min(1)

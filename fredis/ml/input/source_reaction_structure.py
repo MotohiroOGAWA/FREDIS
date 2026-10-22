@@ -19,10 +19,12 @@ from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
 from fredis.libs.mmkit.mmkit import Compound
 from ..mol.graph_builder import MolGraphBuilder
 from .reaction_tensor_data import ReactionTensorData
-from .reaction_state_data import ReactionStateData, TeacherData
+from .reaction_set import ReactionSet
+from .source_compound import SourceCompound
+from .reaction_context_data import ReactionContextData, TeacherData
 from .annotated_spectrum_data import AnnotatedSpectrumData
 
-SCHEMA = "fredis.annotated-spectrum-training.v3"
+SCHEMA = "fredis.annotated-spectrum-training.v4"
 
 
 class UnresolvedPrecursorError(ValueError):
@@ -44,20 +46,20 @@ def csr(rows: Sequence[Sequence[int]]) -> tuple[Tensor, Tensor]:
 
 @dataclass(frozen=True)
 class SourceReactionStructure:
-    # M source molecules; x [atoms, features], ptr [M + 1].
-    source_graph: Batch
+    # Independent SourceCompound table: graph Batch and structural identity.
+    source_compounds: SourceCompound
     # Concrete source-specific chemistry; all reaction IDs refer to this registry.
     reactions: ReactionTensorData
-    # Reaction-set annotations and valid transitions, separate from supervision.
-    states: ReactionStateData = field(default_factory=ReactionStateData, kw_only=True)
+    # Group-local contexts and transitions referencing independent ReactionSet IDs.
+    states: ReactionContextData = field(default_factory=ReactionContextData, kw_only=True)
     # Optional-in-content training labels referencing states and annotations.
     teacher: TeacherData = field(default_factory=TeacherData, kw_only=True)
     # [S]: source molecule ID for each observed spectrum.
     sample_tree_index: Tensor
     # [S], float32: collision energy in eV.
     collision_energy_eV: Tensor
-    # Downstream precomputed graphs are optional for scorer-only training.
-    source_smiles: tuple[str, ...] = field(default=(), kw_only=True)
+    # Unique sets of batch-global reaction IDs; no group/Compound/teacher ownership.
+    reaction_sets: ReactionSet = field(kw_only=True)
     max_reaction_role_count: int = field(default=0, kw_only=True)
     source_atom_capacity: int = field(default=0, kw_only=True)
     # Normalized chemical/observational data; independent of branch supervision.
@@ -66,7 +68,7 @@ class SourceReactionStructure:
     observations: InitVar[tuple[dict, ...] | None] = field(default=None, kw_only=True)
     formula_elements: tuple[str, ...] = field(default=(), kw_only=True)
     # Runtime view: expanded group-local graph topology and sample/ion rows.
-    # Redundant graphs/formulas/targets are omitted from serialized v3 data.
+    # Redundant graphs/formulas/targets are omitted from serialized v4 data.
     spectrum_batch: object | None = None
 
     # Spectrum -> (compound, main adduct) branch group. Collision energy is
@@ -85,27 +87,36 @@ class SourceReactionStructure:
     def __post_init__(self, observations):
         if observations and self.spectrum_batch is not None:
             annotation = AnnotatedSpectrumData.from_runtime(
-                self.spectrum_batch,
-                observations,
-                self.sample_tree_index,
-                self.sample_branch_group_index,
-                self.formula_elements,
+                self.spectrum_batch, observations, self.sample_tree_index,
+                self.sample_branch_group_index, self.formula_elements,
                 self.states.candidate_fragment_index,
+                context_reaction_set_index=self.states.candidate_reaction_set_index,
             )
             annotation.validate()
             object.__setattr__(self, "annotations", annotation)
-            object.__setattr__(
-                self,
-                "states",
-                replace(self.states, compound_index=annotation.compounds.state_index),
-            )
 
-        if self.annotations is not None:
-            object.__setattr__(
-                self,
-                "states",
-                replace(self.states, compound_index=self.annotations.compounds.state_index),
-            )
+    @property
+    def source_graph(self):
+        """Graph view of the independent SourceCompound table."""
+        return self.source_compounds.source_graph
+
+    @property
+    def source_smiles(self):
+        return self.source_compounds.source_smiles
+
+    def candidate_reactions(self):
+        """Runtime CSR view of context -> shared ReactionSet -> global reactions."""
+        return self.reaction_sets.gather(self.states.candidate_reaction_set_index)
+
+    def active_reactions(self):
+        ids = self.states.candidate_reaction_set_index[self.states.candidate_index]
+        return self.reaction_sets.gather(ids)
+
+    @property
+    def state_reaction_count(self):
+        ids = self.states.candidate_reaction_set_index[self.states.candidate_index]
+        ptr = self.reaction_sets.reaction_ptr
+        return ptr[ids + 1] - ptr[ids]
 
     def without_teacher(self):
         """Keep observations and the complete V-state chemistry, dropping Q-state supervision."""
@@ -134,7 +145,7 @@ class SourceReactionStructure:
     def __getstate__(self):
         """Serialize normalized tables plus topology; omit expanded runtime caches.
 
-        This is the v3 representation only, not a migration path. Formula rows,
+        This is the v4 representation only, not a migration path. Formula rows,
         molecular graphs and targets are restored from annotations on unpickling.
         """
         state = dict(self.__dict__)
@@ -157,7 +168,7 @@ class SourceReactionStructure:
 
     def __setstate__(self, state):
         """Restore current-format runtime views without RDKit or old-format conversion."""
-        if any(name not in state for name in ("annotations", "teacher", "states", "collision_energy_eV")):
+        if any(name not in state for name in ("annotations", "teacher", "states", "collision_energy_eV", "reaction_sets", "source_compounds")):
             raise ValueError("Unsupported prepared data; regenerate the dataset")
         self.__dict__.update(state)
         if self.annotations is not None and self.spectrum_batch is not None:
@@ -201,30 +212,6 @@ class SourceReactionStructure:
     def device(self) -> torch.device:
         return self.reactions.reaction_type.device
 
-    def reaction_registry_index(self, group_index: Tensor, reaction_index: Tensor) -> Tensor:
-        """Resolve group-local reaction IDs to rows in the concrete registry.
-
-        Each group orders its Source reactions by ascending registry row. Local
-        IDs remain unchanged when structures are collated or spectra selected.
-        """
-        eligible = (
-            self.reactions.reaction_source_compound_index[None, :]
-            == self.branch_group_tree_index[:, None]
-        )
-        counts = eligible.sum(1)
-        ptr = torch.cat((counts.new_zeros(1), counts.cumsum(0)))
-        registry_rows = eligible.nonzero(as_tuple=True)[1]
-        return registry_rows[ptr[group_index] + reaction_index]
-
-    @property
-    def candidate_reaction_registry_index(self) -> Tensor:
-        """Candidate CSR values converted to batch-global reaction registry IDs."""
-        ptr = self.states.candidate_reaction_ptr
-        group = torch.repeat_interleave(
-            self.states.candidate_branch_group_index, ptr[1:] - ptr[:-1]
-        )
-        return self.reaction_registry_index(group, self.states.candidate_reaction_index)
-
     def to(self, device: str | torch.device) -> SourceReactionStructure:
         return replace(
             self,
@@ -235,7 +222,44 @@ class SourceReactionStructure:
             },
         )
 
+    def validate(self):
+        """Validate the canonical tables and cross-table foreign keys."""
+        self.reaction_sets.validate(self.reactions.reaction_source_compound_index)
+        if len(self.source_smiles) != self.source_graph.num_graphs:
+            raise ValueError("SourceCompound SMILES and graph rows must match")
+
+        def check(values, size, name):
+            if values.dtype != torch.long or (values.numel() and (
+                int(values.min()) < 0 or int(values.max()) >= size
+            )):
+                raise ValueError(f"Invalid foreign key: {name}")
+
+        states = self.states
+        groups = states.candidate_branch_group_index
+        sets = states.candidate_reaction_set_index
+        check(self.reactions.reaction_source_compound_index, len(self.source_smiles), "reaction->SourceCompound")
+        check(self.branch_group_tree_index, len(self.source_smiles), "group->SourceCompound")
+        check(groups, self.num_branch_groups, "context->group")
+        check(sets, len(self.reaction_sets), "context->ReactionSet")
+        if groups.shape != sets.shape or states.candidate_fragment_index.shape != sets.shape:
+            raise ValueError("Context columns must have matching shapes")
+        if groups.numel() and torch.unique(torch.stack((groups, sets), 1), dim=0).shape[0] != groups.numel():
+            raise ValueError("A group may reference a ReactionSet only once")
+        ptr, reactions = self.candidate_reactions()
+        owner = torch.repeat_interleave(groups, ptr[1:] - ptr[:-1])
+        if not torch.equal(self.reactions.reaction_source_compound_index[reactions],
+                           self.branch_group_tree_index[owner]):
+            raise ValueError("ReactionSet belongs to a different SourceCompound than its context")
+        check(states.candidate_index, sets.numel(), "active->context")
+        if not torch.equal(states.branch_group_index, groups[states.candidate_index]):
+            raise ValueError("Active context branch groups disagree")
+        if self.annotations is not None:
+            self.annotations.validate()
+            if not torch.equal(self.annotations.context_reaction_set_index, sets):
+                raise ValueError("Annotation contexts must reference the canonical ReactionSets")
+
     def save(self, path: str | Path) -> None:
+        self.validate()
         torch.save(
             dict(schema=SCHEMA, structure=self.to("cpu")),
             path,
@@ -249,7 +273,12 @@ class SourceReactionStructure:
         *,
         max_reaction_count: int = 3,
     ) -> SourceReactionStructure:
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        try:
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+        except ModuleNotFoundError as error:
+            if error.name == "fredis.ml.input.reaction_state_data":
+                raise ValueError("Unsupported prepared data; regenerate the dataset") from error
+            raise
         if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
             raise ValueError("Unsupported prepared data; regenerate from the original MSDataset")
         result = payload["structure"]
@@ -261,6 +290,7 @@ class SourceReactionStructure:
             not hasattr(result.reactions, name) for name in ReactionTensorData.field_names()
         ):
             raise ValueError("Unsupported reaction tensors; regenerate the prepared dataset")
+        result.validate()
         return result.to(device)
 
     @classmethod
@@ -271,7 +301,7 @@ class SourceReactionStructure:
             raise ValueError("Cannot collate an empty batch")
         if any(item.formula_elements != structures[0].formula_elements for item in structures):
             raise ValueError("Cannot collate different formula element vocabularies")
-        graphs, sample_trees, energies = [], [], []
+        sample_trees, energies = [], []
         state_samples, next_rows, eos = [], [], []
         atom_offset = reaction_offset = tree_offset = sample_offset = group_offset = (
             state_offset
@@ -296,7 +326,7 @@ class SourceReactionStructure:
         valid_next = []
         negative_rows = []
         transition_state_groups = []
-        transition_state_rows = []
+        context_set_indices = []
         teacher_transition_states = []
         transition_state_offset = 0
         peak_paths = []
@@ -348,7 +378,6 @@ class SourceReactionStructure:
             if item.spectrum_batch is not None:
                 spectrum_batches.append(item.spectrum_batch)
                 node_offset += len(item.spectrum_batch.decoded.compounds)
-            graphs.extend(item.source_graph.to_data_list())
             sample_trees.append(item.sample_tree_index + tree_offset)
             energies.append(item.collision_energy_eV)
             state_samples.append(item.states.branch_group_index + group_offset)
@@ -375,13 +404,7 @@ class SourceReactionStructure:
                     (item.teacher.negative_reaction_index[a:b] + reaction_offset).tolist()
                 )
             transition_state_groups.append(item.states.candidate_branch_group_index + group_offset)
-            for start, stop in zip(
-                item.states.candidate_reaction_ptr[:-1],
-                item.states.candidate_reaction_ptr[1:],
-            ):
-                transition_state_rows.append(
-                    item.states.candidate_reaction_index[start:stop].tolist()
-                )
+            context_set_indices.append(item.states.candidate_reaction_set_index)
             teacher_transition_states.append(item.states.candidate_index + transition_state_offset)
             transition_state_offset += item.states.candidate_branch_group_index.numel()
             for peak in range(item.teacher.peak_path_ptr.numel() - 1):
@@ -408,11 +431,15 @@ class SourceReactionStructure:
             tree_offset += item.source_graph.num_graphs
             sample_offset += item.sample_tree_index.numel()
             group_offset += item.num_branch_groups
-        graph = Batch.from_data_list(graphs)
         next_ptr, next_index = csr(next_rows)
         valid_ptr, valid_reactions = csr(valid_rows)
         negative_ptr, negative_reactions = csr(negative_rows)
-        transition_state_ptr, transition_state_reactions = csr(transition_state_rows)
+        reaction_sets, set_maps = ReactionSet.collate(
+            [item.reaction_sets for item in structures], reaction_offsets
+        )
+        context_set_ids = torch.cat([
+            mapping[ids] for mapping, ids in zip(set_maps, context_set_indices)
+        ])
         peak_ptr, unused = csr(peak_paths)
         path_ptr, path_states = csr([[state for state, _ in path] for path in path_steps])
         path_reactions = torch.tensor(
@@ -427,7 +454,7 @@ class SourceReactionStructure:
             spectrum_batch = collate_spectrum_model_batches(spectrum_batches, reaction_offsets)
         return cls(
             formula_elements=structures[0].formula_elements,
-            source_graph=graph,
+            source_compounds=SourceCompound.collate([item.source_compounds for item in structures]),
             reactions=ReactionTensorData.collate(
                 [item.reactions for item in structures],
                 [item.source_graph.num_nodes for item in structures],
@@ -436,7 +463,7 @@ class SourceReactionStructure:
             sample_tree_index=torch.cat(sample_trees),
             collision_energy_eV=torch.cat(energies),
             spectrum_batch=spectrum_batch,
-            source_smiles=tuple((key for item in structures for key in item.source_smiles)),
+            reaction_sets=reaction_sets,
             sample_branch_group_index=torch.cat(sample_groups),
             branch_group_tree_index=torch.cat(group_trees),
             branch_group_adduct_index=torch.cat(group_adducts),
@@ -445,13 +472,14 @@ class SourceReactionStructure:
                     [item.annotations for item in structures],
                     [item.source_graph.num_graphs for item in structures],
                     [item.num_branch_groups for item in structures],
+                    set_maps,
                 )
                 if all(item.annotations is not None for item in structures)
                 else None
             ),
             max_reaction_role_count=max((item.max_reaction_role_count for item in structures)),
             source_atom_capacity=max((item.source_atom_capacity for item in structures)),
-            states=ReactionStateData(
+            states=ReactionContextData(
                 branch_group_index=torch.cat(state_samples),
                 transition_parent_index=torch.cat(parents),
                 transition_child_index=torch.cat(children),
@@ -463,10 +491,8 @@ class SourceReactionStructure:
                 next_reaction_index=valid_reactions,
                 next_state_index=torch.tensor(valid_next, dtype=torch.long),
                 candidate_fragment_index=torch.cat(candidate_nodes),
-                compound_index=torch.empty(0, dtype=torch.long),
                 candidate_branch_group_index=torch.cat(transition_state_groups),
-                candidate_reaction_ptr=transition_state_ptr,
-                candidate_reaction_index=transition_state_reactions,
+                candidate_reaction_set_index=context_set_ids,
                 candidate_index=torch.cat(teacher_transition_states),
             ),
             teacher=TeacherData(
@@ -671,7 +697,7 @@ def prepare_source_reactions(
     positive_ptr, positive_index = csr(positives)
     valid_ptr, valid_reaction_index = csr(valid_rows)
     negative_ptr, negative_reaction_index = csr(negative_rows)
-    transition_state_ptr, transition_state_reaction_index = csr(transition_states)
+    reaction_sets, context_set_ids = ReactionSet.from_rows(transition_states)
     flattened_paths = [path for peak in peak_paths for path in peak]
     peak_path_ptr = torch.tensor(
         [0, *torch.tensor([len(peak) for peak in peak_paths]).cumsum(0).tolist()],
@@ -689,17 +715,17 @@ def prepare_source_reactions(
 
     graph = Batch.from_data_list([raw_graph])
     return SourceReactionStructure(
-        source_graph=graph,
+        source_compounds=SourceCompound(graph, (source.smiles,), graph_builder.symbols),
         reactions=ReactionTensorData.from_reactions(reactions, maps, relations),
         sample_tree_index=torch.zeros(sample_count, dtype=torch.long),
         collision_energy_eV=collision_energy_eV,
-        source_smiles=(source.smiles,),
+        reaction_sets=reaction_sets,
         sample_branch_group_index=sample_branch_group_index,
         branch_group_tree_index=torch.zeros(group_count, dtype=torch.long),
         branch_group_adduct_index=branch_group_adduct_index,
         source_atom_capacity=len(maps),
         max_reaction_role_count=max((len(a.source_atom_maps) for a in reactions), default=0),
-        states=ReactionStateData(
+        states=ReactionContextData(
             branch_group_index=torch.tensor(owners),
             transition_parent_index=transition_parent,
             transition_child_index=transition_child,
@@ -711,8 +737,8 @@ def prepare_source_reactions(
             next_reaction_index=valid_reaction_index,
             next_state_index=torch.tensor(valid_next, dtype=torch.long),
             candidate_branch_group_index=torch.tensor(transition_state_owners, dtype=torch.long),
-            candidate_reaction_ptr=transition_state_ptr,
-            candidate_reaction_index=transition_state_reaction_index,
+            candidate_reaction_set_index=context_set_ids,
+            candidate_fragment_index=torch.full((len(transition_states),), -1, dtype=torch.long),
             candidate_index=torch.tensor(teacher_transition_states, dtype=torch.long),
         ),
         teacher=TeacherData(
@@ -744,6 +770,7 @@ def save_fragment_tree_structure(
     metadata: dict[str, object] | None = None,
 ) -> None:
     """Save one structure and a small metadata sidecar into a torch file."""
+    structure.validate()
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(

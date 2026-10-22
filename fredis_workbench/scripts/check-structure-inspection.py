@@ -20,11 +20,13 @@ reaction = ReactionInstance(0, 0, (1,), frozenset({1}), frozenset(), frozenset()
 sequence = ReactionSequence((reaction,))
 metadata = {'smiles': 'C', 'record_indexes': [7],
             'reaction_sequence_compounds': [(sequence, '[CH4:1]')]}
-from fredis.ml.input.reaction_state_data import ReactionStateData, TeacherData
+from fredis.ml.input.reaction_context_data import ReactionContextData, TeacherData
 structure = SimpleNamespace(
     num_samples=0, num_branch_groups=0, sample_annotations=(),
     reactions=SimpleNamespace(reaction_type=torch.empty((0,3))),
-    states=ReactionStateData(), teacher=TeacherData(),
+    states=ReactionContextData(), teacher=TeacherData(),
+    candidate_reactions=lambda: (torch.zeros(1,dtype=torch.long), torch.empty(0,dtype=torch.long)),
+    state_reaction_count=torch.empty(0,dtype=torch.long),
     collision_energy_eV=torch.empty(0), branch_group_adduct_index=torch.empty(0,dtype=torch.long), sample_branch_group_index=torch.empty(0,dtype=torch.long),
     spectrum_batch=SimpleNamespace(decoded=SimpleNamespace(trees=(),compounds=()),
         state_node_index=torch.empty(0),state_adduct_index=torch.empty(0)),

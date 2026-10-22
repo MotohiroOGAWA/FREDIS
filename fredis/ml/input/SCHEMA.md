@@ -1,8 +1,7 @@
 # SourceReactionStructure schema
 
-SourceCompound and Reaction below document the current Batch fields.
-ReactionSet defines the revised target design agreed during schema review;
-its implementation migration is pending. External references are shown by name,
+SourceCompound, Reaction, and ReactionSet below describe the implemented Batch
+tables in schema `fredis.annotated-spectrum-training.v4`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
 ## SourceCompound: independent Batch structure (step 1)
@@ -10,8 +9,9 @@ and CSR relations are shown as single logical fields. No SQL database is created
 The actual molecular graph storage is `source_graph: torch_geometric.data.Batch`,
 including `ptr` and `batch`. This section describes that physical Batch first,
 not a single-molecule RDB row. `source_smiles` is stored alongside the Batch in
-SourceReactionStructure. SOURCE_COMPOUND_BATCH below is a logical name for those
-fields together, not a new Python class. No implementation changes are made.
+SourceReactionStructure. The implemented `SourceCompound` class owns `source_graph`, `source_smiles`,
+and the shared `symbols` vocabulary, under `structure.source_compounds`.
+`structure.source_graph` and `structure.source_smiles` are read-only views.
 There are no external foreign keys in this component.
 
 ### Batch schema with concrete field values
@@ -24,6 +24,7 @@ M=2 molecules, A=7 total atoms, E=10 directed edges. Atom feature dimension is
 erDiagram
     SOURCE_COMPOUND_BATCH {
         string_tuple source_smiles "M=2: CCO, CC(=O)O"
+        string_tuple symbols "C, O: shared feature vocabulary"
         float32_matrix x "source_graph.x: [7,28]"
         int64_matrix edge_index "source_graph.edge_index: [2,10]"
         float32_matrix edge_attr "source_graph.edge_attr: [10,9]"
@@ -36,6 +37,7 @@ erDiagram
 | Actual field | Type / shape | Concrete value / meaning |
 |---|---|---|
 | `source_smiles` | tuple[str, ...], length M | `("CCO", "CC(=O)O")` |
+| `symbols` | tuple[str, ...], shared | `("C", "O")`; atom feature vocabulary |
 | `source_graph.x` | float32 `[A,F_atom]` | `[7,28]`; concatenated atom features |
 | `source_graph.edge_index` | int64 `[2,E]` | `[2,10]`; endpoints use Batch-global atom rows |
 | `source_graph.edge_attr` | float32 `[E,F_bond]` | `[10,9]`; directed-edge features |
@@ -166,7 +168,7 @@ There is no separate stored `edge_ptr` in this builder's output.
 
 Interpretation requires the atom/bond vocabularies, descriptor order, and graph
 hydrogen policy. Current code holds these in the graph builder/descriptor
-constants, not as additional fields of each SourceCompound. Hydrogens become
+constants; `SourceCompound.symbols` now also persists the normalized atom vocabulary. Hydrogens become
 independent graph nodes only when `"H"` is in `symbols`; hydrogen counts remain
 atom features. One shared configuration applies to a packed Batch.
 
@@ -305,9 +307,9 @@ Implementation: [ReactionTensorData](reaction_tensor_data.py),
 
 ## ReactionSet: independent reaction-set CSR table (step 3)
 
-This section defines the revised target schema. It replaces the earlier design
-that placed branch-group, Compound, and fragment occurrence fields inside the
-reaction-set table. It is a schema revision, not an implemented Python migration.
+The implemented `ReactionSet` class (`structure.reaction_sets`) contains only
+canonical membership. Group, Compound, topology, and teacher information are
+references to the independent set table, not membership ownership.
 
 ### Only reaction membership belongs to this table
 
@@ -404,22 +406,36 @@ may reuse the same set row while retaining its own topology/labels. These
 consumer tables will be specified step by step, rather than being treated as
 fields of the set table.
 
-### Relationship to current implementation
+### Implemented classes and references
 
-The current `ReactionStateData.candidate_reaction_*` CSR still stores group-local
-IDs and has group-owned V rows. It is not yet the independent table defined here.
-`compound_index`, `candidate_fragment_index`, and Q-row/transition fields also
-remain in the current class. They are not part of the revised set schema.
+| Schema component | Class / stored fields |
+|---|---|
+| SourceCompound | `SourceCompound(source_graph, source_smiles, symbols)` |
+| Reaction | `ReactionTensorData`; concrete global registry rows |
+| ReactionSet | `ReactionSet(reaction_ptr, reaction_index)` |
+| Context -> set | `ReactionContextData.candidate_reaction_set_index` |
+| Active teacher context -> set | `states.candidate_index` -> candidate context -> set |
+| Compound -> sets | `CompoundData.reaction_set_ptr/index`; unique set IDs per Compound |
+| Materialization context -> Compound | `CompoundData.context_compound_index` |
+| Annotation context -> set | `AnnotatedSpectrumData.context_reaction_set_index` |
 
-An implementation migration would resolve local IDs to registry rows, canonicalize
-and deduplicate the resulting sets across groups, remap all referencing set IDs,
-and separate context/topology/teacher references. When combining Batches,
-registry reaction IDs would need offset/remapping before set deduplication;
-group-local IDs must not be compared as if they were global IDs.
-The existing Compound inverse CSR would then point to the new set IDs rather
-than the old group-owned V rows. No such code migration is performed by this
-schema edit.
+ReactionContextData contains group, occurrence, active-state projection and
+transition references. It stores no membership CSR and no set-owned Compound.
+Root contexts with different Sources can point to the same empty set and different
+Compounds. Repeated group contexts for the same Compound/set pair create only
+one entry in the Compound inverse CSR.
 
-The preceding all-table ER diagrams are removed because their State-owned
-Compound/group model contradicted this revised design. Remaining table schemas
-will be added after their structure is agreed.
+`ReactionSet.from_rows()` normalizes/deduplicates memberships and returns a
+row-to-set-ID mapping. Collation offsets global reaction IDs before interning,
+then remaps contexts and Compound references. Sample selection retains the
+independent Source/reaction/set registries and slices the dependent contexts.
+`candidate_reactions()` / `active_reactions()` build runtime CSR projections from
+FKs; those memberships are not stored twice. Training converts the global members
+to the decoder's local pool slots only for scoring.
+
+Files use `fredis.annotated-spectrum-training.v4`. Old prepared files must be
+regenerated. Loading/validation does not run chemistry. Further dependent schemas
+can be refined independently of canonical set identity.
+
+Implementation: [SourceCompound](source_compound.py),
+[ReactionSet](reaction_set.py), [ReactionContextData](reaction_context_data.py).

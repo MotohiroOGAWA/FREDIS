@@ -39,10 +39,11 @@ def _reaction_states(structure) -> list[dict]:
     """All chemical reaction sets, annotated with optional teacher labels."""
     states, teacher = structure.states, structure.teacher
     supervised = {int(candidate): q for q, candidate in enumerate(states.candidate_index)}
+    ptr, values = structure.candidate_reactions()
     rows = []
     for row, group in enumerate(states.candidate_branch_group_index.tolist()):
-        a, b = states.candidate_reaction_ptr[row : row + 2]
-        reactions = states.candidate_reaction_index[a:b].tolist()
+        a, b = ptr[row : row + 2]
+        reactions = values[a:b].tolist()
         q = supervised.get(row)
         next_reactions = []
         observed = False
@@ -50,7 +51,8 @@ def _reaction_states(structure) -> list[dict]:
             a, b = teacher.positive_reaction_ptr[q : q + 2]
             next_reactions = teacher.positive_reaction_index[a:b].tolist()
             observed = bool(teacher.observed[q])
-        compound = int(states.compound_index[row]) if states.compound_index.numel() else -1
+        compound = (int(structure.annotations.compounds.context_compound_index[row])
+                    if structure.annotations is not None else -1)
         smiles = (
             structure.annotations.compounds.smiles[compound]
             if compound >= 0 and structure.annotations is not None
@@ -390,7 +392,7 @@ def inspect_structure(file_path: Path) -> dict:
                 if structure.spectrum_batch
                 else 0
             ),
-            "maxTeacherReactionCount": int(structure.states.reaction_count.max()) if states else 0,
+            "maxTeacherReactionCount": int(structure.state_reaction_count.max()) if states else 0,
             "transitions": len(transitions),
         },
         "samples": samples,

@@ -155,11 +155,6 @@ def select_samples(data: SourceReactionStructure, indices) -> SourceReactionStru
         start, stop = data.states.next_ptr[state : state + 2]
         next_states = data.states.next_state_index[start:stop]
         valid_next_states.extend(transition_state_map[next_states].tolist())
-    transition_state_ptr, transition_state_reactions = _select_csr_rows(
-        data.states.candidate_reaction_ptr,
-        data.states.candidate_reaction_index,
-        transition_state_indices,
-    )
     negative_ptr, negative_reactions = _select_csr_rows(
         data.teacher.negative_reaction_ptr, data.teacher.negative_reaction_index, state_indices
     )
@@ -238,7 +233,7 @@ def select_samples(data: SourceReactionStructure, indices) -> SourceReactionStru
                     data.states.candidate_fragment_index[transition_state_indices],
                 )
                 if spectrum_batch is not None
-                else data.states.candidate_fragment_index
+                else data.states.candidate_fragment_index[transition_state_indices]
             ),
             branch_group_index=group_map[data.states.branch_group_index[state_indices]],
             parent_index=torch.where(
@@ -254,8 +249,7 @@ def select_samples(data: SourceReactionStructure, indices) -> SourceReactionStru
             candidate_branch_group_index=group_map[
                 data.states.candidate_branch_group_index[transition_state_indices]
             ],
-            candidate_reaction_ptr=transition_state_ptr,
-            candidate_reaction_index=transition_state_reactions,
+            candidate_reaction_set_index=data.states.candidate_reaction_set_index[transition_state_indices],
             candidate_index=transition_state_map[data.states.candidate_index[state_indices]],
             fragment_node_index=state_nodes,
         ),
