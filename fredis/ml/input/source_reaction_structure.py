@@ -1010,6 +1010,7 @@ class SourceReactionStructure(SpectrumPredictionData):
         from fredis.libs.mmkit.mmkit import Formula
 
         a = self.annotations
+        compound_smiles = self.compounds.smiles
         out = []
         e = self.formula_explanations
         assignments = rows(
@@ -1047,7 +1048,7 @@ class SourceReactionStructure(SpectrumPredictionData):
                             compoundIndex=cid,
                             nodeIds=[cid],
                             formulaExplanationIndex=eid,
-                            smiles=self.compounds.smiles[cid],
+                            smiles=compound_smiles[cid],
                             formula=label,
                             theoreticalMz=mz,
                             massErrorPpm=(observed - mz) / mz * 1e6 if mz else 0.0,

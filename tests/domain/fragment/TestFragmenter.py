@@ -129,11 +129,15 @@ class TestFragmenter(unittest.TestCase):
                         case.expected_num_edges,
                     )
 
-    def test_search_limits_skip_only_above_the_observed_value_for_all_cases(self) -> None:
+    def test_search_limits_skip_only_above_the_observed_value_for_all_cases(
+        self,
+    ) -> None:
         # A limit equal to a source's own unlimited statistic keeps the tree
         # identical; one below it stops that source with a limit error.
-        limits = (("max_unique_fragment_smiles", "num_unique_fragment_smiles"),
-                  ("max_reaction_combinations", "num_raw_combinations"))
+        limits = (
+            ("max_unique_fragment_smiles", "num_unique_fragment_smiles"),
+            ("max_reaction_combinations", "num_raw_combinations"),
+        )
         for question in make_fragment_tree_builder_questions():
             if question.fragment_ion_adduct_rule_set is None:
                 continue
@@ -147,24 +151,57 @@ class TestFragmenter(unittest.TestCase):
                 stats = unlimited.search_stats
                 for limit_name, stat_name in limits:
                     observed = stats[stat_name]
-                    with self.subTest(question=question.name, case=case.name, limit=limit_name):
+                    with self.subTest(
+                        question=question.name, case=case.name, limit=limit_name
+                    ):
                         if observed == 0:
                             continue
-                        signature = lambda tree: (tree.node_smiles.tolist(), tree.source_indices.tolist(),
-                                                  tree.target_indices.tolist(), tree.num_transitions)
-                        exact = fragmenter.build_fragment_ion_tree(compound, **{limit_name: observed})
+                        signature = lambda tree: (
+                            tree.node_smiles.tolist(),
+                            tree.source_indices.tolist(),
+                            tree.target_indices.tolist(),
+                            tree.num_transitions,
+                        )
+                        exact = fragmenter.build_fragment_ion_tree(
+                            compound, **{limit_name: observed}
+                        )
                         self.assertEqual(signature(exact), signature(unlimited))
                         self.assertEqual(exact.search_stats, stats)
-                        self.assertEqual(signature(fragmenter.build_fragment_tree(compound, **{limit_name: observed})),
-                                         signature(unlimited))
+                        self.assertEqual(
+                            signature(
+                                fragmenter.build_fragment_tree(
+                                    compound, **{limit_name: observed}
+                                )
+                            ),
+                            signature(unlimited),
+                        )
                         if observed == 1:
                             continue
-                        for build in (fragmenter.build_fragment_tree, fragmenter.build_fragment_ion_tree):
+                        for build in (
+                            fragmenter.build_fragment_tree,
+                            fragmenter.build_fragment_ion_tree,
+                        ):
+                            if limit_name == "max_reaction_combinations":
+                                retained = build(compound, **{limit_name: observed - 1})
+                                # The ion-tree view exposes the retained depth metadata.
+                                if hasattr(retained, "search_stats"):
+                                    depth = retained.search_stats[
+                                        "completed_max_reaction_count"
+                                    ]
+                                    expected = build(compound, max_reaction_count=depth)
+                                    self.assertEqual(
+                                        signature(retained), signature(expected)
+                                    )
+                                self.assertLessEqual(
+                                    retained.num_transitions, unlimited.num_transitions
+                                )
+                                continue
                             with self.assertRaisesRegex(
                                 ValueError,
                                 rf"^{limit_name} exceeded: limit={observed - 1}, observed>{observed - 1}$",
                             ):
                                 build(compound, **{limit_name: observed - 1})
+
 
     def test_to_dict(self) -> None:
         for question in make_fragment_tree_builder_questions():

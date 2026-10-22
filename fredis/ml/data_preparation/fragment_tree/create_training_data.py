@@ -207,11 +207,12 @@ def _prepare_group(task, builder, options):
             ),
         ),
     )
+    annotations = structure.sample_annotations
     return (
         path,
         kept_rows,
-        structure.sample_annotations,
-        structure_manifest_fields(structure),
+        annotations,
+        structure_manifest_fields(structure, annotations),
         builder.last_search_stats,
     )
 

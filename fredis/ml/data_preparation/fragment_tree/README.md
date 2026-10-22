@@ -44,8 +44,8 @@ For every unique source SMILES:
 records with that SMILES (all adducts and collision energies)
   │
   ├─ reaction generation      SMARTS patterns matched once on the source
-  ├─ reaction combination search       lazy, by increasing reaction count ──┐ max_reaction_combinations
-  │    └─ pruning                     conflicts, invalidation, redundancy │
+  ├─ reaction combination search       pure enumeration by increasing depth ──┐ max_reaction_combinations
+  │    └─ pruning                     conflicts, invalidation, duplicate sets │
   ├─ RDKit materialization           one reaction per unique effect      │
   │    └─ canonical SMILES            unique fragment set ────────────────┘ max_unique_fragment_smiles
   ├─ fragment tree                    nodes merged by canonical SMILES
@@ -57,10 +57,13 @@ records with that SMILES (all adducts and collision energies)
   └─ data/<stem>.preft.pt + one manifest row
 ```
 
-Search and materialization are interleaved, not sequential: the search yields one
-combination at a time, RDKit materializes it, its canonical SMILES is counted,
-and only then is the next combination requested. Both search limits can
-therefore stop a source early, without enumerating every combination first.
+Combination enumeration and RDKit materialization are separate phases. Enumerate
+reaction ID sets in increasing depth, without compiling or running reactions.
+If the cumulative combination budget is exceeded partway through depth n,
+discard that entire depth and all deeper levels. Only the fully enumerated
+levels through n - 1 are materialized. Overflow in depth 1 retains Source only.
+There is no combination-search restart or replay of retained reactions.
+The structure-count limit is checked later, during materialization.
 
 ## Input dataset
 
@@ -414,7 +417,11 @@ CLI `--max-reaction-combinations`, Workbench **Max Reaction Combinations**
   to `max_reaction_count`, including pairs that pruning then rejects.
 - It is checked inside `ReactionSequenceSearch`, as soon as the count reaches
   `limit + 1` and before that combination is yielded. The combination that
-  crosses the limit never reaches RDKit.
+  crosses the limit never reaches RDKit. No candidate from that incomplete
+  depth is materialized, including candidates found before the overflow.
+- Retained search counters describe only the complete lower levels. The observed
+  overflow counters (including limit + 1) are recorded in `limit_attempts`;
+  `completed_max_reaction_count` records the retained depth.
 - This is the cheaper limit: it stops molecules with many primitive reactions
   before they spend time in RDKit.
 
@@ -658,4 +665,4 @@ During training data preparation, reaching a search limit retains the largest re
 
 `manifest.tsv` and `.preft.pt` metadata under `metadata.search_stats` record `requested_max_reaction_count`, `completed_max_reaction_count`, `search_truncated`, and `discarded_from_reaction_count`. The saved metadata also includes `limit_attempts`, containing each failed attempt's reaction-count bound, limit name, limit value, and observed counters. Ordinary search counters describe the complete retained tree.
 
-The same behavior applies to trainable SpecID verification, which uses `ReactionStructureBuilder`. After a limit is reached, the builder retries with a lower reaction-count bound instead of retaining incomplete combinations. If existing seeds exceed the retained bound, the source is excluded with a recorded reason rather than silently dropping those seeds.
+The same behavior applies to trainable SpecID verification, which uses `ReactionStructureBuilder`. Combination enumeration runs once: overflow at depth n retains complete levels through n - 1 before any RDKit execution. The separate unique-structure limit can still require a lower-depth materialization retry, because unique structures are known only after execution. If existing seeds exceed the retained bound, the source is excluded with a recorded reason rather than silently dropping those seeds.

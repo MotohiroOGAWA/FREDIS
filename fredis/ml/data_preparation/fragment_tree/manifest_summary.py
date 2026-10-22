@@ -1,8 +1,9 @@
 """Counts and assignment coverage from canonical prepared components."""
 
 
-def structure_manifest_fields(structure):
-    annotations = structure.sample_annotations
+def structure_manifest_fields(structure, annotations=None):
+    if annotations is None:
+        annotations = structure.sample_annotations
 
     def mean(key):
         values = [sample[key] for sample in annotations if sample.get(key) is not None]

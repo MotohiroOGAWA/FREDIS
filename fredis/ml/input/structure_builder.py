@@ -146,8 +146,8 @@ class _ChemistryPreparationBuilder:
         # Full chemistry is permitted here, never inside neural forward.
         requested_count = fragmenter.tree_max_reaction_count
         failures = []
-        # Retry whole depths: never keep a partially enumerated combination size.
-        # The first successful bound is the largest exhaustively completed depth.
+        # Combination overflow is handled before chemistry by the domain search.
+        # Only the structure-count limit can require a lower-depth rebuild.
         for completed_count in range(requested_count, -1, -1):
             try:
                 tree = fragmenter.build_fragment_ion_tree(
@@ -163,6 +163,9 @@ class _ChemistryPreparationBuilder:
                 )
                 break
             except FragmentTreeLimitExceeded as error:
+                if error.limit_name != "max_unique_fragment_smiles":
+                    self.last_search_stats = error.stats
+                    raise
                 failures.append(
                     dict(
                         attempted_reaction_count=completed_count,
@@ -185,13 +188,14 @@ class _ChemistryPreparationBuilder:
                     failures[-1]["limit"],
                     self.last_search_stats,
                 )
+        completed = tree.search_stats["completed_max_reaction_count"]
+        truncated = bool(failures) or tree.search_stats["search_truncated"]
         self.last_search_stats = {
             **tree.search_stats,
             "requested_max_reaction_count": requested_count,
-            "completed_max_reaction_count": completed_count,
-            "search_truncated": bool(failures),
-            "discarded_from_reaction_count": completed_count + 1 if failures else None,
-            "limit_attempts": failures,
+            "search_truncated": truncated,
+            "discarded_from_reaction_count": completed + 1 if truncated else None,
+            "limit_attempts": failures + tree.search_stats["limit_attempts"],
         }
         self.last_reaction_sequence_compounds = tree.reaction_sequence_compounds
         # Resolve the observed precursor against the same already-built tree so

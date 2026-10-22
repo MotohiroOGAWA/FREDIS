@@ -4,7 +4,11 @@ Implementation reference: 2026-10-22. This document describes the current code,
 including separate main-adduct-specific Fragment and State Heads. Numbers below are either explicitly identified defaults or a
 worked example; they are not measurements from a trained checkpoint.
 
+<a id="architecture-1"></a>
+
 ## 1. Model boundary and execution order
+
+**Connections:** This overview connects the shared [encoders (5, 7)](#architecture-5), [conditions (8)](#architecture-8), [branch selection (9)](#architecture-9), [intensity model (12–14)](#architecture-12), and [losses (16–18)](#architecture-16).
 
 `SourceAnchoredFragmentSpectrumGenerator` constructs the shared molecular
 encoder, reaction edge feature model, and competitive spectrum
@@ -32,7 +36,139 @@ Main implementation: [generator](specgen/source_anchored_spectrum_predictor.py),
 [spectrum model](specgen/competitive_spectrum_model.py),
 [training wrapper](training/fragment_tree_training/model.py).
 
+### 1.1 Overall architecture
+
+The section numbers in the boxes identify the detailed parts below. Solid arrows
+carry tensors, probabilities or targets. Dashed arrows carry discrete structure
+selection or bank/condition routing; they are not gradient paths.
+
+```mermaid
+flowchart TB
+    INPUT["Requested spectra<br/>Source + precursor adduct + CE"]
+    PREP["3-4, 6, 10-11: Preparation<br/>Shared chemical tables and candidates"]
+    MOL["5: Shared MolEncoder<br/>Source and Compound embeddings"]
+    REACTION["7: Pattern-owned encoders<br/>Concrete reaction embeddings"]
+    CONDITION["8: Condition features<br/>Main-adduct embedding and CE MLP"]
+    BRANCH["9: Branch edge MLP<br/>Source + target + reaction + main adduct<br/>No CE"]
+    SELECT["9-10: Inference selection<br/>Reachable edges and compatible histories"]
+    INTENSITY["10, 12-13: Intensity model<br/>Fragment Head + State Head + CE"]
+    FORMULA["14: Formula aggregation<br/>Sum explanation probabilities per spectrum"]
+    EXPORT["14: Predicted spectra<br/>Valid m/z + normalized intensity"]
+    TEACHER["15: Training supervision only<br/>Edge labels and spectrum/formula targets"]
+    LB["16: Weighted edge BCE<br/>Branch loss"]
+    LS["17: Cross entropy + cosine<br/>Spectrum loss"]
+    TOTAL["18: Total loss<br/>branch_weight * branch loss + spectrum loss"]
+    INPUT --> PREP
+    PREP --> MOL
+    PREP --> REACTION
+    MOL --> REACTION
+    INPUT --> CONDITION
+    MOL --> BRANCH
+    REACTION --> BRANCH
+    CONDITION -->|main adduct only| BRANCH
+    BRANCH -. predicted edge scores .-> SELECT
+    PREP -. candidate graph .-> SELECT
+    SELECT -. inference graph .-> INTENSITY
+    PREP -. training graph without score pruning .-> INTENSITY
+    MOL --> INTENSITY
+    REACTION --> INTENSITY
+    CONDITION -->|CE features| INTENSITY
+    CONDITION -. main adduct selects head banks .-> INTENSITY
+    INTENSITY --> FORMULA
+    PREP -. FormulaExplanation references .-> FORMULA
+    FORMULA --> EXPORT
+    TEACHER --> LB
+    BRANCH -->|edge logits| LB
+    TEACHER --> LS
+    FORMULA -->|formula probabilities| LS
+    LB --> TOTAL
+    LS --> TOTAL
+```
+
+Training uses the prepared candidate graph and its labels; it does not run learned
+edge pruning before the intensity loss. Inference uses the same chemical
+components without supervision, selects edges once per BranchGroup, and reuses
+the selected structure across CE conditions. Branch logits are not multiplied
+into intensity probabilities. Spectrum loss therefore does not train the branch
+edge MLP through selection; both objectives train their shared encoders.
+
+### 1.2 Inside the intensity model
+
+```mermaid
+flowchart TB
+    GRAPH["10: Compatible reaction histories<br/>Derived from Compound graph and ReactionSets"]
+    FEATURES["5, 7-8: Shared features<br/>Compound, Source, reaction and CE"]
+    FH["12: Fragment Head bank<br/>Parent + child + reaction + CE"]
+    EVENTS["13: Parent-history softmax<br/>Child / Self / Sink"]
+    FLOW["13: Acyclic probability propagation<br/>Root incoming mass = 1 per spectrum"]
+    RETAIN["13: Retained Compound probability<br/>Sum Self mass over compatible histories"]
+    SINK["13: Sink probability<br/>Unobserved final mass per spectrum"]
+    SH["12: State Head bank<br/>Compound + original Source + CE"]
+    STATES["13: Conditional state softmax<br/>Fragment ion adduct x hydrogen shift"]
+    JOINT["13: Explanation probability<br/>Retained Compound probability * conditional state probability"]
+    AGG["14, 17: Sum by spectrum and Formula<br/>Export and spectrum loss"]
+    GRAPH -. admissible events .-> FH
+    FEATURES --> FH
+    FH --> EVENTS --> FLOW
+    FLOW --> RETAIN
+    FLOW --> SINK
+    FEATURES --> SH
+    GRAPH -. reachable Compounds .-> SH
+    SH --> STATES
+    RETAIN --> JOINT
+    STATES --> JOINT
+    JOINT --> AGG
+```
+
+Main adduct chooses independent Fragment/State Head banks. Fragment adduct and
+hydrogen shift choose State Head slices; they are not Fragment Head input
+features. Formula and m/z annotate explanations and determine aggregation and
+supervision, without entering either head's neural features. Optional selected
+descriptors extend intensity molecular features only. Structural self loops
+and cycles are handled by the finite compatible-history expansion, so propagation
+remains acyclic. Sink mass is not assigned a measured formula target.
+
+### 1.3 Loss construction and gradient paths
+
+```mermaid
+flowchart TB
+    LOGITS["9: Branch edge logits<br/>One per selected edge in each BranchGroup"]
+    LABELS["15: Aligned edge labels<br/>1 positive / 0 weak negative / -1 ignored"]
+    BCE["16: Weighted BCE<br/>Positive softplus(-z), negative w * softplus(z)<br/>Divide by N_positive + w * N_negative"]
+    PRED["14: Formula probabilities<br/>Sum all structural explanations"]
+    TARGET["15: SpectrumFormulaTarget<br/>Maximum assigned measured intensity<br/>Valid unmatched candidates = 0; apply mask"]
+    FULL["17: Precursor-inclusive objective<br/>Cross entropy + cosine_loss_weight * cosine loss"]
+    EXCLUDE["17: Precursor-excluded objective<br/>Remove Source precursor formula groups and H variants<br/>Renormalize remaining predictions and targets"]
+    SPEC["17: Spectrum loss<br/>intensity_loss_weight * (inclusive + excluded)"]
+    TOTAL["18: Total loss<br/>branch_weight * weighted BCE + spectrum loss"]
+    ENCODERS["5, 7: Shared molecular and reaction encoders<br/>Receive gradients from both objectives"]
+    LOGITS --> BCE
+    LABELS --> BCE
+    PRED --> FULL
+    TARGET --> FULL
+    PRED --> EXCLUDE
+    TARGET --> EXCLUDE
+    FULL --> SPEC
+    EXCLUDE --> SPEC
+    BCE --> TOTAL
+    SPEC --> TOTAL
+    TOTAL -->|backpropagation| ENCODERS
+```
+
+Here `w = negative_weight`. Label -1 contributes no branch loss or gradient.
+A spectrum without positive supervised target intensity is omitted from that
+spectrum objective. The precursor-excluded term is omitted when no positive
+remaining targets exist. The branch MLP and main-adduct projection receive
+branch gradients; the CE MLP and Fragment/State Heads receive spectrum gradients.
+Frozen parameters are excluded from updates. IDs, chemistry, teacher assignment
+and discrete graph selection are not differentiable. There is no additional
+presence/confidence classification loss.
+
+<a id="architecture-2"></a>
+
 ## 2. Worked example and dimensions
+
+**Connections:** These example dimensions apply to [graph inputs (4)](#architecture-4), [reaction inputs (6)](#architecture-6), [head inputs (12)](#architecture-12), and [probability rows (13)](#architecture-13); this section introduces no additional model component.
 
 Use three records, two unique molecules, and two structural-search groups:
 
@@ -69,7 +205,11 @@ The layer widths in this table match major CLI defaults. `M=3` is an example
 chemistry setting, not an architecture-wide constant. Actual checkpoint settings
 must be read from that checkpoint's model configuration.
 
+<a id="architecture-3"></a>
+
 ## 3. CPU workers and per-molecule relation matrices
+
+**Connections:** Receives requested Sources/adducts from [the entry point (1)](#architecture-1). Produces [molecular graphs (4)](#architecture-4), [concrete reactions (6)](#architecture-6), and compatibility data for [history expansion (10)](#architecture-10).
 
 Batch prediction validates records and molecular vocabulary, groups identical
 SMILES, then runs `prepare_compound_cache()` per molecule. With
@@ -103,7 +243,11 @@ Code: [worker](specgen/prepare_worker.py), [batch adapter](specgen/source_reacti
 [input preparation](input/source_reaction_structure.py),
 [relation rules](../domain/fragment/reaction/ReactionRelations.py).
 
+<a id="architecture-4"></a>
+
 ## 4. Molecular graph input
+
+**Connections:** Receives structures and symbol vocabulary from [preparation (3)](#architecture-3). Packed Source/Compound graphs feed the shared [MolEncoder (5)](#architecture-5); raw Source atom/bond tensors also feed [reaction encoding (7)](#architecture-7).
 
 With the nine-element vocabulary `C,N,O,P,S,F,Cl,Br,I`, atom features have width
 35: element 9, formal charge 3, ring category 5, hybridization 5, hydrogen count
@@ -127,7 +271,11 @@ source_graph.ptr        [3]        # [0,6,10]
 Code: [graph builder](mol/graph_builder.py), [atom features](mol/atom_feature.py),
 [bond features](mol/bond_feature.py).
 
+<a id="architecture-5"></a>
+
 ## 5. MolEncoder computation and external features
+
+**Connections:** Receives [packed graphs (4)](#architecture-4). Source embeddings feed [reaction readout (7)](#architecture-7); shared Compound embeddings feed [branch edges (9)](#architecture-9) and [Fragment/State Heads (12)](#architecture-12). Optional intensity descriptors are appended only on the latter path.
 
 The same `MolEncoder` instance encodes original molecules and generated fragments.
 Atom features are projected to Dn=16 and augmented with learned in/out-degree
@@ -185,7 +333,11 @@ fragment graphs. Descriptors are one possible external-vector source.
 Code: [MolEncoder](mol/mol_encoder.py), [molecular Graphormer](mol/mol_graphormer.py),
 [Graphormer layers](common/layers/graphormer.py).
 
+<a id="architecture-6"></a>
+
 ## 6. Concrete reactions and category IDs
+
+**Connections:** Receives concrete chemistry from [preparation (3)](#architecture-3). Source/atom references and reaction categories feed [reaction encoding (7)](#architecture-7); reaction IDs and pair relations also constrain [history expansion (10)](#architecture-10).
 
 Suppose A has three reactions and B has two:
 
@@ -205,7 +357,11 @@ Pattern 0 processes rows `[0,1,3]`; pattern 1 processes rows `[2,4]`. Each patte
 owns its neighborhood encoder, optional global encoder, reactant Graphormer and
 readout. Equal numeric rule IDs in different patterns do not share embeddings.
 
+<a id="architecture-7"></a>
+
 ## 7. Pattern-owned reaction encoding
+
+**Connections:** Receives [reaction references/categories (6)](#architecture-6), [raw Source features (4)](#architecture-4), and [Source embeddings (5)](#architecture-5). Its concrete reaction embeddings feed [branch edges (9)](#architecture-9) and the [Fragment Head (12)](#architecture-12), not the State Head.
 
 Assume pattern 0 has two SMARTS atoms and three concrete matches. Raw matched
 atom features are `[3,2,35]`. Default external-neighborhood settings are
@@ -271,7 +427,11 @@ Code: [reaction encoder](specgen/components/reaction/reaction_instance_encoder.p
 [neighborhood](reaction/external_neighborhood.py),
 [reactant Graphormer](reaction/reactant_graphormer.py).
 
+<a id="architecture-8"></a>
+
 ## 8. Branch adduct features and CE features
+
+**Connections:** Receives main adduct and CE from [requested conditions (1)](#architecture-1). Main-adduct embedding/projection feeds [branch edges (9)](#architecture-9); CE features feed [both intensity heads (12)](#architecture-12). Main adduct separately routes intensity head banks.
 
 Main-adduct IDs select a learned embedding of width `adduct_embedding_dim=32`.
 This is now a branch-search feature, not a spectrum-head input:
@@ -301,7 +461,11 @@ CE is used only in spectrum transition scoring, not structural search.
 Code: [feature model](specgen/source_reaction_feature_model.py),
 [CE layer](specgen/components/condition/collision_energy_feature.py).
 
+<a id="architecture-9"></a>
+
 ## 9. CE-independent edge classification
+
+**Connections:** Receives [Compound embeddings (5)](#architecture-5), [reaction embeddings (7)](#architecture-7), [main-adduct features (8)](#architecture-8), and prepared edge references. Edge logits feed [branch BCE (16)](#architecture-16); inference scores select edges for [history expansion (10)](#architecture-10), without a differentiable link through selection.
 
 Each BranchGroup selects canonical CompoundReactionGraph edges by CSR. The edge
 MLP concatenates source Compound embedding, target Compound embedding, concrete
@@ -311,7 +475,11 @@ Sigmoids are independent edge probabilities. Prediction accumulates their log
 probabilities along admissible reaction histories and applies the path threshold
 and unique-Compound budget per group, shared across CE.
 
+<a id="architecture-10"></a>
+
 ## 10. Shared structures and admissible histories
+
+**Connections:** Receives prepared Compound/ReactionSet/edge registries from [preparation (3)](#architecture-3), plus [edge selection (9)](#architecture-9) during inference. Admissible histories supply the event topology for [probability propagation (13)](#architecture-13); reachable Compounds determine [candidate state rows (11)](#architecture-11).
 
 Preparation performs reaction chemistry before neural scoring and interns unique
 Compound structures and ReactionSets. Formula explanations use these shared
@@ -329,7 +497,11 @@ Code: [canonical input](input/source_reaction_structure.py),
 [edge model](specgen/source_reaction_feature_model.py),
 [batched generator](specgen/source_anchored_spectrum_predictor.py).
 
+<a id="architecture-11"></a>
+
 ## 11. Complete ion-condition state grid and metadata
+
+**Connections:** Receives reachable Compounds from [the shared graph (10)](#architecture-10) and adduct/shift vocabularies from preparation. Candidate rows select [State Head slices (12)](#architecture-12), align [joint probabilities (13)](#architecture-13), and reference formulas for [aggregation (14)](#architecture-14) and [target construction (15)](#architecture-15).
 
 A condition is `(fragment-ion adduct, hydrogen shift)`. Conditions are ordered
 by adduct-list order, then increasing shift. With ions `[M+H]+, [M-H]+` and shifts
@@ -376,7 +548,11 @@ They annotate candidates and do not enter neural event features or softmaxes.
 Code: [state preparation and annotation](specgen/fragment_spectrum_model.py),
 [sample selection/collation](input/reaction_batching.py).
 
+<a id="architecture-12"></a>
+
 ## 12. Fragment Head and State Head
+
+**Connections:** Receives [molecular features (5)](#architecture-5), [reaction features (7)](#architecture-7) for Child events, [CE/bank routing (8)](#architecture-8), [history topology (10)](#architecture-10), and [condition slices (11)](#architecture-11). Head logits feed the two softmax operations and [probability propagation (13)](#architecture-13).
 
 Each main precursor adduct owns two independent banks, shared across fragments.
 The main adduct selects the bank directly. Both use `ConditionHead` GELU MLPs
@@ -396,9 +572,15 @@ and its first-layer weights are `[12,128,144]`. It runs after Fragment DAG
 propagation and normalizes over all C states for each fragment/sample.
 Optional signed-log spectrum descriptors extend both molecular feature inputs.
 
+<a id="architecture-13"></a>
+
 ## 13. Fragment events, DAG propagation and State probabilities
 
-The event graph contains sample-specific structural fragment rows. Each parent
+**Connections:** Receives [head logits (12)](#architecture-12) and [compatible-history topology (10)](#architecture-10). Retained Compound mass and conditional state probabilities produce explanation probabilities for [formula aggregation (14)](#architecture-14). Sink probability is a separate diagnostic output.
+
+The event graph contains sample-specific compatible-history rows; histories
+that reach the same Compound share its molecular features. The simple counts
+below assume one history per physical fragment. Each parent
 competes over its Child events, Self and Sink in one softmax. A terminal fragment
 still predicts both Self and Sink. No ion/shift Cartesian product appears in
 Fragment events. For the worked example, 11 fragment/sample rows and 10 Child
@@ -412,7 +594,9 @@ Initialize `incoming[root]=1` per sample. Visit each fragment once in topologica
 order after summing every parent's contribution. Finalize
 `fragment_probability[i] = incoming[i] * P(Self | i)` and
 `sink[i] = incoming[i] * P(Sink | i)`; add only Child mass to child incoming values.
-Self and Sink are never repropagated. Cycles are rejected. For each sample,
+Self and Sink are never repropagated. The derived history graph is acyclic,
+even when the shared Compound graph has cycles or self loops. After summing
+retained histories by Compound, for each sample,
 `sum(fragment_probability) + sum(sink) = 1`.
 
 For root probabilities Self=0.2, Child=0.7, Sink=0.1 and terminal probabilities
@@ -436,9 +620,14 @@ is the joint probability. Transition diagnostics index fragment rows; Sink targe
 is -1, Self reaction is -1 and Sink reaction is -2. `sink_probability` is per
 sample. `probability_mass_error` measures retained plus sink minus initial mass.
 
+<a id="architecture-14"></a>
+
 ## 14. Formula annotation, aggregation and export
 
-After inference propagation, mmkit computes annotations:
+**Connections:** Receives [joint explanation probabilities (13)](#architecture-13) and prepared [candidate/formula references (11)](#architecture-11). Aggregated formula probabilities feed [spectrum loss (17)](#architecture-17); valid m/z and maximum-normalized intensities feed exported spectra. Display normalization does not feed the loss.
+
+Shared preparation computes FormulaExplanationData annotations before neural
+scoring; propagation later supplies their probabilities. The chemistry is:
 
 ```python
 shift = Adduct.from_dict({'H': hydrogen_shift})
@@ -464,7 +653,11 @@ Batch output uses `merge_candidate_peaks()`. The Workbench backend retains
 candidate/node rows for inspection rather than applying that same aggregation;
 its candidate rows must not be mistaken for already formula-merged peaks.
 
+<a id="architecture-15"></a>
+
 ## 15. Measurements and targets
+
+**Connections:** Receives measured peaks and prepared chemical explanations from [preparation (3)](#architecture-3). CE-pooled edge labels supervise [branch loss (16)](#architecture-16); per-spectrum formula intensity/mask targets supervise [spectrum loss (17)](#architecture-17). This component is absent from prediction inputs.
 
 The shared input is SpectrumPredictionData. SourceReactionStructure adds
 SpectrumData observations, PeakAssignmentData and derived SpectrumFormulaTarget.
@@ -480,7 +673,11 @@ candidates have target zero. Unavailable or invalid targets are masked out,
 including from cosine normalization. `observed` is metadata, not a presence head.
 Observed peaks with no represented candidate do not contribute intensity loss.
 
+<a id="architecture-16"></a>
+
 ## 16. Weighted branch edge loss
+
+**Connections:** Receives [edge logits (9)](#architecture-9) and [aligned labels (15)](#architecture-15). Weighted BCE contributes to [total loss (18)](#architecture-18), with gradients to the branch MLP, main-adduct features and shared encoders.
 
 Preparation unions supported branch edges across CE within each BranchGroup.
 Labels aligned to the group's edge CSR are 1 (positive), 0 (weak negative),
@@ -496,7 +693,11 @@ The empty objective is zero. Ignored labels have zero gradient.
 Default `negative_weight=0.5`; there is no MIL temperature or path-label table.
 Code: [branch_edge_loss](training/fragment_tree_training/model.py).
 
+<a id="architecture-17"></a>
+
 ## 17. Spectrum loss: cross entropy and cosine
+
+**Connections:** Receives [formula probabilities (14)](#architecture-14) and [intensity/mask targets (15)](#architecture-15). Inclusive and precursor-excluded objectives contribute to [total loss (18)](#architecture-18), with gradients through both intensity heads, CE features and shared encoders.
 
 Let B+ contain samples with positive total candidate-assigned target intensity.
 Normalize teacher intensities by their sample sum:
@@ -539,7 +740,11 @@ remain unless their formula matches one of these excluded peaks. Precursor exclu
 Code: [spectrum objective](specgen/competitive_spectrum_model.py),
 [loss settings](specgen/fragment_spectrum_model.py).
 
+<a id="architecture-18"></a>
+
 ## 18. Total objective and gradient boundaries
+
+**Connections:** Combines [branch BCE (16)](#architecture-16) and [spectrum loss (17)](#architecture-17). Backpropagation updates the connected trainable components according to the table below; it stops at discrete [selection/history construction (9–10)](#architecture-9) and [teacher assignment (15)](#architecture-15).
 
 ```text
 L_total = branch_weight * L_branch
@@ -567,7 +772,11 @@ materialization or chemical target assignment. Training and inference therefore
 use the same canonical structural tables; inference selects a reachable
 subgraph using predicted edge scores.
 
+<a id="architecture-19"></a>
+
 ## 19. Configuration and UI map
+
+**Connections:** Architecture and generation settings configure [encoders (5, 7)](#architecture-5), [conditions (8)](#architecture-8), [selection (9)](#architecture-9), and [heads (12)](#architecture-12). Training settings configure [loss weights (16–18)](#architecture-16); these settings are not extra neural input features.
 
 | Setting | CLI | Default / role |
 |---|---|---|
@@ -604,7 +813,11 @@ Code: [CLI settings](training/fragment_tree_training/training.py),
 [molecular options](training/fragment_tree_training/mol_encoder_options.py),
 [Workbench editor](../../fredis_workbench/src/workbench/parameter-editor.js).
 
+<a id="architecture-20"></a>
+
 ## 20. Implementation-review checkpoints
+
+**Connections:** These checks verify the paths in [the overall architecture (1)](#architecture-1), especially [history validity (10)](#architecture-10), [probability conservation (13)](#architecture-13), and [loss/gradient boundaries (16–18)](#architecture-16).
 
 - Reaction features always refer to the original source match.
 - Structural search depends on main adduct, not CE.

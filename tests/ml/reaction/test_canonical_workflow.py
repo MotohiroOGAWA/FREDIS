@@ -426,3 +426,32 @@ def test_workbench_single_prediction_backend_uses_shared_compound_ids(tmp_path):
         for edge in result["tree"]["edges"]
     )
     assert all(peak["nodeId"] in nodes for peak in result["peaks"])
+
+
+def test_annotation_export_computes_compound_smiles_once_and_summary_reuses_it():
+    from fredis.ml.input.compound_batch import CompoundBatch
+    from fredis.ml.data_preparation.fragment_tree.manifest_summary import (
+        structure_manifest_fields,
+    )
+
+    _, data = prepared()
+    original = CompoundBatch.smiles.fget
+    calls = []
+
+    def counted(batch):
+        calls.append(batch)
+        return original(batch)
+
+    with patch.object(CompoundBatch, "smiles", property(counted)):
+        annotations = data.sample_annotations
+    assert len(calls) == 1 and calls[0] is data.compounds
+    assert any(peak["matches"] for sample in annotations for peak in sample["peaks"])
+
+    def unexpected(_):
+        raise AssertionError("Manifest must reuse the exported annotations")
+
+    with patch.object(
+        SourceReactionStructure, "sample_annotations", property(unexpected)
+    ):
+        summary = structure_manifest_fields(data, annotations)
+    assert summary["num_nodes"] == len(data.compounds.compounds)

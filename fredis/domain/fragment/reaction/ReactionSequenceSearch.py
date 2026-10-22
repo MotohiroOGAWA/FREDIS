@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import heapq
 
 from .ReactionInstance import ReactionInstance
@@ -136,13 +136,61 @@ class ReactionSequenceSearch:
     def enumerate(self) -> tuple[_ReactionSequenceCandidate, ...]:
         return tuple(self.iter_candidates())
 
-    def iter_candidates(self):
-        """Yield each connection lazily so tree limits can stop combination search.
+    def enumerate_completed_depths(self) -> tuple[_ReactionSequenceCandidate, ...]:
+        """Enumerate without chemistry, discarding an entire over-budget depth.
 
+        The budget counts cumulative raw (parent, reaction) attempts, including
+        pruned attempts. Only fully enumerated reaction counts are retained.
+        No candidate is released to materialization until this phase finishes.
+        """
+        candidates = []
+        self._enumeration_depth = 0
+        self._completed_depth_stats = replace(self.stats)
+        attempts = []
+        completed = self.max_reaction_count
+        try:
+            candidates.extend(self.iter_candidates())
+        except FragmentTreeLimitExceeded as error:
+            if error.limit_name != "max_reaction_combinations":
+                raise
+            completed = self._enumeration_depth - 1
+            observed = self.stats.to_dict()
+            attempts.append(
+                dict(
+                    attempted_reaction_count=self._enumeration_depth,
+                    limit_name=error.limit_name,
+                    limit=error.limit,
+                    stats=observed,
+                )
+            )
+            # Incremental builds must preserve every cached baseline seed.
+            if any(len(seed.reactions) > completed for seed in self.seeds):
+                error.stats = observed
+                raise
+            candidates = [
+                c for c in candidates if len(c.reaction_sequence.reactions) <= completed
+            ]
+            self.stats = self._completed_depth_stats
+            self.visited_sequence_keys = {c.reaction_sequence.key for c in candidates}
+        self.completion_stats = dict(
+            requested_max_reaction_count=self.max_reaction_count,
+            completed_max_reaction_count=completed,
+            search_truncated=bool(attempts),
+            discarded_from_reaction_count=completed + 1 if attempts else None,
+            limit_attempts=attempts,
+        )
+        return tuple(candidates)
+
+    def iter_candidates(self):
+        """Low-level pure iterator; no RDKit compilation or execution occurs here.
+
+        Tree construction consumes this through enumerate_completed_depths()
+        before materialization. Direct iterator consumers receive an exception
+        on overflow rather than a retained-depth result.
         Raises FragmentTreeLimitExceeded as soon as num_raw_combinations
         exceeds max_reaction_combinations. The count spans every size, from
         one reaction up to max_reaction_count, and is checked before a candidate
-        is yielded, so no further candidate reaches RDKit materialization.
+        is yielded. The completed-depth wrapper discards its entire depth.
         """
         connections: set[_ReactionSequenceCandidate] = set()
         # Heap prioritizes the reaction count, with a stable serial tie-break.
@@ -163,7 +211,7 @@ class ReactionSequenceSearch:
             minimum_cursor[seed] = -1
             serial += 1
         if not self.seeds or self.include_source:
-            frontier.append((0, serial, None, -1))
+            heapq.heappush(frontier, (0, serial, None, -1))
             minimum_cursor[None] = -1
             serial += 1
         while frontier:
@@ -173,6 +221,10 @@ class ReactionSequenceSearch:
             previous = parent.reactions if parent else ()
             if len(previous) >= self.max_reaction_count:
                 continue
+            depth = len(previous) + 1
+            if depth > getattr(self, "_enumeration_depth", 0):
+                self._enumeration_depth = depth
+                self._completed_depth_stats = replace(self.stats)
             for i in range(cursor + 1, len(self.reactions)):
                 reaction = self.reactions[i]
                 if reaction in previous or reaction not in self.addable_reactions:

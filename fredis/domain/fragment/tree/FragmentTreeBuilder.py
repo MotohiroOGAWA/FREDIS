@@ -160,8 +160,9 @@ class FragmentTreeBuilder:
 
         Every newly generated fragment's canonical SMILES joins a set that
         excludes the Source SMILES. Once that set grows beyond
-        max_unique_fragment_smiles the source is abandoned immediately, before
-        the next candidate is requested from the lazy combination search.
+        max_unique_fragment_smiles materialization stops immediately, before
+        the next retained candidate is executed. Combination enumeration has
+        already finished in the tree-building pipeline.
         """
         results: dict[ReactionSequence, ReactionSequenceResult] = {}
         unique_fragment_smiles: set[str] = set()
@@ -287,12 +288,13 @@ class FragmentTreeBuilder:
     ) -> dict[str, Any]:
         """Build one source tree; -1 disables either search limit.
 
-        max_reaction_combinations bounds search.stats.num_raw_combinations and
-        is enforced inside ReactionSequenceSearch before RDKit runs.
+        max_reaction_combinations bounds cumulative raw combination attempts.
+        Enumeration finishes before RDKit materialization. Overflow at depth n
+        discards depth n and retains only complete depths through n - 1.
         max_unique_fragment_smiles bounds distinct generated fragment SMILES,
         excluding the Source itself, and is enforced as each fragment is
-        materialized. A FragmentTreeLimitExceeded carries the statistics
-        observed up to that point in ``stats``.
+        materialized. A FragmentTreeLimitExceeded for the structure-count limit
+        carries the statistics observed up to that point in ``stats``.
         """
         validate_search_limits(max_unique_fragment_smiles, max_reaction_combinations)
         started = time.monotonic()
@@ -307,7 +309,10 @@ class FragmentTreeBuilder:
             precomputed_reactions=precomputed_reactions,
             precomputed_relations=precomputed_relations,
         )
+        # Exhaust the pure combination search before the first compile/run.
+        # An incomplete depth is discarded without ever materializing it.
         try:
+            candidates = search.enumerate_completed_depths()
             return self._build_from_candidates(
                 source_compound,
                 search,
@@ -438,7 +443,7 @@ class FragmentTreeBuilder:
                     )
         if not seed_reaction_sequences:
             processed_states.add((0, None))
-        stats = search.stats.to_dict()
+        stats = {**search.stats.to_dict(), **search.completion_stats}
         if print_info:
             print(
                 f"Source reaction search: {stats}; nodes={len(state.nodes)}, "

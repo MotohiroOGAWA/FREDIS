@@ -66,7 +66,16 @@ Invalid SMILES, unsupported or malformed adducts, unparseable collision energies
 
 The CLI applies the same checks before splitting or collecting adduct conditions. `invalid_records.json` in the output root lists excluded records from each original input for review.
 
-A source that exceeds `max_unique_fragment_smiles` or `max_reaction_combinations` is skipped, and preparation continues with the next source, including with multiple worker processes. Any other failure for one source (an unreachable precursor, an exception, or its worker process dying) is also skipped instead of stopping the run. `skipped_sources.json` lists skipped SMILES, record indexes, reason, `category` (`limit_exceeded`, `unresolved_precursor`, `error` or `worker_crash`) and the search statistics observed before the stop; limit skips add `limit` and a reason such as `max_reaction_combinations exceeded: limit=50000, observed>50000`. The same category appears in the `skip_category` column of `manifest.tsv`. `reaction_statistics.json` records successfully prepared records as `num_samples`, metadata-valid records as `num_metadata_valid_records`, and skipped source/record counts separately.
+Exceeding `max_reaction_combinations` partway through depth n retains only
+fully enumerated levels through n - 1. Depth 1 overflow retains Source only.
+This happens before RDKit materialization, without re-enumeration or replay.
+`ReactionStructureBuilder` can also retry a smaller depth on the separate
+unique-structure limit. Sources whose precursors cannot be resolved in the
+retained tree are skipped. Other per-source errors and worker failures are
+recorded in `skipped_sources.json` and do not stop the remaining sources.
+`metadata.search_stats` and manifest depth columns identify the retained depth;
+`limit_attempts` records observed overflow counters. Aggregate statistics
+separate prepared, metadata-valid and skipped record counts.
 
 The parent process displays a `tqdm` progress bar on stderr, including prepared/skipped source counts, and also emits JSON Lines for Workbench. Progress advances for each attempted source, including skipped sources.
 
@@ -78,6 +87,11 @@ Parallel preparation uses `fredis.utils.parallel_subprocess.run_parallel_subproc
 
 Both root configuration files can be loaded by Workbench. Loading restores training/validation input paths, output path, column mapping, split settings, intensity options, overwrite, worker/chunk settings, symbols, search limits (`maxUniqueFragmentSmiles`, `maxReactionCombinations`) and all fragmentation parameters. Python snake_case keys from `preparation_config.json` are converted to the Workbench form keys. Dataset value checks must be rerun after loading.
 
-Source reaction combinations are explored lazily: combination → chemical validation → RDKit materialization → canonical SMILES → unique-SMILES check, one combination at a time. Exceeding either search limit raises `FragmentTreeLimitExceeded` immediately, stopping additional combination exploration and RDKit reactions for that source; the exception carries the statistics collected up to that point.
+Source reaction combinations are enumerated as reaction ID sets before chemical
+execution. Compatibility checks and deduplication use precomputed source
+relations. The incomplete over-budget depth is discarded; retained candidates
+are then materialized once per unique effect. Canonical SMILES merges identical
+Compound structures. The unique-SMILES limit stops later materialization when
+its own bound is exceeded.
 
 The result viewer reads each split manifest to display the structures. Training recursively discovers `.preft.pt` files, so select `train_structures` and `validation_structures`.

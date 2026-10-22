@@ -434,62 +434,84 @@ class TestFragmentTreeBuilder(unittest.TestCase):
         self.assertEqual(result['search_stats']['num_rdkit_run_reactants'], 4)
 
     def test_unique_fragment_limit_counts_merged_fragments_once(self) -> None:
-        source = Compound.from_smiles('[CH3:1][CH:2]([OH:3])[OH:4]')
-        build = builder(pattern('[C:1]-[O:2]', '[C:1]'), limit=1)
+        source = Compound.from_smiles("[CH3:1][CH:2]([OH:3])[OH:4]")
+        build = builder(pattern("[C:1]-[O:2]", "[C:1]"), limit=1)
         tree = build.build(source)
         self.assertEqual(tree.num_nodes, 2)
         self.assertEqual(tree.num_edges, 1)
         self.assertEqual(tree.num_transitions, 2)
         # Two generated fragments share one canonical SMILES; the source is not counted.
         result = build._build_result(source, max_unique_fragment_smiles=1)
-        self.assertEqual(result['search_stats']['num_generated_fragments'], 2)
-        self.assertEqual(result['search_stats']['num_unique_fragment_smiles'], 1)
-        self.assertEqual(result['fragment_tree'].num_transitions, 2)
-        with self.assertRaisesRegex(ValueError, r'^max_reaction_combinations exceeded: limit=1, observed>1$'):
-            build.build(source, max_reaction_combinations=1)
-        self.assertEqual(build.build(source, max_reaction_combinations=2).num_transitions, 2)
+        self.assertEqual(result["search_stats"]["num_generated_fragments"], 2)
+        self.assertEqual(result["search_stats"]["num_unique_fragment_smiles"], 1)
+        self.assertEqual(result["fragment_tree"].num_transitions, 2)
+        self.assertEqual(build.build(source, max_reaction_combinations=1).num_nodes, 1)
+        self.assertEqual(
+            build.build(source, max_reaction_combinations=2).num_transitions, 2
+        )
 
-    def test_search_limits_stop_combination_search_and_reactions_early(self):
-        baseline=self.builder._build_result(self.source)['search_stats']
-        original=ReactionSequenceSearch.iter_candidates
-        for limit in ({'max_unique_fragment_smiles':1},{'max_reaction_combinations':1}):
-            searches=[]
-            def stream(search):
-                searches.append(search)
-                yield from original(search)
-            with self.subTest(limit=limit),patch.object(ReactionSequenceSearch,'iter_candidates',stream), \
-                 patch.object(ReactionSequenceSearch,'enumerate',side_effect=AssertionError('Eager search is forbidden')):
-                with self.assertRaisesRegex(ValueError,r'exceeded: limit=1, observed>1$'):
-                    self.builder.build(self.source,**limit)
-            stats=searches[0].stats
-            self.assertLess(stats.num_raw_combinations,baseline['num_raw_combinations'])
-            self.assertLess(stats.num_rdkit_run_reactants,baseline['num_rdkit_run_reactants'])
+
+    def test_search_completes_before_structure_limit_and_combination_overflow_keeps_root(
+        self,
+    ):
+        baseline = self.builder._build_result(self.source)["search_stats"]
+        with self.assertRaises(FragmentTreeLimitExceeded) as caught:
+            self.builder.build(self.source, max_unique_fragment_smiles=1)
+        # Structure count is only known after pure enumeration has finished.
+        self.assertEqual(
+            caught.exception.stats["num_raw_combinations"],
+            baseline["num_raw_combinations"],
+        )
+        self.assertLess(
+            caught.exception.stats["num_rdkit_run_reactants"],
+            baseline["num_rdkit_run_reactants"],
+        )
+        root = self.builder._build_result(self.source, max_reaction_combinations=1)
+        self.assertEqual(root["fragment_tree"].num_nodes, 1)
+        self.assertEqual(root["search_stats"]["num_rdkit_run_reactants"], 0)
+        self.assertEqual(root["search_stats"]["completed_max_reaction_count"], 0)
+
 
     def test_limits_seed_validation_and_removed_apis(self) -> None:
         for limit in (0, -1, True):
             with self.assertRaises(ValueError):
                 FragmentTreeBuilder(limit, self.builder.reaction_pattern_set)
-        for kwargs, message in (({'max_unique_fragment_smiles': 1}, 'max_unique_fragment_smiles exceeded'),
-                                ({'max_reaction_combinations': 1}, 'max_reaction_combinations exceeded')):
+        for kwargs, message in (
+            ({"max_unique_fragment_smiles": 1}, "max_unique_fragment_smiles exceeded"),
+        ):
             with self.assertRaisesRegex(ValueError, message):
                 self.builder.build(self.source, **kwargs)
-        for name in ('max_unique_fragment_smiles', 'max_reaction_combinations'):
+        for name in ("max_unique_fragment_smiles", "max_reaction_combinations"):
             for invalid in (0, -2, True, 1.5):
-                with self.subTest(name=name, invalid=invalid), \
-                     self.assertRaisesRegex(ValueError, name + ' must be -1 or a positive integer'):
+                with (
+                    self.subTest(name=name, invalid=invalid),
+                    self.assertRaisesRegex(
+                        ValueError, name + " must be -1 or a positive integer"
+                    ),
+                ):
                     self.builder.build(self.source, **{name: invalid})
         reactions = self.builder.create_reaction_instances(self.source)
-        with self.assertRaisesRegex(ValueError, 'Seed exceeds'):
-            self.builder.build(self.source, seed_reaction_sequences=(ReactionSequence(reactions),),
-                               max_reaction_count=2)
-        with self.assertRaisesRegex(ValueError, 'universe'):
-            self.builder.build(Compound.from_smiles('CC'),
-                seed_reaction_sequences=(ReactionSequence((reactions[0],)),))
-        self.assertEqual(self.builder.build(self.source, max_reaction_count=0).num_nodes, 1)
+        with self.assertRaisesRegex(ValueError, "Seed exceeds"):
+            self.builder.build(
+                self.source,
+                seed_reaction_sequences=(ReactionSequence(reactions),),
+                max_reaction_count=2,
+            )
+        with self.assertRaisesRegex(ValueError, "universe"):
+            self.builder.build(
+                Compound.from_smiles("CC"),
+                seed_reaction_sequences=(ReactionSequence((reactions[0],)),),
+            )
+        self.assertEqual(
+            self.builder.build(self.source, max_reaction_count=0).num_nodes, 1
+        )
         data = self.builder.to_dict()
         self.assertEqual(FragmentTreeBuilder.from_dict(data).to_dict(), data)
         self.assertEqual(self.builder.copy().to_dict(), data)
-        self.assertIsNot(self.builder.copy().reaction_pattern_set, self.builder.reaction_pattern_set)
+        self.assertIsNot(
+            self.builder.copy().reaction_pattern_set, self.builder.reaction_pattern_set
+        )
+
 
 
     @staticmethod
@@ -497,51 +519,87 @@ class TestFragmentTreeBuilder(unittest.TestCase):
         return (tree.node_smiles.tolist(), tree.source_indices.tolist(),
                 tree.target_indices.tolist(), tree.num_transitions)
 
-    def test_reaction_combination_limit_stops_before_rdkit_runs_any_later_combination(self) -> None:
+    def test_reaction_combination_limit_materializes_only_complete_depths(self):
         baseline = self.builder._build_result(self.source)
-        raw = baseline['search_stats']['num_raw_combinations']
-        run = CompositeReaction.run
+        raw = baseline["search_stats"]["num_raw_combinations"]
         original = ReactionSequenceSearch.iter_candidates
+        run = CompositeReaction.run
         for limit in range(1, raw):
-            yielded = []
+            finished = []
             executed = []
 
             def stream(search):
-                for candidate in original(search):
-                    yielded.append(search.stats.num_raw_combinations)
-                    yield candidate
+                try:
+                    yield from original(search)
+                finally:
+                    finished.append(True)
 
             def running(reaction, source):
+                self.assertTrue(finished)
                 executed.append(reaction)
                 return run(reaction, source)
 
-            with self.subTest(limit=limit), \
-                 patch.object(ReactionSequenceSearch, 'iter_candidates', stream), \
-                 patch.object(CompositeReaction, 'run', running):
-                with self.assertRaises(FragmentTreeLimitExceeded) as caught:
-                    self.builder.build(self.source, max_reaction_combinations=limit)
-                error = caught.exception
-                self.assertEqual(str(error), f'max_reaction_combinations exceeded: limit={limit}, observed>{limit}')
-                self.assertEqual(error.limit_name, 'max_reaction_combinations')
-                self.assertEqual(error.stats['num_raw_combinations'], limit + 1)
-                # Only candidates found within the limit ever reached RDKit.
-                self.assertTrue(all(count <= limit for count in yielded))
-                self.assertEqual(len(executed), error.stats['num_rdkit_run_reactants'])
-                self.assertLessEqual(len(executed), len(yielded))
+            with (
+                self.subTest(limit=limit),
+                patch.object(ReactionSequenceSearch, "iter_candidates", stream),
+                patch.object(CompositeReaction, "run", running),
+            ):
+                retained = self.builder._build_result(
+                    self.source, max_reaction_combinations=limit
+                )
+            stats = retained["search_stats"]
+            depth = stats["completed_max_reaction_count"]
+            expected = self.builder._build_result(self.source, max_reaction_count=depth)
+            self.assertEqual(
+                self._signature(retained["fragment_tree"]),
+                self._signature(expected["fragment_tree"]),
+            )
+            self.assertEqual(
+                stats["num_raw_combinations"],
+                expected["search_stats"]["num_raw_combinations"],
+            )
+            self.assertEqual(len(finished), 1)
+            self.assertEqual(len(executed), stats["num_rdkit_run_reactants"])
+            self.assertEqual(
+                stats["limit_attempts"][0]["stats"]["num_raw_combinations"], limit + 1
+            )
+            self.assertEqual(
+                stats["limit_attempts"][0]["stats"]["num_rdkit_run_reactants"], 0
+            )
         exact = self.builder._build_result(self.source, max_reaction_combinations=raw)
-        self.assertEqual(self._signature(exact['fragment_tree']), self._signature(baseline['fragment_tree']))
-        self.assertEqual(exact['search_stats'], baseline['search_stats'])
+        self.assertEqual(
+            self._signature(exact["fragment_tree"]),
+            self._signature(baseline["fragment_tree"]),
+        )
+        self.assertEqual(exact["search_stats"], baseline["search_stats"])
 
-    def test_reaction_combination_limit_spans_every_size_up_to_max_reaction_count(self) -> None:
-        pairs = builder(*(pattern(f'[C:1]-[{symbol}:2]', '[C:1]') for symbol in ('O', 'N', 'S')), limit=2)
-        up_to_pairs = pairs._build_result(self.source)['search_stats']['num_raw_combinations']
-        up_to_triples = self.builder._build_result(self.source)['search_stats']['num_raw_combinations']
+
+    def test_reaction_combination_limit_spans_every_size_up_to_max_reaction_count(
+        self,
+    ) -> None:
+        pairs = builder(
+            *(pattern(f"[C:1]-[{symbol}:2]", "[C:1]") for symbol in ("O", "N", "S")),
+            limit=2,
+        )
+        up_to_pairs = pairs._build_result(self.source)["search_stats"][
+            "num_raw_combinations"
+        ]
+        up_to_triples = self.builder._build_result(self.source)["search_stats"][
+            "num_raw_combinations"
+        ]
         self.assertEqual(self.builder.max_reaction_count, 3)
         self.assertGreater(up_to_triples, up_to_pairs)
         # A budget sufficient for 1- and 2-reaction combinations is exceeded by the 3-reaction ones.
         pairs.build(self.source, max_reaction_combinations=up_to_pairs)
-        with self.assertRaises(FragmentTreeLimitExceeded):
-            self.builder.build(self.source, max_reaction_combinations=up_to_pairs)
+        retained = self.builder._build_result(
+            self.source, max_reaction_combinations=up_to_pairs
+        )
+        self.assertEqual(retained["search_stats"]["completed_max_reaction_count"], 2)
+        self.assertEqual(
+            self._signature(retained["fragment_tree"]),
+            self._signature(pairs.build(self.source)),
+        )
+
 
     def test_unique_fragment_limit_stops_right_after_the_first_excess_smiles(self) -> None:
         search, candidates = self.builder._search(self.source, seed_reaction_sequences=None, max_reaction_count=None)
