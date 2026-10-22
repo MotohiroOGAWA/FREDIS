@@ -4,7 +4,7 @@ SourceCompound, Reaction, ReactionSet, and CompoundBatch describe the implemente
 tables in schema `fredis.annotated-spectrum-training`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
-## SourceCompound: independent Batch structure (step 1)
+## 2.1 SourceCompound: independent Batch structure
 
 The actual molecular graph storage is `source_graph: torch_geometric.data.Batch`,
 including `ptr` and `batch`. This section describes that physical Batch first,
@@ -153,7 +153,7 @@ Implementation references:
 [atom features](../mol/atom_feature.py),
 [bond features](../mol/bond_feature.py).
 
-## Reaction: concrete reaction Batch (step 2)
+## 2.2 Reaction: concrete reaction Batch
 
 Actual storage is `SourceReactionStructure.reactions: ReactionTensorData`.
 R is the total number of concrete reactions in the current Batch. A reaction ID
@@ -275,7 +275,7 @@ those semantics. Its tensors are the prepared model inputs and constraints.
 Implementation: [ReactionTensorData](reaction_tensor_data.py),
 [ReactionRelations](../../domain/fragment/reaction/ReactionRelations.py).
 
-## ReactionSet: independent reaction-set CSR table (step 3)
+## 2.3 ReactionSet: independent reaction-set CSR table
 
 The implemented `ReactionSet` class (`structure.reaction_sets`) contains only
 canonical membership. Group, Compound, topology, and teacher information are
@@ -373,10 +373,10 @@ remain available on its reference side.
 A context-bearing state/view can reference `(group_id, reaction_set_id)`; it must
 not duplicate the membership list into a new canonical set. A different group
 may reuse the same set row while retaining its own topology/labels. These
-consumer tables will be specified step by step, rather than being treated as
+consumer tables will be specified separately, rather than being treated as
 fields of the set table.
 
-### Implemented classes and references (steps 1–3)
+### Implemented classes and references
 
 | Schema component | Class / stored fields |
 |---|---|
@@ -410,7 +410,7 @@ can be refined independently of canonical set identity.
 Implementation: [SourceCompound](source_compound.py),
 [ReactionSet](reaction_set.py), [ReactionContextData](reaction_context_data.py).
 
-## CompoundBatch: unique product compounds and their generating sets (step 4)
+## 2.4 CompoundBatch: unique product compounds and their generating sets
 
 This is the implemented `CompoundBatch` class at
 `structure.annotations.compounds`. Distinguish a single **mmkit.Compound** molecule object from the
@@ -499,3 +499,198 @@ relation generating_reaction_sets (CSR). `smiles` is a derived read-only view of
 `compounds[i].smiles`, not another stored field.
 The saved format is `fredis.annotated-spectrum-training` without a version suffix. Implementation: [CompoundBatch](compound_batch.py),
 [normalization and reference tables](annotated_spectrum_data.py).
+
+## 2.5 BranchGroup: SourceCompound and main-adduct context
+
+A BranchGroup row identifies one `(SourceCompound, main adduct)` pair.
+It supplies the context in which branch predictions/topology are shared.
+CE, measured peaks, and observed intensities are not part of its identity.
+The group ID is its implicit row number; there is no additional group_id vector.
+
+This diagram defines the logical field names `source_compound_index` and
+`main_adduct_index`. There is currently no standalone BranchGroup class: the
+corresponding arrays live in SourceReactionStructure under the names mapped
+below. This section changes documentation only, not those Python field names.
+
+### Fields and references
+
+```mermaid
+flowchart TB
+    subgraph BG["BranchGroup"]
+        SOURCE["source_compound_index<br/>int64 [N_branch_group]<br/>[0,0,1]"]
+        ADDUCT["main_adduct_index<br/>int64 [N_branch_group]<br/>[0,1,0]"]
+        %% Invisible link controls vertical placement only.
+        SOURCE ~~~ ADDUCT
+    end
+    SOURCEROW["SourceCompound:source_smiles"]
+    ADDUCTROW["PreparationContext:adduct_type_strs"]
+    SOURCE -->|"SourceCompound row ID"| SOURCEROW
+    ADDUCT -->|"registered main-adduct vocabulary index"| ADDUCTROW
+```
+
+| Logical field | Type / shape | Concrete example | Reference |
+|---|---|---|---|
+| `source_compound_index` | int64 [N_branch_group] | [0,0,1] | → `SourceCompound:source_smiles` |
+| `main_adduct_index` | int64 [N_branch_group] | [0,1,0] | → `PreparationContext:adduct_type_strs` |
+
+`adduct_type_strs` is the registered main-adduct vocabulary created from the
+preparation Fragmenter's adduct rule set. It is a shared tuple, not an invented
+new table or a stored field on each group. Prediction uses the corresponding
+model vocabulary. IDs are meaningful only with that vocabulary and ordering.
+
+### Concrete group rows
+
+For illustration, let the Sources be `("CCO","CC(=O)O")` and the main-adduct
+vocabulary be `("[M+H]+","[M+Na]+")`.
+
+| group_id (implicit row) | source_compound_index | main_adduct_index | Meaning |
+|---|---|---|---|
+| 0 | 0 | 0 | CCO with [M+H]+ |
+| 1 | 0 | 1 | CCO with [M+Na]+ |
+| 2 | 1 | 0 | CC(=O)O with [M+H]+ |
+
+The two columns have the same length N_branch_group=3. The pair is unique:
+multiple spectra of CCO/[M+H]+ at 10 and 40 eV both reference group 0. Changing
+main adduct creates another group; changing Source creates another group.
+An observed adduct with a neutral loss can resolve to the same registered main
+adduct, so the raw observed string is not the group key.
+
+ReactionSet membership remains independent of BranchGroup. Groups can reference
+the same set row while retaining their own branch context; no reaction-membership
+CSR belongs in BranchGroup. Its purpose is context/sharing, not Compound identity.
+
+### Mapping to current storage
+
+| Logical schema field / relation | Current storage |
+|---|---|
+| `BranchGroup.source_compound_index` | `SourceReactionStructure.branch_group_tree_index` |
+| `BranchGroup.main_adduct_index` | `SourceReactionStructure.branch_group_adduct_index` |
+| Spectrum -> group | `SpectrumData.branch_group_index`; model-input view `sample_branch_group_index` |
+| Candidate context -> group | `ReactionContextData.candidate_branch_group_index` |
+
+The last two entries are references from their respective records, not extra
+columns owned by BranchGroup. SpectrumData below references these implicit group
+rows. Its Source and main-adduct information are obtained through the group.
+
+Implementation: [group arrays](source_reaction_structure.py),
+[preparation vocabulary](../data_preparation/fragment_tree/context.py).
+
+## 2.6 SpectrumData: observed spectrum rows and peak lists
+
+This is the refined logical schema for `structure.annotations.spectra`.
+The Python class still stores `source_index` and `adducts`; this documentation
+change does not yet remove those stored fields.
+One row is one observed spectrum. N_spectrum counts spectra and N_peak counts
+their total observed peaks. A spectrum ID is its implicit row number; there is
+no separately stored spectrum_id vector. Different CE observations remain
+separate spectrum rows even when their SourceCompound, main adduct, and peak
+m/z values are the same.
+
+### Schema and references
+
+The example uses actual prepared values from SourceCompound `CC(N)O`, observed
+adduct `[M+H]+`, and CE 10/40 eV. Both spectra refer to branch group 0, which selects Source row 0; the group is shared because CE is not part of group identity.
+The branch-group schema is referenced by name only.
+
+```mermaid
+flowchart TB
+    subgraph SD["SpectrumData"]
+        GROUP["branch_group_index<br/>int64 [N_spectrum]<br/>[0,0]"]
+        CE["collision_energy<br/>float64 [N_spectrum]<br/>[10.0,40.0] eV"]
+        PRECURSOR["precursor_mz<br/>float64 [N_spectrum]<br/>example: 62.060588876"]
+        META["metadata<br/>tuple[dict, ...]<br/>N_spectrum rows"]
+        PEAKS["peak (CSR)<br/>N_spectrum rows<br/>mz: float64<br/>intensity: float32<br/>precursor: bool"]
+        %% Invisible links control vertical placement only.
+        GROUP ~~~ CE ~~~ PRECURSOR ~~~ META ~~~ PEAKS
+    end
+    GROUPROW["BranchGroup:group_id<br/>(implicit row ID)"]
+    GROUP -->|"branch-group row ID"| GROUPROW
+```
+
+| Field / relation | Type / shape | Concrete value | Reference / meaning |
+|---|---|---|---|
+| `branch_group_index` | int64 [N_spectrum] | [0,0] | → `BranchGroup:group_id`; implicit group row |
+| `collision_energy` | float64 [N_spectrum] | [10.0,40.0] | Observational CE in eV |
+| `precursor_mz` | float64 [N_spectrum] | [62.060588876,62.060588876] | Precursor m/z recorded for each spectrum |
+| `metadata` | tuple[dict, ...], length N_spectrum | Dictionaries in the example below | Remaining per-spectrum annotations |
+| `peak (CSR)` | N_spectrum variable-length rows | Two peaks per spectrum here | Aligned observed mz/intensity/precursor values |
+
+`group_id` is an implicit BranchGroup row. Source and registered main adduct
+are obtained through that row, so SpectrumData has no separate source_index or
+main-adduct column in this schema.
+
+An observed precursor adduct can differ from the main adduct: `[M+H-H2O]+` may
+resolve to the same group main adduct as `[M+H]+`. The original label is therefore
+not generally derivable from BranchGroup. If it needs preserving, put it in
+optional `metadata["observed_adduct"]`, rather than a mandatory adducts column.
+A redundant mainAdduct label does not need copying into metadata.
+
+### Concrete spectrum rows
+
+```python
+# Spectrum rows:     0                    1
+branch_group_index = [0, 0]
+collision_energy = [10.0, 40.0]
+precursor_mz = [62.060588876, 62.060588876]
+
+# Logical CSR rows: (mz, intensity, precursor)
+peak = [
+    [(18.033826, 0.5, False), (44.049476, 1.0, False)],
+    [(18.033826, 1.0, False), (44.049476, 0.5, False)],
+]
+
+metadata = (
+    {"assignmentScore": 1.0,
+     "assignmentScoreWithoutPrecursor": 1.0},
+    {"assignmentScore": 1.0,
+     "assignmentScoreWithoutPrecursor": 1.0},
+)
+```
+
+Spectrum 0 and spectrum 1 have identical m/z values but different measured
+relative intensities and CE. These are separate observations, not a shared
+Compound or ion identity. `metadata` contains optional per-spectrum annotations, including an original
+observed_adduct label only if needed. Core conditions derived from BranchGroup
+are not copied into it. The shown score
+fields are preparation annotations, not model predictions.
+
+### peak (CSR): multiple aligned values per spectrum
+
+The single logical relation `peak (CSR)` uses a shared row boundary for three
+parallel value arrays. It has no separately stored peak-index array: the
+observed peak ID is the implicit flattened peak row.
+
+| Peak value | Type / physical shape | Concrete values |
+|---|---|---|
+| `mz` | float64 [N_peak] | [18.033826,44.049476,18.033826,44.049476] |
+| `intensity` | float32 [N_peak] | [0.5,1.0,1.0,0.5] |
+| `precursor` | bool [N_peak] | [False,False,False,False] |
+
+There are N_spectrum=2 CSR rows and N_peak=4 values in each aligned array.
+The physical boundary vector is `[0,2,4]`, length N_spectrum+1; in code it is
+`peak_ptr`. It is packing metadata for the one peak relation, not an additional
+foreign-key field in the diagram. Spectrum 1's peaks occupy flattened rows 2:4.
+Empty spectra have empty CSR slices, not a fabricated zero-intensity peak.
+
+`mz` and `intensity` are observation inputs. `precursor` is an annotation flag:
+the current builder marks whether a peak is within the configured precursor mass
+tolerance. Intensities are retained as supplied by preparation; this table does
+not itself apply an additional intensity normalization.
+
+### Precursor and CE interpretation
+
+`precursor_mz` stores the value of the observation's precursorMz field. The current
+ReactionStructureBuilder derives that value from the Source formula and observed
+adduct, so the example is a theoretical precursor m/z, not a separately read
+instrument measurement. The field itself is per-spectrum metadata.
+
+SpectrumData stores CE as float64. The separate model-input view
+`SourceReactionStructure.collision_energy_eV` is float32; corresponding sample
+values must agree after that dtype conversion. This documents current storage
+rather than introducing a new duplicated condition field.
+
+Compound/formula/ion assignments are not columns of SpectrumData: the current
+PeakAssignmentData table references these implicit observed peak rows. Its schema
+can be specified separately. This section only defines SpectrumData.
+
+Implementation: [SpectrumData and normalization](annotated_spectrum_data.py).
