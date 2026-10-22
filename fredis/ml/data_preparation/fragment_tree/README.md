@@ -243,13 +243,13 @@ for peak assignment and output.
 - `target_intensity` is the highest observed intensity within tolerance of the
   state m/z, or 0.
 
-The saved payload contains source graphs and primitive-reaction features, teacher
-reaction sets at every depth, valid continuations and next-state indices,
-positive paths per experimental peak, weak negatives, materialized fragment
-graph tensors, ion-condition states, formula tensors with charge, exact m/z,
-precursor adducts, intensity targets and peak annotations.
-The payload uses schema `fredis.fragment-tree-training`. No format conversion is provided;
-regenerate `.preft.pt` files after a format change.
+The saved payload uses the shared canonical [input schema](../../input/SCHEMA.md):
+Source/Reaction/ReactionSet/Compound tables, CompoundReactionGraph, per-group
+selected-edge CSR and labels, adduct/formula explanations, per-spectrum candidate
+explanations, observations and peak assignments. Intensity targets are derived
+per (spectrum, Formula); descriptors are not computed during preparation.
+The identifier is `fredis.annotated-spectrum-training`, without a version.
+Regenerate prepared data after a contract change; no old-format conversion is provided.
 
 ## Open preparation settings in Workbench
 

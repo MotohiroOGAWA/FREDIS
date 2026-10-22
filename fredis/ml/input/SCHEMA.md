@@ -1191,3 +1191,24 @@ presence loss, if desired later, requires a separate model/loss decision.
 The implemented branch loss is weighted binary cross entropy on the selected
 edges (1: positive, 0: weak negative, -1: excluded). Intensity predictions use
 the explanation-to-formula aggregation above before distribution and cosine loss.
+
+## 2.14 Shared model inputs and training wrapper
+
+`SpectrumPredictionData` owns sections 2.1–2.7 and 2.10–2.12 together with
+`conditions: SpectrumConditions`. Its condition columns are
+`branch_group_index: int64 [N_spectrum]`,
+`collision_energy_eV: float32 [N_spectrum]`, and
+`observed_adducts: tuple[str,...]` of length N_spectrum (the original precursor
+adduct labels, including neutral-loss forms). BranchGroup determines the Source
+and main adduct. These are requested prediction conditions, not teacher data.
+
+`SourceReactionStructure` inherits the same components and adds
+`annotations: AnnotatedSpectrumData` (SpectrumData and PeakAssignmentData) and
+`targets: SpectrumFormulaTarget`. Training requires aligned branch edge labels;
+prediction sets `ReactionContextData.edge_label=None` and has no annotation or
+target fields. `training.for_prediction()` makes this distinction explicit.
+
+The derived `spectrum_batch` view flattens SpectrumExplanationData candidates for
+neural computation; `execution_graph` expands admissible reaction histories.
+Neither cached view is serialized. Molecular identity stays in CompoundBatch.
+See [README.md](README.md) for preparation, loss and batched prediction behavior.

@@ -1,8 +1,0 @@
-flowchart TB
-    subgraph RS["ReactionSet : REACTION_SET_BATCH"]
-        MEMBERS["reaction (CSR)<br/>unique sorted sets of Batch-global reaction IDs"]
-    end
-    REACTION["Reaction:reaction_type"]
-    COMPOUND["CompoundBatch:generating_reaction_sets (CSR)"]
-    MEMBERS -->|"reaction row IDs"| REACTION
-    COMPOUND -->|"set row IDs"| RS
