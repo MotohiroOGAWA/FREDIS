@@ -9,6 +9,7 @@ from .components.condition.condition_linear import ConditionHead
 from ..common.torch_utils.segment_ops import segment_softmax
 from .fragment_spectrum_model import SpectrumModelOutput, SpectrumLossSettings
 from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
+from ..mol.selected_descriptors import selected_descriptor_values
 from fredis.libs.mmkit.mmkit import Adduct
 
 
@@ -169,9 +170,7 @@ class CompetitiveSpectrumModel(nn.Module):
             SUPPORTED_DESCRIPTOR_NAMES
         ):
             raise ValueError("Invalid transition descriptor selection")
-        self.descriptor_indices = tuple(
-            SUPPORTED_DESCRIPTOR_NAMES.index(name) for name in descriptors
-        )
+        self.descriptor_names = tuple(descriptors)
         input_dim = (
             2 * (mol_encoder.graph_dim + len(descriptors))
             + reaction_dim
@@ -319,10 +318,13 @@ class CompetitiveSpectrumModel(nn.Module):
             molecular = unique[data.node_graph_inverse]
         else:
             molecular = self.mol_encoder(data.decoded.node_graph)
-        if self.descriptor_indices:
-            values = data.decoded.node_graph.descriptors[:, self.descriptor_indices].to(
-                molecular.dtype
-            )
+        if self.descriptor_names:
+            # Model-specific optional features are selected after preparation.
+            # Nothing is precomputed or persisted on canonical graph tables.
+            values = molecular.new_tensor([
+                selected_descriptor_values(compound.smiles, self.descriptor_names)
+                for compound in data.decoded.compounds
+            ])
             molecular = torch.cat(
                 (molecular, values.sign() * torch.log1p(values.abs())), 1
             )

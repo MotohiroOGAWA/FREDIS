@@ -86,8 +86,8 @@ def test_prepared_groups_share_sets_and_compound_inverse_ids(tmp_path):
     compounds = data.annotations.compounds
     assert compounds.graph.num_graphs == len(set(compounds.smiles))
     for c in range(len(compounds.smiles)):
-        ids = compounds.reaction_set_index[
-            compounds.reaction_set_ptr[c] : compounds.reaction_set_ptr[c + 1]
+        ids = compounds.generating_reaction_sets_index[
+            compounds.generating_reaction_sets_ptr[c] : compounds.generating_reaction_sets_ptr[c + 1]
         ]
         assert ids.tolist() == sorted(set(ids.tolist()))
     # Selecting a different adduct keeps the immutable registry/set tables and

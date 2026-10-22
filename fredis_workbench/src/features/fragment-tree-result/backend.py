@@ -51,7 +51,7 @@ def _reaction_states(structure) -> list[dict]:
             a, b = teacher.positive_reaction_ptr[q : q + 2]
             next_reactions = teacher.positive_reaction_index[a:b].tolist()
             observed = bool(teacher.observed[q])
-        compound = (int(structure.annotations.compounds.context_compound_index[row])
+        compound = (int(structure.annotations.contexts.compound_index[row])
                     if structure.annotations is not None else -1)
         smiles = (
             structure.annotations.compounds.smiles[compound]
@@ -158,7 +158,7 @@ def _node_view(structure, samples, source_smiles, file_path):
         for sample, tree in zip(samples, decoded.trees):
             tree_nodes = [tree.get_node(index) for index in range(tree.num_nodes)]
             ids = [
-                int(structure.annotations.compounds.occurrence_index[offset + node.index])
+                int(structure.annotations.occurrences.compound_index[offset + node.index])
                 for node in tree_nodes
             ]
             states_for_node = {}

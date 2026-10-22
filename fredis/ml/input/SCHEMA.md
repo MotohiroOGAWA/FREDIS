@@ -1,7 +1,7 @@
 # SourceReactionStructure schema
 
-SourceCompound, Reaction, and ReactionSet below describe the implemented Batch
-tables in schema `fredis.annotated-spectrum-training.v4`. External references are shown by name,
+SourceCompound, Reaction, ReactionSet, and CompoundBatch describe the implemented Batch
+tables in schema `fredis.annotated-spectrum-training.v5`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
 ## SourceCompound: independent Batch structure (step 1)
@@ -28,7 +28,6 @@ erDiagram
         float32_matrix x "source_graph.x: [7,28]"
         int64_matrix edge_index "source_graph.edge_index: [2,10]"
         float32_matrix edge_attr "source_graph.edge_attr: [10,9]"
-        float32_matrix descriptors "source_graph.descriptors: [2,15]"
         int64_vector ptr "source_graph.ptr: [0,3,7]"
         int64_vector batch "source_graph.batch: [0,0,0,1,1,1,1]"
     }
@@ -41,7 +40,6 @@ erDiagram
 | `source_graph.x` | float32 `[A,F_atom]` | `[7,28]`; concatenated atom features |
 | `source_graph.edge_index` | int64 `[2,E]` | `[2,10]`; endpoints use Batch-global atom rows |
 | `source_graph.edge_attr` | float32 `[E,F_bond]` | `[10,9]`; directed-edge features |
-| `source_graph.descriptors` | float32 `[M,15]` | `[2,15]`; one descriptor row per molecule |
 | `source_graph.ptr` | int64 `[M+1]` | `[0,3,7]`; atom-row boundaries per molecule |
 | `source_graph.batch` | int64 `[A]` | `[0,0,0,1,1,1,1]`; molecule ID per atom |
 
@@ -55,11 +53,10 @@ source_graph.edge_index = [
 ]
 # source_graph.x:           float32 [7,28]
 # source_graph.edge_attr:   float32 [10,9]
-# source_graph.descriptors: float32 [2,15]
 ```
 
 For Source row `m=1`, `source_smiles[1]` is acetic acid, atoms are
-`x[ptr[1]:ptr[2]] = x[3:7]`, and descriptors are `descriptors[1]`.
+`x[ptr[1]:ptr[2]] = x[3:7]`.
 The Source identifier is the implicit molecule row `m`; there is no separate
 stored scalar `source_id` and no Batch-level PK field. Other tables can refer
 to `m` later. `ptr` and `batch` describe the same atom ownership in complementary
@@ -123,30 +120,6 @@ are stored in both directions, hence four equal rows. E counts directed edges,
 not physical bonds. A molecule with no represented bonds has `edge_index [2,0]`
 and `edge_attr [0,9]`.
 
-### Molecular descriptor values
-
-The order is `SUPPORTED_DESCRIPTOR_NAMES`; all 15 values are stored even if the
-model later selects only a subset. These values are computed features rather
-than model embeddings. Small floating-point/version differences are possible.
-
-| Column | Descriptor | Value (rounded float32) |
-|---|---|---|
-| 0 | `MolWt` | 46.069 |
-| 1 | `ExactMolWt` | 46.041866 |
-| 2 | `HeavyAtomCount` | 3 |
-| 3 | `TPSA` | 20.23 |
-| 4 | `MolLogP` | -0.0014 |
-| 5 | `NumHAcceptors` | 1 |
-| 6 | `NumHDonors` | 1 |
-| 7 | `NumRotatableBonds` | 0 |
-| 8 | `RingCount` | 0 |
-| 9 | `NumAromaticRings` | 0 |
-| 10 | `NumAliphaticRings` | 0 |
-| 11 | `FractionCSP3` | 1 |
-| 12 | `NumHeteroatoms` | 1 |
-| 13 | `FormalCharge` | 0 |
-| 14 | `BertzCT` | 2.7548876 |
-
 ### Multiple SourceCompounds: physical Batch layout
 
 For M source molecules, A total graph atoms, and E total directed edges:
@@ -157,7 +130,6 @@ For M source molecules, A total graph atoms, and E total directed edges:
 | `source_graph.x` | float32 `[A,F_atom]` | `[3,28]` |
 | `source_graph.edge_index` | int64 `[2,E]` | `[2,4]` |
 | `source_graph.edge_attr` | float32 `[E,F_bond]` | `[4,9]` |
-| `source_graph.descriptors` | float32 `[M,15]` | `[1,15]` |
 | `source_graph.ptr` | int64 `[M+1]` | `[0,3]` |
 | `source_graph.batch` | int64 `[A]` | `[0,0,0]` |
 
@@ -166,9 +138,8 @@ molecular properties. For two graph atom counts 3 and 4, `ptr=[0,3,7]` and
 `batch=[0,0,0,1,1,1,1]`; edge endpoints are shifted to batch-global atom rows.
 There is no separate stored `edge_ptr` in this builder's output.
 
-Interpretation requires the atom/bond vocabularies, descriptor order, and graph
-hydrogen policy. Current code holds these in the graph builder/descriptor
-constants; `SourceCompound.symbols` now also persists the normalized atom vocabulary. Hydrogens become
+Interpretation requires the atom/bond vocabularies and graph hydrogen policy.
+Current code holds these in the graph builder; `SourceCompound.symbols` now also persists the normalized atom vocabulary. Hydrogens become
 independent graph nodes only when `"H"` is in `symbols`; hydrogen counts remain
 atom features. One shared configuration applies to a packed Batch.
 
@@ -180,8 +151,7 @@ before adding dependent tables.
 Implementation references:
 [MolGraphBuilder](../mol/graph_builder.py),
 [atom features](../mol/atom_feature.py),
-[bond features](../mol/bond_feature.py),
-[descriptors](../../domain/molecule/descriptors.py).
+[bond features](../mol/bond_feature.py).
 
 ## Reaction: concrete reaction Batch (step 2)
 
@@ -237,7 +207,7 @@ flowchart TB
 | `reaction_conflict_index (COO)` | int64 `[2,N_conflict]` | `[[0,1],[1,0]]` | Both endpoints → `Reaction:reaction_type` |
 | `reaction_invalidation_index (COO)` | int64 `[2,N_invalidation]` | `[[0],[1]]` | Both endpoints → `Reaction:reaction_type` |
 
-`reaction_source_compound_index[r]=m` selects `source_smiles[m]`, descriptor row m, and
+`reaction_source_compound_index[r]=m` selects `source_smiles[m]` and
 atom rows `source_graph.ptr[m]:source_graph.ptr[m+1]`. The referenced ID is the
 Source row, not a ptr value or an atom row. Every matched/retained atom of reaction
 r must lie inside that Source's interval.
@@ -415,9 +385,9 @@ fields of the set table.
 | ReactionSet | `ReactionSet(reaction_ptr, reaction_index)` |
 | Context -> set | `ReactionContextData.candidate_reaction_set_index` |
 | Active teacher context -> set | `states.candidate_index` -> candidate context -> set |
-| Compound -> sets (current storage) | `CompoundData.reaction_set_ptr/index`; target name: generating_reaction_sets CSR |
-| Materialization context -> Compound | `CompoundData.context_compound_index` |
-| Annotation context -> set | `AnnotatedSpectrumData.context_reaction_set_index` |
+| Compound -> generating sets | `CompoundBatch.generating_reaction_sets_ptr/index`; generating_reaction_sets CSR |
+| Materialization context -> Compound | `MaterializedContextData.compound_index` |
+| Annotation context -> set | `MaterializedContextData.reaction_set_index` |
 
 ReactionContextData contains group, occurrence, active-state projection and
 transition references. It stores no membership CSR and no set-owned Compound.
@@ -433,7 +403,7 @@ independent Source/reaction/set registries and slices the dependent contexts.
 FKs; those memberships are not stored twice. Training converts the global members
 to the decoder's local pool slots only for scoring.
 
-Files use `fredis.annotated-spectrum-training.v4`. Old prepared files must be
+Files use `fredis.annotated-spectrum-training.v5`. Old prepared files must be
 regenerated. Loading/validation does not run chemistry. Further dependent schemas
 can be refined independently of canonical set identity.
 
@@ -442,9 +412,8 @@ Implementation: [SourceCompound](source_compound.py),
 
 ## CompoundBatch: unique product compounds and their generating sets (step 4)
 
-This is the revised target schema for step 4. The Python implementation is still
-`CompoundData` and has not yet been changed to this shape. Steps 1–3 remain
-implemented. Distinguish a single **mmkit.Compound** molecule object from the
+This is the implemented `CompoundBatch` class at
+`structure.annotations.compounds`. Distinguish a single **mmkit.Compound** molecule object from the
 **CompoundBatch** container holding multiple unique molecules.
 
 ### Three fields in CompoundBatch
@@ -506,16 +475,14 @@ logical relation rather than separate index/ptr fields.
 ### graph: packed structural features
 
 N_atom and N_edge count atoms and directed edges of the unique Compound graphs,
-not Source atom rows. F_atom, F_bond and F_descriptor come from the preparation
-feature configuration. The actual example uses F_atom=35, F_bond=9,
-F_descriptor=15.
+not Source atom rows. F_atom and F_bond come from the preparation feature
+configuration. The actual example uses F_atom=35 and F_bond=9.
 
 | Graph field | Type / shape | Concrete example / reference |
 |---|---|---|
 | `graph.x` | float32 [N_atom,F_atom] | [9,35] |
 | `graph.edge_index` | int64 [2,N_edge] | [2,8]; -> `CompoundBatch:graph.x` |
 | `graph.edge_attr` | float32 [N_edge,F_bond] | [8,9] |
-| `graph.descriptors` | float32 [N_compound,F_descriptor] | [5,15] |
 | `graph.ptr` | int64 [N_compound+1] | [0,3,4,6,8,9] |
 | `graph.batch` | int64 [N_atom] | [0,0,0,1,2,2,3,3,4]; -> `CompoundBatch:compound_id` |
 
@@ -524,15 +491,12 @@ lists. Both have N_compound+1 boundaries, but they index different arrays.
 For Compound 2 (CO), atom features are `graph.x[4:6]`.
 Charged formula/m/z and ion-condition fields remain outside CompoundBatch.
 
-### Difference from the current implementation
+### Implemented storage
 
-| Current CompoundData | Revised CompoundBatch |
-|---|---|
-| `compounds: tuple` | `compounds: tuple[mmkit.Compound, ...]` |
-| Stored `smiles` tuple | Derived from molecular objects, not stored twice |
-| `graph` | Retained |
-| `reaction_set_ptr/index` | Renamed generating_reaction_sets CSR |
-
-This step changes documentation only. The Python class, serialized fields, and
-data structures have not yet been migrated; existing data remains in the current v4
-layout. Current implementation: [CompoundData](annotated_spectrum_data.py).
+`CompoundBatch` stores `compounds`, `graph`, and the physical CSR pair
+`generating_reaction_sets_ptr/index`. The pair represents the single logical
+relation generating_reaction_sets (CSR). `smiles` is a derived read-only view of
+`compounds[i].smiles`, not another stored field.
+The saved format is `fredis.annotated-spectrum-training.v5`; earlier prepared
+data must be regenerated. Implementation: [CompoundBatch](compound_batch.py),
+[normalization and reference tables](annotated_spectrum_data.py).

@@ -24,7 +24,7 @@ from .source_compound import SourceCompound
 from .reaction_context_data import ReactionContextData, TeacherData
 from .annotated_spectrum_data import AnnotatedSpectrumData
 
-SCHEMA = "fredis.annotated-spectrum-training.v4"
+SCHEMA = "fredis.annotated-spectrum-training.v5"
 
 
 class UnresolvedPrecursorError(ValueError):
@@ -68,7 +68,7 @@ class SourceReactionStructure:
     observations: InitVar[tuple[dict, ...] | None] = field(default=None, kw_only=True)
     formula_elements: tuple[str, ...] = field(default=(), kw_only=True)
     # Runtime view: expanded group-local graph topology and sample/ion rows.
-    # Redundant graphs/formulas/targets are omitted from serialized v4 data.
+    # Redundant graphs/formulas/targets are omitted from serialized v5 data.
     spectrum_batch: object | None = None
 
     # Spectrum -> (compound, main adduct) branch group. Collision energy is
@@ -145,7 +145,7 @@ class SourceReactionStructure:
     def __getstate__(self):
         """Serialize normalized tables plus topology; omit expanded runtime caches.
 
-        This is the v4 representation only, not a migration path. Formula rows,
+        This is the v5 representation only, not a migration path. Formula rows,
         molecular graphs and targets are restored from annotations on unpickling.
         """
         state = dict(self.__dict__)
@@ -173,7 +173,7 @@ class SourceReactionStructure:
         self.__dict__.update(state)
         if self.annotations is not None and self.spectrum_batch is not None:
             a = self.annotations
-            occurrence = a.compounds.occurrence_index.tolist()
+            occurrence = a.occurrences.compound_index.tolist()
             graphs = a.compounds.graph.to_data_list()
             decoded = replace(
                 self.spectrum_batch.decoded,
@@ -255,7 +255,7 @@ class SourceReactionStructure:
             raise ValueError("Active context branch groups disagree")
         if self.annotations is not None:
             self.annotations.validate()
-            if not torch.equal(self.annotations.context_reaction_set_index, sets):
+            if not torch.equal(self.annotations.contexts.reaction_set_index, sets):
                 raise ValueError("Annotation contexts must reference the canonical ReactionSets")
 
     def save(self, path: str | Path) -> None:
@@ -277,6 +277,10 @@ class SourceReactionStructure:
             payload = torch.load(path, map_location="cpu", weights_only=False)
         except ModuleNotFoundError as error:
             if error.name == "fredis.ml.input.reaction_state_data":
+                raise ValueError("Unsupported prepared data; regenerate the dataset") from error
+            raise
+        except AttributeError as error:
+            if "CompoundData" in str(error):
                 raise ValueError("Unsupported prepared data; regenerate the dataset") from error
             raise
         if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:

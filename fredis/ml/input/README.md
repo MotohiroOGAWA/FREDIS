@@ -1,7 +1,7 @@
 # Prepared input tables
 
 Schema and reference diagrams: [SCHEMA.md](SCHEMA.md).
-Current saved format: `fredis.annotated-spectrum-training.v4`.
+Current saved format: `fredis.annotated-spectrum-training.v5`.
 Prepared files from older formats must be regenerated.
 
 ## Independent tables
@@ -57,8 +57,10 @@ the global registry. `state_reaction_count` computes Q-context reaction counts.
 Training translates global reaction IDs into the decoder's local pool slots only
 at scoring time. There is no persisted group-local membership table.
 
-## Compound and annotation references
+## CompoundBatch and annotation references
 
+[CompoundBatch](compound_batch.py) stores only `compounds: tuple[mmkit.Compound,...]`,
+`graph`, and `generating_reaction_sets_ptr/index`; SMILES is a derived view.
 [AnnotatedSpectrumData](annotated_spectrum_data.py) holds spectra, unique
 Compounds, charged formulas, ions, and peak assignments. Same-structure Compounds
 share one graph and identity. Within a group they share a materialized node,
@@ -66,11 +68,11 @@ even when reached through different ReactionSets.
 
 | Field | Meaning |
 |---|---|
-| `compounds.occurrence_index` | Runtime occurrence -> unique Compound ID |
-| `compounds.context_compound_index` | [V] materialization context -> Compound ID; -1 if unavailable |
-| `context_reaction_set_index` | [V] context -> canonical ReactionSet ID |
-| `compounds.reaction_set_ptr/index` | CSR, Compound -> unique generating ReactionSet IDs; pointer length N_compound+1 |
-| `occurrence_group_index` | Branch group per runtime occurrence |
+| `occurrences.compound_index` | Runtime occurrence -> unique Compound ID |
+| `contexts.compound_index` | [V] materialization context -> Compound ID; -1 if unavailable |
+| `contexts.reaction_set_index` | [V] context -> canonical ReactionSet ID |
+| `compounds.generating_reaction_sets_ptr/index` | CSR, Compound -> unique generating ReactionSet IDs; pointer length N_compound+1 |
+| `occurrences.branch_group_index` | Branch group per runtime occurrence |
 
 The inverse CSR stores distinct `(Compound, ReactionSet)` pairs, not context IDs.
 Repeated groups do not duplicate a pair. The same empty set may occur under more

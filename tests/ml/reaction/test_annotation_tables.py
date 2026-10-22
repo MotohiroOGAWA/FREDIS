@@ -37,12 +37,12 @@ def assert_tables(data):
     assert_csr(f.ion_ptr, f.ion_index, len(f.composition))
     assert_csr(matches.formula_ptr, matches.formula_index, len(s.mz))
     assert_csr(matches.ion_ptr, matches.ion_index, len(s.mz))
-    assert_csr(c.reaction_set_ptr, c.reaction_set_index, len(c.smiles))
-    assert c.context_compound_index.shape == data.states.candidate_branch_group_index.shape
-    assert torch.equal(a.context_reaction_set_index, data.states.candidate_reaction_set_index)
+    assert_csr(c.generating_reaction_sets_ptr, c.generating_reaction_sets_index, len(c.smiles))
+    assert a.contexts.compound_index.shape == data.states.candidate_branch_group_index.shape
+    assert torch.equal(a.contexts.reaction_set_index, data.states.candidate_reaction_set_index)
     for compound in range(len(c.smiles)):
-        rows = c.reaction_set_index[c.reaction_set_ptr[compound] : c.reaction_set_ptr[compound + 1]]
-        expected = a.context_reaction_set_index[c.context_compound_index == compound].unique(sorted=True)
+        rows = c.generating_reaction_sets_index[c.generating_reaction_sets_ptr[compound] : c.generating_reaction_sets_ptr[compound + 1]]
+        expected = a.contexts.reaction_set_index[a.contexts.compound_index == compound].unique(sorted=True)
         assert torch.equal(rows, expected)
     for formula in range(len(f.composition)):
         rows = f.ion_index[f.ion_ptr[formula] : f.ion_ptr[formula + 1]]
@@ -90,7 +90,7 @@ def test_same_structure_merges_nodes_but_keeps_distinct_reaction_sets():
     tree = data.spectrum_batch.decoded.trees[0]
     assert len({tree.get_node(i).smiles for i in range(tree.num_nodes)}) == tree.num_nodes
     # Symmetry creates several concrete reaction sets yielding an identical compound.
-    ptr = data.annotations.compounds.reaction_set_ptr
+    ptr = data.annotations.compounds.generating_reaction_sets_ptr
     assert (ptr[1:] - ptr[:-1]).max() > 1
 
 
@@ -198,12 +198,12 @@ def test_compound_reaction_set_csr_keeps_sets_without_duplicating_nodes():
     annotation.validate()
     compounds = annotation.compounds
     assert compounds.graph.num_graphs == 1
-    assert compounds.reaction_set_ptr.tolist() == [0, 4]  # C + 1, not V + 1
-    assert compounds.reaction_set_index.tolist() == [0, 1, 2, 3]
-    assert compounds.context_compound_index.tolist() == [0, 0, 0, 0]
+    assert compounds.generating_reaction_sets_ptr.tolist() == [0, 4]  # C + 1, not V + 1
+    assert compounds.generating_reaction_sets_index.tolist() == [0, 1, 2, 3]
+    assert annotation.contexts.compound_index.tolist() == [0, 0, 0, 0]
     # A duplicate/missing reaction-set ID must not silently pass validation.
     invalid = replace(annotation, compounds=replace(
-        compounds, reaction_set_index=torch.tensor([0, 1, 2, 2]),
+        compounds, generating_reaction_sets_index=torch.tensor([0, 1, 2, 2]),
     ))
     with pytest.raises(ValueError, match="each materialized pair once"):
         invalid.validate()
@@ -222,17 +222,17 @@ def test_independent_reaction_sets_survive_collation_selection_and_save(tmp_path
     assert_tables(selected)
     assert selected.reaction_sets is batch.reaction_sets
     compound = selected.annotations.compounds
-    assert compound.reaction_set_ptr.shape == (len(compound.smiles) + 1,)
+    assert compound.generating_reaction_sets_ptr.shape == (len(compound.smiles) + 1,)
     path = tmp_path / "independent-reaction-sets.preft.pt"
     selected.save(path)
     loaded = SourceReactionStructure.load(path)
     assert_tables(loaded)
     torch.testing.assert_close(loaded.reaction_sets.reaction_index,
                                selected.reaction_sets.reaction_index)
-    torch.testing.assert_close(loaded.annotations.compounds.reaction_set_ptr,
-                               compound.reaction_set_ptr)
-    torch.testing.assert_close(loaded.annotations.compounds.reaction_set_index,
-                               compound.reaction_set_index)
+    torch.testing.assert_close(loaded.annotations.compounds.generating_reaction_sets_ptr,
+                               compound.generating_reaction_sets_ptr)
+    torch.testing.assert_close(loaded.annotations.compounds.generating_reaction_sets_index,
+                               compound.generating_reaction_sets_index)
 
 
 def test_training_resolves_shared_sets_after_source_registry_offsets():
