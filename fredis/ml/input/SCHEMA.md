@@ -845,3 +845,144 @@ remains an independent mass-tolerance annotation.
 
 Implementation: [PeakAssignmentData](annotated_spectrum_data.py). The only stored
 assignment fields are `formula_explanation_ptr` and `formula_explanation_index`.
+
+## 2.10 TeacherData: reaction supervision and alternative paths per observed peak
+
+`structure.teacher` stores training labels and paths. PeakAssignmentData records
+chemical explanations of peaks; TeacherData records which reaction additions and
+paths are supported by the prepared observations. It does not duplicate peak
+intensities, formulas, Compound objects, or ReactionSet memberships.
+
+### Reaction labels: one row per active reaction context
+
+N_active_context is the number of Q rows in ReactionContextData, namely the
+length of `ReactionContextData:candidate_index`. Each Q row selects a candidate
+context (V row), whose identity is a BranchGroup and a ReactionSet. Teacher label
+rows follow the same Q-row order; there is no separate stored context_index.
+Reaction IDs always reference the Batch-global concrete Reaction registry.
+
+```mermaid
+flowchart TB
+    subgraph TL["TeacherData: context labels"]
+        ROW["same active-context row order<br/>N_active_context rows"]
+        OBS["observed<br/>bool [N_active_context]"]
+        POS["positive_reaction (CSR)<br/>N_active_context rows<br/>int64 references"]
+        NEG["negative_reaction (CSR)<br/>N_active_context rows<br/>int64 references"]
+        ROW ~~~ OBS ~~~ POS ~~~ NEG
+    end
+    CONTEXT["ReactionContextData:candidate_index<br/>active-context rows (Q)"]
+    REACTION["Reaction:reaction_type"]
+    ROW -->|"same implicit row ID"| CONTEXT
+    POS -->|"positive added reaction IDs"| REACTION
+    NEG -->|"weak-negative added reaction IDs"| REACTION
+```
+
+| Field / relation | Type / logical shape | Concrete example | Meaning / reference |
+|---|---|---|---|
+| `observed` | bool [N_active_context] | `[False,True,False,True]` | Context is the endpoint of at least one retained nonempty observed-peak path |
+| `positive_reaction (CSR)` | int64, N_active_context rows | `[[0,1],[1],[0],[]]` | → `Reaction:reaction_type`; additions present in retained teacher paths |
+| `negative_reaction (CSR)` | int64, N_active_context rows | `[[2],[2],[2],[]]` | → `Reaction:reaction_type`; chemically valid additions absent from the positive set |
+
+For this illustrative example, all four Q rows belong to group 0 and reference
+ReactionSets `[]`, `[0]`, `[1]`, `[0,1]` respectively. These memberships describe
+the example and are not stored in TeacherData. Reaction 2 is assumed valid at
+the first three contexts but unsupported by their teacher paths; the last context
+has no eligible continuation under the configured limit.
+
+The physical arrays for these relations are:
+
+```python
+positive_reaction_ptr   = [0,2,3,4,4]  # int64 [N_active_context + 1]
+positive_reaction_index = [0,1,1,0]    # int64 [N_positive_addition]
+negative_reaction_ptr   = [0,1,2,3,3]  # int64 [N_active_context + 1]
+negative_reaction_index = [2,2,2]      # int64 [N_weak_negative_addition]
+observed = [False,True,False,True]     # bool [N_active_context]
+```
+
+Positives are the union of outgoing reactions on retained paths across all
+spectra in the same BranchGroup, including different CE observations. Weak
+negatives are valid continuations minus that union; chemically invalid additions
+are excluded. Positive and negative IDs are sorted and unique within each row.
+`observed=True` is an endpoint annotation, not a stop/EOS label: context 1 in
+this example explains one peak and also continues toward context 3 for another.
+
+### Peak supervision: peak items, alternative paths, and ordered steps
+
+N_supervised_peak counts teacher peak items, not all observed peaks. The current
+builder creates an item only when a peak has at least one retained nonempty
+reaction path. Consequently, teacher row h need not equal observed peak row h;
+`peak_index` is an explicit foreign key. N_teacher_path counts all alternative
+paths and N_path_step counts all their steps.
+
+```mermaid
+flowchart TB
+    subgraph TP["TeacherData: peak items"]
+        PEAK["peak_index<br/>int64 [N_supervised_peak]"]
+        GROUP["peak_branch_group_index<br/>int64 [N_supervised_peak]"]
+        PATH["peak_path (CSR)<br/>N_supervised_peak rows<br/>contiguous alternative-path rows"]
+        PEAK ~~~ GROUP ~~~ PATH
+    end
+    subgraph TS["TeacherData: path rows"]
+        STEP["path_step (CSR)<br/>N_teacher_path rows<br/>ordered (parent context, added reaction)"]
+    end
+    PR["SpectrumData:mz"]
+    GR["BranchGroup:group_id<br/>(implicit row ID)"]
+    QR["ReactionContextData:candidate_index<br/>active-context rows (Q)"]
+    RR["Reaction:reaction_type"]
+    PEAK -->|"flattened observed peak ID"| PR
+    GROUP -->|"branch-group ID"| GR
+    PATH -->|"implicit contiguous path row IDs"| STEP
+    STEP -->|"path_step_state_index: parent Q row"| QR
+    STEP -->|"path_step_reaction_index: added reaction"| RR
+```
+
+| Field / relation | Type / logical shape | Concrete example | Reference / interpretation |
+|---|---|---|---|
+| `peak_index` | int64 [N_supervised_peak] | `[1,3]` | → `SpectrumData:mz`; flattened observed peak rows |
+| `peak_branch_group_index` | int64 [N_supervised_peak] | `[0,0]` | → `BranchGroup:group_id`; must agree with the owning spectrum's group |
+| `peak_path (CSR)` | N_supervised_peak variable-length rows | `[[0],[1,2]]` | → `TeacherData:path_step (CSR)`; implicit path row IDs |
+| `path_step (CSR)` | N_teacher_path variable-length rows of pairs | `[[(0,0)],[(0,0),(1,1)],[(0,1),(2,0)]]` | Pairs reference parent Q-context rows and added concrete Reaction rows |
+
+```python
+# Teacher peak item 0 -> observed peak 1; item 1 -> observed peak 3.
+peak_index = [1,3]
+peak_branch_group_index = [0,0]
+peak_path_ptr = [0,1,3]              # int64 [N_supervised_peak + 1]
+
+# Path rows 0,1,2 contain 1,2,2 ordered steps respectively.
+path_step_ptr = [0,1,3,5]            # int64 [N_teacher_path + 1]
+path_step_state_index = [0,0,1,0,2]  # int64 [N_path_step]
+path_step_reaction_index = [0,0,1,1,0]  # int64 [N_path_step]
+```
+
+`peak_path_ptr` partitions contiguous path rows, so no peak_path_index array is
+stored. `path_step_ptr` partitions two aligned step arrays; there is no separate
+pointer for reaction IDs. Step k is the pair of parent Q context and added
+Reaction at position k. The resulting child is resolved through
+ReactionContextData's transitions; it is not another stored Teacher column.
+
+Observed peak 1 has path `[] --0--> [0]`. Observed peak 3 has alternatives
+`[] --0--> [0] --1--> [0,1]` and `[] --1--> [1] --0--> [0,1]`.
+The final ReactionSet and Q context are shared, while the ordered teacher paths
+remain distinct. Steps preserve order; they must not be sorted as reaction sets.
+All parent contexts on a path belong to its peak item's BranchGroup.
+The initial Source/root marker has no reaction addition and is not a step.
+
+### Intensity targets and teacher-free data
+
+`spectrum_targets(annotations)` derives runtime intensity targets on demand.
+It follows peak assignments to their formulas, takes the maximum assigned peak
+intensity for each `(spectrum, formula)` pair, and projects that value to runtime
+explanation rows. Unassigned formula pairs receive zero; formulas marked invalid
+receive zero. Multiple structural explanations of one formula share that target.
+The intensities themselves remain in SpectrumData, not TeacherData.
+
+`without_teacher()` clears active Q supervision and returns empty TeacherData,
+while keeping candidate contexts, ReactionSets, chemical annotations, and
+observations. Empty default CSR pointers are `[0]`, and observed is empty;
+`spectrum_targets()` then returns None. No stored EOS, predicted intensity, or
+confidence column is defined by this schema.
+
+Implementation: [TeacherData](reaction_context_data.py),
+[teacher preparation](source_reaction_structure.py),
+[path and weak-negative losses](../training/fragment_tree_training/model.py).
