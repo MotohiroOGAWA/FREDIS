@@ -13,7 +13,7 @@ def test_registry_collation_and_round_trip(tmp_path):
     batch = SourceReactionStructure.from_structures([data, data])
     count = len(registry.reaction_type)
     atom_count = data.source_graph.num_nodes
-    assert batch.reactions.reaction_tree_index[count:].eq(1).all()
+    assert batch.reactions.reaction_source_compound_index[count:].eq(1).all()
     atom_indices = registry.reaction_source_atom_index
     assert torch.equal(
         batch.reactions.reaction_source_atom_index,

@@ -208,7 +208,7 @@ class SourceReactionStructure:
         IDs remain unchanged when structures are collated or spectra selected.
         """
         eligible = (
-            self.reactions.reaction_tree_index[None, :]
+            self.reactions.reaction_source_compound_index[None, :]
             == self.branch_group_tree_index[:, None]
         )
         counts = eligible.sum(1)

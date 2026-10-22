@@ -70,7 +70,7 @@ def test_pattern_input_is_raw_chemistry_plus_neighborhood_plus_position():
     chemical=torch.randn(6,3,requires_grad=True)
     args=dict(source_mol_h=torch.randn(1,6),
         source_atom_features=chemical,source_edge_index=edges([(0,1),(0,2),(2,3),(3,4),(4,5)]),
-        reaction_type=torch.tensor([[0,0,0],[1,0,0]]),reaction_tree_index=torch.tensor([0,0]),
+        reaction_type=torch.tensor([[0,0,0],[1,0,0]]),reaction_source_compound_index=torch.tensor([0,0]),
         reaction_source_atom_ptr=torch.tensor([0,2,4]),reaction_source_atom_index=torch.tensor([0,1,0,1]))
     captured=[];handle=model.reactant_encoders['0'].node_proj.register_forward_pre_hook(lambda module,values:captured.append(values[0]))
     output=model(**args);handle.remove()

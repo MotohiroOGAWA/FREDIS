@@ -1,6 +1,6 @@
 erDiagram
-    SOURCE_MOLECULE ||--o{ REACTION_INSTANCE : owns
-    SOURCE_MOLECULE ||--o{ BRANCH_GROUP : conditions
+    SOURCE_COMPOUND ||--o{ REACTION_INSTANCE : owns
+    SOURCE_COMPOUND ||--o{ BRANCH_GROUP : conditions
     MAIN_ADDUCT ||--o{ BRANCH_GROUP : selects
     BRANCH_GROUP ||--o{ GROUP_REACTION : vocabulary
     REACTION_INSTANCE ||--o{ GROUP_REACTION : resolves_to
@@ -10,7 +10,7 @@ erDiagram
     COMPOUND o|--o{ REACTION_STATE : produced_by
     BRANCH_GROUP ||--o{ SPECTRUM : measured_at_CE
 
-    SOURCE_MOLECULE {
+    SOURCE_COMPOUND {
         bigint source_id PK
         string smiles
         graph molecular_graph

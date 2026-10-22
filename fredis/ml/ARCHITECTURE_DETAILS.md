@@ -194,7 +194,7 @@ reaction_type = [           # [5,3], integer IDs, NOT one-hot
     [0,0,0], [0,1,0], [1,0,1],  # A
     [0,0,0], [1,0,0],           # B
 ]  # columns: pattern ID, rule ID, product ID
-reaction_tree_index = [0,0,0,1,1]  # [5]
+reaction_source_compound_index = [0,0,0,1,1]  # [5]
 ```
 
 Pattern ID selects pattern-owned modules. Rule and product IDs index learned

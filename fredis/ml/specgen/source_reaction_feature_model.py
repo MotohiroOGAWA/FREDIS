@@ -113,7 +113,7 @@ class SourceReactionFeatureModel(nn.Module):
             name: getattr(data.reactions, name).to(device)
             for name in (
                 "reaction_type",
-                "reaction_tree_index",
+                "reaction_source_compound_index",
                 "reaction_source_atom_ptr",
                 "reaction_source_atom_index",
             )
@@ -137,7 +137,7 @@ class SourceReactionFeatureModel(nn.Module):
             self.reaction_instance_encoder(
                 source_mol_h=source,
                 reaction_type=data.reactions.reaction_type,
-                reaction_tree_index=data.reactions.reaction_tree_index,
+                reaction_source_compound_index=data.reactions.reaction_source_compound_index,
                 reaction_source_atom_ptr=data.reactions.reaction_source_atom_ptr,
                 reaction_source_atom_index=data.reactions.reaction_source_atom_index,
                 source_atom_features=data.source_graph.x,

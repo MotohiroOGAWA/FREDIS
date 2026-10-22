@@ -26,7 +26,7 @@ class ReactionTensorData:
     """
 
     # [R]: source molecule index for each concrete reaction.
-    reaction_tree_index: Tensor
+    reaction_source_compound_index: Tensor
     # [R, 3]: [reaction_pattern_id, reaction_rule_id, product_molecule_id].
     reaction_type: Tensor
     # [R + 1]: CSR boundaries for the matched source atoms of each reaction.
@@ -112,7 +112,7 @@ class ReactionTensorData:
                         value = value[1:]
                 elif name in ('reaction_source_atom_index', 'reaction_retained_atom_index'):
                     value = value + atom_offset
-                elif name == 'reaction_tree_index':
+                elif name == 'reaction_source_compound_index':
                     value = value + tree_offset
                 elif name in ('reaction_conflict_index', 'reaction_invalidation_index'):
                     value = value + reaction_offset

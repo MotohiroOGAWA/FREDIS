@@ -10,12 +10,12 @@ boundaries, not foreign keys, so the logical ER tables do not store a `ptr` colu
 Names such as STATE_MEMBER and GROUP_REACTION describe logical tables/views;
 there is no separate Python dataclass for each of them.
 
-## SourceMolecule: independent Batch structure (step 1)
+## SourceCompound: independent Batch structure (step 1)
 
 The actual molecular graph storage is `source_graph: torch_geometric.data.Batch`,
 including `ptr` and `batch`. This section describes that physical Batch first,
 not a single-molecule RDB row. `source_smiles` is stored alongside the Batch in
-SourceReactionStructure. SOURCE_MOLECULE_BATCH below is a logical name for those
+SourceReactionStructure. SOURCE_COMPOUND_BATCH below is a logical name for those
 fields together, not a new Python class. No implementation changes are made.
 There are no external foreign keys in this component.
 
@@ -23,11 +23,11 @@ There are no external foreign keys in this component.
 
 Use ethanol `CCO` and acetic acid `CC(=O)O`, with `symbols=("C","O")`.
 M=2 molecules, A=7 total atoms, E=10 directed edges. Atom feature dimension is
-`Fatom=len(sorted(set(symbols)))+26=28`; bond feature dimension is `Fbond = MolGraphBuilder.bond_dim = 9` in the current implementation (4 bond-type + 5 ring-type features).
+`F_atom=len(sorted(set(symbols)))+26=28`; bond feature dimension is `F_bond = MolGraphBuilder.bond_dim = 9` in the current implementation (4 bond-type + 5 ring-type features).
 
 ```mermaid
 erDiagram
-    SOURCE_MOLECULE_BATCH {
+    SOURCE_COMPOUND_BATCH {
         string_tuple source_smiles "M=2: CCO, CC(=O)O"
         float32_matrix x "source_graph.x: [7,28]"
         int64_matrix edge_index "source_graph.edge_index: [2,10]"
@@ -41,9 +41,9 @@ erDiagram
 | Actual field | Type / shape | Concrete value / meaning |
 |---|---|---|
 | `source_smiles` | tuple[str, ...], length M | `("CCO", "CC(=O)O")` |
-| `source_graph.x` | float32 `[A,Fatom]` | `[7,28]`; concatenated atom features |
+| `source_graph.x` | float32 `[A,F_atom]` | `[7,28]`; concatenated atom features |
 | `source_graph.edge_index` | int64 `[2,E]` | `[2,10]`; endpoints use Batch-global atom rows |
-| `source_graph.edge_attr` | float32 `[E,Fbond]` | `[10,9]`; directed-edge features |
+| `source_graph.edge_attr` | float32 `[E,F_bond]` | `[10,9]`; directed-edge features |
 | `source_graph.descriptors` | float32 `[M,15]` | `[2,15]`; one descriptor row per molecule |
 | `source_graph.ptr` | int64 `[M+1]` | `[0,3,7]`; atom-row boundaries per molecule |
 | `source_graph.batch` | int64 `[A]` | `[0,0,0,1,1,1,1]`; molecule ID per atom |
@@ -150,16 +150,16 @@ than model embeddings. Small floating-point/version differences are possible.
 | 13 | `FormalCharge` | 0 |
 | 14 | `BertzCT` | 2.7548876 |
 
-### Multiple SourceMolecules: physical Batch layout
+### Multiple SourceCompounds: physical Batch layout
 
 For M source molecules, A total graph atoms, and E total directed edges:
 
 | Stored field | Type / shape | Single ethanol example |
 |---|---|---|
 | `source_smiles` | tuple[str, ...], length M | `("CCO",)` |
-| `source_graph.x` | float32 `[A,Fatom]` | `[3,28]` |
+| `source_graph.x` | float32 `[A,F_atom]` | `[3,28]` |
 | `source_graph.edge_index` | int64 `[2,E]` | `[2,4]` |
-| `source_graph.edge_attr` | float32 `[E,Fbond]` | `[4,9]` |
+| `source_graph.edge_attr` | float32 `[E,F_bond]` | `[4,9]` |
 | `source_graph.descriptors` | float32 `[M,15]` | `[1,15]` |
 | `source_graph.ptr` | int64 `[M+1]` | `[0,3]` |
 | `source_graph.batch` | int64 `[A]` | `[0,0,0]` |
@@ -171,7 +171,7 @@ There is no separate stored `edge_ptr` in this builder's output.
 
 Interpretation requires the atom/bond vocabularies, descriptor order, and graph
 hydrogen policy. Current code holds these in the graph builder/descriptor
-constants, not as additional fields of each SourceMolecule. Hydrogens become
+constants, not as additional fields of each SourceCompound. Hydrogens become
 independent graph nodes only when `"H"` is in `symbols`; hydrogen counts remain
 atom features. One shared configuration applies to a packed Batch.
 
@@ -186,6 +186,128 @@ Implementation references:
 [bond features](../mol/bond_feature.py),
 [descriptors](../../domain/molecule/descriptors.py).
 
+## Reaction: concrete reaction Batch (step 2)
+
+Actual storage is `SourceReactionStructure.reactions: ReactionTensorData`.
+R is the total number of concrete reactions in the current Batch. A reaction ID
+is an implicit row `r` of `reaction_type`; it is not a pattern ID. These IDs and
+atom IDs are Batch-global. The group-local IDs in State reaction sets are a
+separate index space resolved through the group's Source reaction vocabulary.
+
+### Notation and reference diagram
+
+External targets are named only, as `Component:Batch:field`. The SourceCompound
+Batch is not expanded again. A CSR relation is shown once as `(CSR)` with its
+logical list values; its index and ptr arrays are not drawn as separate fields.
+`reaction_source_atom` and `reaction_retained_atom` below are display names for
+their respective stored CSR pairs, not additional dataclass fields.
+
+Conflict/invalidation arrays are actually COO pairs, so they remain `(COO)`;
+they are not relabelled CSR. The examples below are schematic reaction registry
+values, not chemistry-calculated reactions or real configured pattern IDs.
+They use the Source example's atom rows 0..2 and 3..6.
+
+```mermaid
+flowchart TB
+    subgraph RB["Reaction : REACTION_BATCH<br/>ReactionTensorData"]
+        direction TB
+        OWNER["reaction_source_compound_index<br/>int64 [R]<br/>[0, 0, 1]"]
+        TYPE["reaction_type<br/>int64 [R, 3]<br/>pattern_id, rule_id, product_slot"]
+        MATCH["reaction_source_atom (CSR)<br/>int64, R variable-length rows<br/>[[0,1], [0,1,2], [4,5,6]]"]
+        KEEP["reaction_retained_atom (CSR)<br/>int64, R variable-length rows<br/>[[1,2], [0,1], [3,4,5]]"]
+        CONFLICT["reaction_conflict_index (COO)<br/>int64 [2, N_conflict]<br/>[[0,1], [1,0]]"]
+        INVALID["reaction_invalidation_index (COO)<br/>int64 [2, N_invalidation]<br/>[[0], [1]]"]
+        %% Invisible links keep fields in a vertical column; they are not references.
+        OWNER ~~~ MATCH ~~~ KEEP ~~~ CONFLICT ~~~ INVALID ~~~ TYPE
+    end
+    SOURCEROW["SourceCompound:<br/>SOURCE_COMPOUND_BATCH:<br/>source_smiles"]
+    SOURCEATOM["SourceCompound:<br/>SOURCE_COMPOUND_BATCH:<br/>source_graph.x"]
+    OWNER -->|"Source row ID"| SOURCEROW
+    MATCH -->|"Source atom row IDs"| SOURCEATOM
+    KEEP -->|"Source atom row IDs"| SOURCEATOM
+    CONFLICT -->|"both rows contain reaction IDs"| TYPE
+    INVALID -->|"both rows contain reaction IDs"| TYPE
+```
+
+### Fields, values, and foreign-row references
+
+| Field / relation | Type and shape | Concrete logical value | Reference target |
+|---|---|---|---|
+| `reaction_source_compound_index` | int64 `[R]` | `[0,0,1]` | → `SourceCompound:SOURCE_COMPOUND_BATCH:source_smiles` (Source row m) |
+| `reaction_type` | int64 `[R,3]` | `[[10,0,0],[11,0,0],[10,1,0]]` | Pattern/rule definitions; product slot is a value, not a Compound FK |
+| `reaction_source_atom (CSR)` | int64; R variable-length lists | `[[0,1],[0,1,2],[4,5,6]]` | → `SourceCompound:SOURCE_COMPOUND_BATCH:source_graph.x` |
+| `reaction_retained_atom (CSR)` | int64; R variable-length lists | `[[1,2],[0,1],[3,4,5]]` | → `SourceCompound:SOURCE_COMPOUND_BATCH:source_graph.x` |
+| `reaction_conflict_index (COO)` | int64 `[2,N_conflict]` | `[[0,1],[1,0]]` | Both endpoints → `Reaction:REACTION_BATCH:reaction_type` |
+| `reaction_invalidation_index (COO)` | int64 `[2,N_invalidation]` | `[[0],[1]]` | Both endpoints → `Reaction:REACTION_BATCH:reaction_type` |
+
+`reaction_source_compound_index[r]=m` selects `source_smiles[m]`, descriptor row m, and
+atom rows `source_graph.ptr[m]:source_graph.ptr[m+1]`. The referenced ID is the
+Source row, not a ptr value or an atom row. Every matched/retained atom of reaction
+r must lie inside that Source's interval.
+
+### What each field means
+
+**reaction_type.** The columns are `[reaction_pattern_id, reaction_rule_id,
+product_molecule_id]`. For example row 2 `[10,1,0]` selects pattern ID 10, rule ID
+1, and product slot 0. The implementation calls the last field
+`product_molecule_id`, but it does not reference `annotations.compounds`.
+Pattern/rule definitions belong to the preparation Fragmenter; their schema is
+outside this Reaction section. The concrete reaction row additionally encodes
+which Source and which matched/retained atoms are involved.
+
+**reaction_source_atom (CSR).** One list per concrete reaction of the Source
+atom rows participating in its match. Reaction 1's list `[0,1,2]` points to
+`source_graph.x[[0,1,2]]`. Values are graph row indices, not atom-map labels.
+Do not apply the State-set ascending-order rule here: matched atom rows are
+stored by preparation and are not guaranteed to be numerically sorted.
+
+**reaction_retained_atom (CSR).** One list per concrete reaction of atoms retained
+in its product. Reaction 2 keeps atom rows `[3,4,5]` of Source 1. These represent
+retention relative to the Source, rather than new product-local atom numbering.
+Empty lists are supported.
+
+For each CSR relation there are R logical rows, so its physical pointer has
+length R+1 and its value array has length equal to the sum of list lengths.
+In this example both displayed relations have 8 values across 3 rows. The
+schema shows the single logical relation rather than two separate arrows.
+
+**reaction_conflict_index (COO).** Each column is `[reaction_i,reaction_j]`.
+`[[0,1],[1,0]]` has two columns: `(0,1)` and `(1,0)`. Reactions that modify a
+common Source bond conflict; both directions are stored. These are co-existence
+constraints, not edges indicating execution order.
+
+**reaction_invalidation_index (COO).** Each column is
+`[invalidating_reaction,invalidated_reaction]`. `[[0],[1]]` means reaction 0
+discards an atom needed by reaction 1's Source match. Here reaction 0 discards
+atom 0 and reaction 1 needs atom 0. This relation is directional; a reverse pair
+is not implied. Sets containing an invalidating pair are rejected regardless of
+reaction order. An empty pair relation has shape `[2,0]`.
+
+### One row read through its references
+
+| r | Source row | reaction_type | Matched atoms (CSR) | Retained atoms (CSR) |
+|---|---|---|---|---|
+| 0 | 0: CCO | [10,0,0] | [0,1] | [1,2] |
+| 1 | 0: CCO | [11,0,0] | [0,1,2] | [0,1] |
+| 2 | 1: CC(=O)O | [10,1,0] | [4,5,6] | [3,4,5] |
+
+For r=2, Source row 1 supplies the parent molecule; graph atom rows `[4,5,6]`
+supply its match features. The type values alone do not identify this concrete
+match. Two rows can share a pattern/rule/product slot but differ in Source or
+matched position.
+
+When collating Batches, Source IDs, Source atom IDs, and both endpoints of
+reaction pair relations are offset. Pattern/rule IDs and product slots remain
+unchanged. CSR boundaries are recomputed/offset as packing metadata. This is
+separate from State-set group-local reaction IDs, which remain group-local.
+
+The packed table does not itself store complete reaction edit objects or all
+atom-map labels. Pattern/rule definitions and preparation chemistry supply
+those semantics. Its tensors are the prepared model inputs and constraints.
+
+Implementation: [ReactionTensorData](reaction_tensor_data.py),
+[ReactionRelations](../../domain/fragment/reaction/ReactionRelations.py).
+
 ## 1. Sources, reactions, unique reaction sets, and Compounds
 
 A State is one reaction set within one branch group. Two execution orders for the
@@ -195,8 +317,8 @@ one Compound; an unmaterialized State has no Compound FK yet.
 
 ```mermaid
 erDiagram
-    SOURCE_MOLECULE ||--o{ REACTION_INSTANCE : owns
-    SOURCE_MOLECULE ||--o{ BRANCH_GROUP : conditions
+    SOURCE_COMPOUND ||--o{ REACTION_INSTANCE : owns
+    SOURCE_COMPOUND ||--o{ BRANCH_GROUP : conditions
     MAIN_ADDUCT ||--o{ BRANCH_GROUP : selects
     BRANCH_GROUP ||--o{ GROUP_REACTION : vocabulary
     REACTION_INSTANCE ||--o{ GROUP_REACTION : resolves_to
@@ -206,7 +328,7 @@ erDiagram
     COMPOUND o|--o{ REACTION_STATE : produced_by
     BRANCH_GROUP ||--o{ SPECTRUM : measured_at_CE
 
-    SOURCE_MOLECULE {
+    SOURCE_COMPOUND {
         bigint source_id PK
         string smiles
         graph molecular_graph
@@ -494,8 +616,8 @@ peak intensities and formula assignments, not duplicated as chemical properties.
 
 | Logical table/relation | Tensor/object representation |
 |---|---|
-| SOURCE_MOLECULE | `source_graph`, `source_smiles` |
-| REACTION_INSTANCE | `reactions.reaction_tree_index`, `reaction_type` |
+| SOURCE_COMPOUND | `source_graph`, `source_smiles` |
+| REACTION_INSTANCE | `reactions.reaction_source_compound_index`, `reaction_type` |
 | BRANCH_GROUP | `branch_group_tree_index`, `branch_group_adduct_index` |
 | GROUP_REACTION | Derived Source-reaction vocabulary; `reaction_registry_index()` resolves local to registry IDs |
 | REACTION_STATE | `states.candidate_branch_group_index`; V rows |

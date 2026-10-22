@@ -171,7 +171,7 @@ the last column is not an ID into `annotations.compounds`.
 The example gives reactions 0/1 to source 0 and reaction 2 to source 1.
 
 ```python
-reaction_tree_index = tensor([0, 0, 1])               # [R]
+reaction_source_compound_index = tensor([0, 0, 1])               # [R]
 reaction_type = tensor([[10, 0, 0], [11, 0, 0], [10, 1, 0]])  # [R, 3]
 reaction_source_atom_ptr = tensor([0, 2, 4, 6])        # [R+1]
 reaction_source_atom_index = tensor([0, 1, 1, 2, 4, 6])
