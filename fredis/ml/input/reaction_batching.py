@@ -7,6 +7,8 @@ Reaction IDs still refer to the original source reaction pool.
 
 from dataclasses import replace
 
+from .branch_group import BranchGroup
+
 import torch
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -215,11 +217,12 @@ def select_samples(data: SourceReactionStructure, indices) -> SourceReactionStru
         )
     return replace(
         data,
-        sample_tree_index=data.sample_tree_index[indices],
         collision_energy_eV=data.collision_energy_eV[indices],
         sample_branch_group_index=group_map[data.sample_branch_group_index[indices]],
-        branch_group_tree_index=data.branch_group_tree_index[group_indices],
-        branch_group_adduct_index=data.branch_group_adduct_index[group_indices],
+        branch_groups=BranchGroup(
+            data.branch_groups.source_compound_index[group_indices],
+            data.branch_groups.main_adduct_index[group_indices],
+        ),
         spectrum_batch=spectrum_batch,
         observations=annotations,
         states=replace(

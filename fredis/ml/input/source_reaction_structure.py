@@ -21,6 +21,8 @@ from ..mol.graph_builder import MolGraphBuilder
 from .reaction_tensor_data import ReactionTensorData
 from .reaction_set import ReactionSet
 from .source_compound import SourceCompound
+from .adduct_data import AdductData
+from .branch_group import BranchGroup
 from .reaction_context_data import ReactionContextData, TeacherData
 from .annotated_spectrum_data import AnnotatedSpectrumData
 
@@ -51,11 +53,13 @@ class SourceReactionStructure:
     # Concrete source-specific chemistry; all reaction IDs refer to this registry.
     reactions: ReactionTensorData
     # Group-local contexts and transitions referencing independent ReactionSet IDs.
-    states: ReactionContextData = field(default_factory=ReactionContextData, kw_only=True)
+    states: ReactionContextData = field(
+        default_factory=ReactionContextData, kw_only=True
+    )
     # Optional-in-content training labels referencing states and annotations.
     teacher: TeacherData = field(default_factory=TeacherData, kw_only=True)
-    # [S]: source molecule ID for each observed spectrum.
-    sample_tree_index: Tensor
+    adducts: AdductData = field(kw_only=True)
+    branch_groups: BranchGroup = field(kw_only=True)
     # [S], float32: collision energy in eV.
     collision_energy_eV: Tensor
     # Unique sets of batch-global reaction IDs; no group/Compound/teacher ownership.
@@ -76,23 +80,19 @@ class SourceReactionStructure:
     sample_branch_group_index: Tensor = field(
         default_factory=lambda: torch.empty(0, dtype=torch.long), kw_only=True
     )
-    branch_group_tree_index: Tensor = field(
-        default_factory=lambda: torch.empty(0, dtype=torch.long), kw_only=True
-    )
-    # [G], int64: main adduct for each branch group.
-    branch_group_adduct_index: Tensor = field(
-        default_factory=lambda: torch.empty(0, dtype=torch.long), kw_only=True
-    )
 
     def __post_init__(self, observations):
         if observations and self.spectrum_batch is not None:
             annotation = AnnotatedSpectrumData.from_runtime(
-                self.spectrum_batch, observations, self.sample_tree_index,
-                self.sample_branch_group_index, self.formula_elements,
+                self.spectrum_batch,
+                observations,
+                self.sample_branch_group_index,
+                self.formula_elements,
                 self.states.candidate_fragment_index,
                 context_reaction_set_index=self.states.candidate_reaction_set_index,
+                adducts=self.adducts,
             )
-            annotation.validate()
+            annotation.validate(self.adducts)
             object.__setattr__(self, "annotations", annotation)
 
     @property
@@ -140,7 +140,9 @@ class SourceReactionStructure:
             if self.spectrum_batch is not None
             else None
         )
-        return replace(self, states=states, teacher=TeacherData(), spectrum_batch=runtime)
+        return replace(
+            self, states=states, teacher=TeacherData(), spectrum_batch=runtime
+        )
 
     def __getstate__(self):
         """Serialize normalized tables plus topology; omit expanded runtime caches.
@@ -178,11 +180,13 @@ class SourceReactionStructure:
                 node_graph=Batch.from_data_list([graphs[i] for i in occurrence]),
                 compounds=tuple(a.compounds.compounds[i] for i in occurrence),
             )
-            formulas = a.ions.formula_index[a.ions.runtime_index]
+            formulas = a.formula_explanations.formula_index[
+                a.runtime_explanations.formula_explanation_index
+            ]
             batch = replace(
                 self.spectrum_batch,
                 decoded=decoded,
-                state_formula_tensor=a.formulas.composition[formulas],
+                state_formula_tensor=a.formulas.composition[formulas].to(torch.float32),
                 state_mz=a.formulas.mz[formulas],
                 target_intensity=self.teacher.spectrum_targets(a),
                 node_smiles=tuple(a.compounds.smiles[i] for i in occurrence),
@@ -192,7 +196,18 @@ class SourceReactionStructure:
     @property
     def sample_annotations(self):
         """Viewer dictionaries derived from normalized measurements and assignments."""
-        return self.annotations.export_samples() if self.annotations is not None else ()
+        return (
+            self.annotations.export_samples(
+                self.adducts, self.branch_groups.main_adduct_index
+            )
+            if self.annotations is not None
+            else ()
+        )
+
+    @property
+    def sample_tree_index(self):
+        """Derived Spectrum -> BranchGroup -> SourceCompound view."""
+        return self.branch_groups.source_compound_index[self.sample_branch_group_index]
 
     @property
     def num_samples(self) -> int:
@@ -200,11 +215,7 @@ class SourceReactionStructure:
 
     @property
     def num_branch_groups(self) -> int:
-        return (
-            self.branch_group_tree_index.numel()
-            if self.branch_group_tree_index.numel()
-            else self.num_samples
-        )
+        return len(self.branch_groups)
 
     @property
     def device(self) -> torch.device:
@@ -222,39 +233,155 @@ class SourceReactionStructure:
 
     def validate(self):
         """Validate the canonical tables and cross-table foreign keys."""
+        self.adducts.validate()
+        self.branch_groups.validate(len(self.source_smiles), self.adducts)
         self.reaction_sets.validate(self.reactions.reaction_source_compound_index)
         if len(self.source_smiles) != self.source_graph.num_graphs:
             raise ValueError("SourceCompound SMILES and graph rows must match")
 
         def check(values, size, name):
-            if values.dtype != torch.long or (values.numel() and (
-                int(values.min()) < 0 or int(values.max()) >= size
-            )):
+            if values.dtype != torch.long or (
+                values.numel() and (int(values.min()) < 0 or int(values.max()) >= size)
+            ):
                 raise ValueError(f"Invalid foreign key: {name}")
 
+        check(self.sample_branch_group_index, self.num_branch_groups, "spectrum->group")
+        if (
+            self.sample_branch_group_index.ndim != 1
+            or self.collision_energy_eV.dtype != torch.float32
+            or self.collision_energy_eV.shape != self.sample_branch_group_index.shape
+        ):
+            raise ValueError("Spectrum group and collision energy columns must match")
         states = self.states
         groups = states.candidate_branch_group_index
         sets = states.candidate_reaction_set_index
-        check(self.reactions.reaction_source_compound_index, len(self.source_smiles), "reaction->SourceCompound")
-        check(self.branch_group_tree_index, len(self.source_smiles), "group->SourceCompound")
+        check(
+            self.reactions.reaction_source_compound_index,
+            len(self.source_smiles),
+            "reaction->SourceCompound",
+        )
+        check(
+            self.branch_groups.source_compound_index,
+            len(self.source_smiles),
+            "group->SourceCompound",
+        )
         check(groups, self.num_branch_groups, "context->group")
         check(sets, len(self.reaction_sets), "context->ReactionSet")
-        if groups.shape != sets.shape or states.candidate_fragment_index.shape != sets.shape:
+        if (
+            groups.shape != sets.shape
+            or states.candidate_fragment_index.shape != sets.shape
+        ):
             raise ValueError("Context columns must have matching shapes")
-        if groups.numel() and torch.unique(torch.stack((groups, sets), 1), dim=0).shape[0] != groups.numel():
+        if (
+            groups.numel()
+            and torch.unique(torch.stack((groups, sets), 1), dim=0).shape[0]
+            != groups.numel()
+        ):
             raise ValueError("A group may reference a ReactionSet only once")
         ptr, reactions = self.candidate_reactions()
         owner = torch.repeat_interleave(groups, ptr[1:] - ptr[:-1])
-        if not torch.equal(self.reactions.reaction_source_compound_index[reactions],
-                           self.branch_group_tree_index[owner]):
-            raise ValueError("ReactionSet belongs to a different SourceCompound than its context")
+        if not torch.equal(
+            self.reactions.reaction_source_compound_index[reactions],
+            self.branch_groups.source_compound_index[owner],
+        ):
+            raise ValueError(
+                "ReactionSet belongs to a different SourceCompound than its context"
+            )
         check(states.candidate_index, sets.numel(), "active->context")
         if not torch.equal(states.branch_group_index, groups[states.candidate_index]):
             raise ValueError("Active context branch groups disagree")
         if self.annotations is not None:
-            self.annotations.validate()
+            self.annotations.validate(self.adducts)
+            a = self.annotations
+            if not torch.equal(
+                a.spectra.branch_group_index, self.sample_branch_group_index
+            ):
+                raise ValueError(
+                    "Annotation spectra must reference the sample BranchGroups"
+                )
+            if not torch.equal(
+                a.spectra.collision_energy.float(), self.collision_energy_eV
+            ):
+                raise ValueError(
+                    "Annotation collision energy differs from model inputs"
+                )
+            check(
+                a.occurrences.branch_group_index,
+                self.num_branch_groups,
+                "occurrence->group",
+            )
+            # Each runtime explanation must use a fragment adduct allowed by its main adduct.
+            runtime = a.runtime_explanations
+            fragments = a.formula_explanations.fragment_ion_adduct_index[
+                runtime.formula_explanation_index
+            ]
+            mains = self.branch_groups.main_adduct_index[
+                self.sample_branch_group_index[runtime.sample_index]
+            ]
+            for main in mains.unique().tolist():
+                start, stop = self.adducts.fragment_ion_adduct_ptr[main : main + 2]
+                allowed = self.adducts.fragment_ion_adduct_index[start:stop]
+                if not bool(torch.isin(fragments[mains == main], allowed).all()):
+                    raise ValueError(
+                        "Fragment adduct is not allowed by the BranchGroup main adduct"
+                    )
+            if self.spectrum_batch is not None:
+                batch = self.spectrum_batch
+                explanations = a.formula_explanations
+                ids = runtime.formula_explanation_index
+                if not torch.equal(runtime.sample_index, batch.state_sample_index):
+                    raise ValueError("Runtime explanation spectrum references disagree")
+                expected_compounds = a.occurrences.compound_index[
+                    batch.state_node_index
+                ]
+                if not torch.equal(
+                    explanations.compound_index[ids], expected_compounds
+                ):
+                    raise ValueError("Runtime explanation Compound references disagree")
+                expected_adducts = torch.tensor(
+                    [
+                        self.adducts.fragment_ion_adducts.index(v)
+                        for v in batch.ion_type_strs
+                    ],
+                    dtype=torch.long,
+                    device=ids.device,
+                )[batch.state_adduct_index]
+                if not torch.equal(fragments, expected_adducts):
+                    raise ValueError(
+                        "Runtime explanation fragment-adduct references disagree"
+                    )
+                if not torch.equal(
+                    self.adducts.hydrogen_shifts[
+                        explanations.hydrogen_shift_index[ids]
+                    ],
+                    batch.state_hydrogen_shift,
+                ):
+                    raise ValueError(
+                        "Runtime explanation hydrogen-shift references disagree"
+                    )
+            admissible = set(
+                zip(
+                    runtime.sample_index.tolist(),
+                    runtime.formula_explanation_index.tolist(),
+                )
+            )
+            for sample in range(self.num_samples):
+                first, last = a.spectra.peak_ptr[sample : sample + 2]
+                start = a.assignments.formula_explanation_ptr[first]
+                stop = a.assignments.formula_explanation_ptr[last]
+                if any(
+                    (sample, row) not in admissible
+                    for row in a.assignments.formula_explanation_index[
+                        start:stop
+                    ].tolist()
+                ):
+                    raise ValueError(
+                        "Peak explanation is not available in its spectrum"
+                    )
             if not torch.equal(self.annotations.contexts.reaction_set_index, sets):
-                raise ValueError("Annotation contexts must reference the canonical ReactionSets")
+                raise ValueError(
+                    "Annotation contexts must reference the canonical ReactionSets"
+                )
 
     def save(self, path: str | Path) -> None:
         self.validate()
@@ -284,9 +411,17 @@ class SourceReactionStructure:
     ) -> SourceReactionStructure:
         if not structures:
             raise ValueError("Cannot collate an empty batch")
-        if any(item.formula_elements != structures[0].formula_elements for item in structures):
+        if any(
+            item.formula_elements != structures[0].formula_elements
+            for item in structures
+        ):
             raise ValueError("Cannot collate different formula element vocabularies")
-        sample_trees, energies = [], []
+        if any(
+            not structures[0].adducts.same_vocabulary(item.adducts)
+            for item in structures
+        ):
+            raise ValueError("Cannot collate different adduct rule vocabularies")
+        energies = []
         state_samples, next_rows, eos = [], [], []
         atom_offset = reaction_offset = tree_offset = sample_offset = group_offset = (
             state_offset
@@ -324,7 +459,9 @@ class SourceReactionStructure:
                 item.annotations.spectra.mz.numel()
                 if item.annotations is not None
                 else (
-                    int(item.teacher.peak_index.max()) + 1 if item.teacher.peak_index.numel() else 0
+                    int(item.teacher.peak_index.max()) + 1
+                    if item.teacher.peak_index.numel()
+                    else 0
                 )
             )
             reaction_offsets.append(reaction_offset)
@@ -344,7 +481,9 @@ class SourceReactionStructure:
             )
             parents.append(item.states.transition_parent_index + state_offset)
             children.append(item.states.transition_child_index + state_offset)
-            added_reactions.append(item.states.transition_reaction_index + reaction_offset)
+            added_reactions.append(
+                item.states.transition_reaction_index + reaction_offset
+            )
             candidate_nodes.append(
                 torch.where(
                     item.states.candidate_fragment_index >= 0,
@@ -363,7 +502,6 @@ class SourceReactionStructure:
             if item.spectrum_batch is not None:
                 spectrum_batches.append(item.spectrum_batch)
                 node_offset += len(item.spectrum_batch.decoded.compounds)
-            sample_trees.append(item.sample_tree_index + tree_offset)
             energies.append(item.collision_energy_eV)
             state_samples.append(item.states.branch_group_index + group_offset)
             for ptr, data, dest in (
@@ -376,25 +514,37 @@ class SourceReactionStructure:
                 for start, stop in zip(ptr[:-1], ptr[1:]):
                     dest.append((data[start:stop] + reaction_offset).tolist())
             sample_groups.append(item.sample_branch_group_index + group_offset)
-            group_trees.append(item.branch_group_tree_index + tree_offset)
-            group_adducts.append(item.branch_group_adduct_index)
+            group_trees.append(item.branch_groups.source_compound_index + tree_offset)
+            group_adducts.append(item.branch_groups.main_adduct_index)
             for row in range(item.states.branch_group_index.numel()):
                 a, b = item.states.next_ptr[row : row + 2]
-                valid_rows.append((item.states.next_reaction_index[a:b] + reaction_offset).tolist())
+                valid_rows.append(
+                    (item.states.next_reaction_index[a:b] + reaction_offset).tolist()
+                )
                 valid_next.extend(
-                    (item.states.next_state_index[a:b] + transition_state_offset).tolist()
+                    (
+                        item.states.next_state_index[a:b] + transition_state_offset
+                    ).tolist()
                 )
                 a, b = item.teacher.negative_reaction_ptr[row : row + 2]
                 negative_rows.append(
-                    (item.teacher.negative_reaction_index[a:b] + reaction_offset).tolist()
+                    (
+                        item.teacher.negative_reaction_index[a:b] + reaction_offset
+                    ).tolist()
                 )
-            transition_state_groups.append(item.states.candidate_branch_group_index + group_offset)
+            transition_state_groups.append(
+                item.states.candidate_branch_group_index + group_offset
+            )
             context_set_indices.append(item.states.candidate_reaction_set_index)
-            teacher_transition_states.append(item.states.candidate_index + transition_state_offset)
+            teacher_transition_states.append(
+                item.states.candidate_index + transition_state_offset
+            )
             transition_state_offset += item.states.candidate_branch_group_index.numel()
             for peak in range(item.teacher.peak_path_ptr.numel() - 1):
                 peak_paths.append([])
-                peak_groups.append(int(item.teacher.peak_branch_group_index[peak]) + group_offset)
+                peak_groups.append(
+                    int(item.teacher.peak_branch_group_index[peak]) + group_offset
+                )
                 for path in range(
                     int(item.teacher.peak_path_ptr[peak]),
                     int(item.teacher.peak_path_ptr[peak + 1]),
@@ -403,7 +553,10 @@ class SourceReactionStructure:
                     a, b = item.teacher.path_step_ptr[path : path + 2]
                     path_steps.append(
                         [
-                            (int(state) + item_state_offset, int(reaction) + reaction_offset)
+                            (
+                                int(state) + item_state_offset,
+                                int(reaction) + reaction_offset,
+                            )
                             for (state, reaction) in zip(
                                 item.teacher.path_step_state_index[a:b],
                                 item.teacher.path_step_reaction_index[a:b],
@@ -422,48 +575,59 @@ class SourceReactionStructure:
         reaction_sets, set_maps = ReactionSet.collate(
             [item.reaction_sets for item in structures], reaction_offsets
         )
-        context_set_ids = torch.cat([
-            mapping[ids] for mapping, ids in zip(set_maps, context_set_indices)
-        ])
+        context_set_ids = torch.cat(
+            [mapping[ids] for mapping, ids in zip(set_maps, context_set_indices)]
+        )
         peak_ptr, unused = csr(peak_paths)
-        path_ptr, path_states = csr([[state for state, _ in path] for path in path_steps])
+        path_ptr, path_states = csr(
+            [[state for state, _ in path] for path in path_steps]
+        )
         path_reactions = torch.tensor(
             [reaction for path in path_steps for _, reaction in path], dtype=torch.long
         )
         spectrum_batch = None
         if spectrum_batches:
             if len(spectrum_batches) != len(structures):
-                raise ValueError("Cannot mix reaction-only and spectrum_batch structures")
+                raise ValueError(
+                    "Cannot mix reaction-only and spectrum_batch structures"
+                )
             from ..specgen.fragment_spectrum_model import collate_spectrum_model_batches
 
-            spectrum_batch = collate_spectrum_model_batches(spectrum_batches, reaction_offsets)
+            spectrum_batch = collate_spectrum_model_batches(
+                spectrum_batches, reaction_offsets
+            )
         return cls(
             formula_elements=structures[0].formula_elements,
-            source_compounds=SourceCompound.collate([item.source_compounds for item in structures]),
+            source_compounds=SourceCompound.collate(
+                [item.source_compounds for item in structures]
+            ),
             reactions=ReactionTensorData.collate(
                 [item.reactions for item in structures],
                 [item.source_graph.num_nodes for item in structures],
                 [item.source_graph.num_graphs for item in structures],
             ),
-            sample_tree_index=torch.cat(sample_trees),
             collision_energy_eV=torch.cat(energies),
             spectrum_batch=spectrum_batch,
             reaction_sets=reaction_sets,
             sample_branch_group_index=torch.cat(sample_groups),
-            branch_group_tree_index=torch.cat(group_trees),
-            branch_group_adduct_index=torch.cat(group_adducts),
+            adducts=structures[0].adducts,
+            branch_groups=BranchGroup(torch.cat(group_trees), torch.cat(group_adducts)),
             annotations=(
                 AnnotatedSpectrumData.collate(
                     [item.annotations for item in structures],
-                    [item.source_graph.num_graphs for item in structures],
                     [item.num_branch_groups for item in structures],
                     set_maps,
+                    structures[0].adducts,
                 )
                 if all(item.annotations is not None for item in structures)
                 else None
             ),
-            max_reaction_role_count=max((item.max_reaction_role_count for item in structures)),
-            source_atom_capacity=max((item.source_atom_capacity for item in structures)),
+            max_reaction_role_count=max(
+                (item.max_reaction_role_count for item in structures)
+            ),
+            source_atom_capacity=max(
+                (item.source_atom_capacity for item in structures)
+            ),
             states=ReactionContextData(
                 branch_group_index=torch.cat(state_samples),
                 transition_parent_index=torch.cat(parents),
@@ -503,7 +667,8 @@ def prepare_source_reactions(
     graph_builder: MolGraphBuilder,
     # [S], float32: collision energy in eV.
     collision_energy_eV: Tensor,
-    branch_group_adduct_index: Tensor,
+    main_adduct_index: Tensor,
+    adducts: AdductData,
     max_reaction_count: int,
     teacher_paths=None,
     sample_branch_group_index: Tensor | None = None,
@@ -520,7 +685,10 @@ def prepare_source_reactions(
     if relations is None:
         relations = ReactionRelations.from_reactions(reactions)
     reaction_index = {reaction: i for i, reaction in enumerate(reactions)}
-    maps = {atom.GetAtomMapNum(): i for i, atom in enumerate(graph_builder.graph_atoms(source))}
+    maps = {
+        atom.GetAtomMapNum(): i
+        for i, atom in enumerate(graph_builder.graph_atoms(source))
+    }
     raw_graph = graph_builder.build(source)
 
     collision_energy_eV = torch.as_tensor(collision_energy_eV, dtype=torch.float32)
@@ -529,13 +697,15 @@ def prepare_source_reactions(
     sample_count = collision_energy_eV.shape[0]
     if sample_branch_group_index is None:
         sample_branch_group_index = torch.arange(sample_count, dtype=torch.long)
-    sample_branch_group_index = torch.as_tensor(sample_branch_group_index, dtype=torch.long)
+    sample_branch_group_index = torch.as_tensor(
+        sample_branch_group_index, dtype=torch.long
+    )
     if sample_branch_group_index.shape != (sample_count,):
         raise ValueError("sample_branch_group_index must have one entry per spectrum")
     group_count = int(sample_branch_group_index.max()) + 1 if sample_count else 0
-    branch_group_adduct_index = torch.as_tensor(branch_group_adduct_index, dtype=torch.long)
-    if branch_group_adduct_index.shape != (group_count,):
-        raise ValueError("branch_group_adduct_index must have one entry per branch group")
+    main_adduct_index = torch.as_tensor(main_adduct_index, dtype=torch.long)
+    if main_adduct_index.shape != (group_count,):
+        raise ValueError("main_adduct_index must have one entry per branch group")
 
     owners = []
     states = []
@@ -559,7 +729,11 @@ def prepare_source_reactions(
         edge_set = set()
 
         def add_state(state, parent=-1, reaction=-1):
-            key = tuple(sorted(reaction_index[a] for a in state.reactions)) if state else ()
+            key = (
+                tuple(sorted(reaction_index[a] for a in state.reactions))
+                if state
+                else ()
+            )
             if key in known:
                 return known[key]
             row = len(states)
@@ -575,7 +749,9 @@ def prepare_source_reactions(
 
         add_state(None)
         if teacher_paths is not None:
-            for sample in (sample_branch_group_index == group).nonzero().flatten().tolist():
+            for sample in (
+                (sample_branch_group_index == group).nonzero().flatten().tolist()
+            ):
                 spectra = teacher_paths[sample]
                 if (
                     spectra
@@ -603,7 +779,9 @@ def prepare_source_reactions(
                             child_row = add_state(child, parent, reaction_id)
                             if child_row == parent:
                                 continue
-                            outgoing[parent].setdefault(reaction_id, set()).add(child_row)
+                            outgoing[parent].setdefault(reaction_id, set()).add(
+                                child_row
+                            )
                             edge_set.add((parent, child_row, reaction_id))
                             steps.append((parent, reaction_id))
                             parent = child_row
@@ -627,10 +805,13 @@ def prepare_source_reactions(
     transition_state_owners = list(owners)
     transition_state_lookup = {
         (owner, tuple(state)): row
-        for row, (owner, state) in enumerate(zip(transition_state_owners, transition_states))
+        for row, (owner, state) in enumerate(
+            zip(transition_state_owners, transition_states)
+        )
     }
     teacher_transition_states = [
-        transition_state_lookup[(owner, tuple(state))] for owner, state in zip(owners, states)
+        transition_state_lookup[(owner, tuple(state))]
+        for owner, state in zip(owners, states)
     ]
     valid_effects = {}
     for row, (owner, state) in enumerate(zip(owners, states)):
@@ -644,11 +825,16 @@ def prepare_source_reactions(
                 if relations.rejection(raw):
                     continue
                 sequence = ReactionSequence(reactions[i] for i in raw)
-                if not sequence.retained_atom_maps or len(sequence.reactions) > max_reaction_count:
+                if (
+                    not sequence.retained_atom_maps
+                    or len(sequence.reactions) > max_reaction_count
+                ):
                     continue
                 if sequence.effect_key not in valid_effects:
                     if valid_reaction_sequences is not None:
-                        valid_effects[sequence.effect_key] = sequence in valid_reaction_sequences
+                        valid_effects[sequence.effect_key] = (
+                            sequence in valid_reaction_sequences
+                        )
                     else:
                         try:
                             valid_effects[sequence.effect_key] = (
@@ -662,7 +848,9 @@ def prepare_source_reactions(
                             valid_effects[sequence.effect_key] = False
                 if not valid_effects[sequence.effect_key]:
                     continue
-                normalized = tuple(sorted(reaction_index[a] for a in sequence.reactions))
+                normalized = tuple(
+                    sorted(reaction_index[a] for a in sequence.reactions)
+                )
                 key = (owner, normalized)
                 if key not in transition_state_lookup:
                     transition_state_lookup[key] = len(transition_states)
@@ -694,22 +882,29 @@ def prepare_source_reactions(
     path_step_reaction_index = torch.tensor(
         [reaction for path in flattened_paths for _, reaction in path], dtype=torch.long
     )
-    transition_parent = torch.tensor([a for a, _, _ in positive_edges], dtype=torch.long)
+    transition_parent = torch.tensor(
+        [a for a, _, _ in positive_edges], dtype=torch.long
+    )
     transition_child = torch.tensor([b for _, b, _ in positive_edges], dtype=torch.long)
-    transition_reaction = torch.tensor([c for _, _, c in positive_edges], dtype=torch.long)
+    transition_reaction = torch.tensor(
+        [c for _, _, c in positive_edges], dtype=torch.long
+    )
 
     graph = Batch.from_data_list([raw_graph])
     return SourceReactionStructure(
         source_compounds=SourceCompound(graph, (source.smiles,), graph_builder.symbols),
         reactions=ReactionTensorData.from_reactions(reactions, maps, relations),
-        sample_tree_index=torch.zeros(sample_count, dtype=torch.long),
         collision_energy_eV=collision_energy_eV,
         reaction_sets=reaction_sets,
         sample_branch_group_index=sample_branch_group_index,
-        branch_group_tree_index=torch.zeros(group_count, dtype=torch.long),
-        branch_group_adduct_index=branch_group_adduct_index,
+        adducts=adducts,
+        branch_groups=BranchGroup(
+            torch.zeros(group_count, dtype=torch.long), main_adduct_index
+        ),
         source_atom_capacity=len(maps),
-        max_reaction_role_count=max((len(a.source_atom_maps) for a in reactions), default=0),
+        max_reaction_role_count=max(
+            (len(a.source_atom_maps) for a in reactions), default=0
+        ),
         states=ReactionContextData(
             branch_group_index=torch.tensor(owners),
             transition_parent_index=transition_parent,
@@ -721,9 +916,13 @@ def prepare_source_reactions(
             next_ptr=valid_ptr,
             next_reaction_index=valid_reaction_index,
             next_state_index=torch.tensor(valid_next, dtype=torch.long),
-            candidate_branch_group_index=torch.tensor(transition_state_owners, dtype=torch.long),
+            candidate_branch_group_index=torch.tensor(
+                transition_state_owners, dtype=torch.long
+            ),
             candidate_reaction_set_index=context_set_ids,
-            candidate_fragment_index=torch.full((len(transition_states),), -1, dtype=torch.long),
+            candidate_fragment_index=torch.full(
+                (len(transition_states),), -1, dtype=torch.long
+            ),
             candidate_index=torch.tensor(teacher_transition_states, dtype=torch.long),
         ),
         teacher=TeacherData(
@@ -762,7 +961,9 @@ def save_fragment_tree_structure(
         dict(
             schema=SCHEMA,
             structure=structure.to("cpu"),
-            metadata={k: v for k, v in (metadata or {}).items() if k != "sample_annotations"},
+            metadata={
+                k: v for k, v in (metadata or {}).items() if k != "sample_annotations"
+            },
         ),
         output_path,
     )

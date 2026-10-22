@@ -61,7 +61,7 @@ at scoring time. There is no persisted group-local membership table.
 [CompoundBatch](compound_batch.py) stores only `compounds: tuple[mmkit.Compound,...]`,
 `graph`, and `generating_reaction_sets_ptr/index`; SMILES is a derived view.
 [AnnotatedSpectrumData](annotated_spectrum_data.py) holds spectra, unique
-Compounds, charged formulas, ions, and peak assignments. Same-structure Compounds
+Compounds, charged formulas, formula explanations, and peak assignments. Same-structure Compounds
 share one graph and identity. Within a group they share a materialized node,
 even when reached through different ReactionSets.
 
@@ -78,6 +78,31 @@ Repeated groups do not duplicate a pair. The same empty set may occur under more
 than one Compound because its Source context is held by the reference side.
 Observation intensity and formula assignment targets are derived without copying
 measurements into canonical chemical tables.
+
+## Formula and peak annotation tables
+
+`structure.adducts` stores `AdductData`: `main_adducts`, `fragment_ion_adducts`,
+`fragment_ion_adduct_ptr/index` (one row per main adduct), and signed
+`hydrogen_shifts`. `structure.branch_groups` stores the unique Source/main-adduct
+pairs, referencing this shared registry. Collation requires the same ordered
+adduct rules; integer embedding IDs must retain their meanings.
+
+- `annotations.formulas`: FormulaData with int64 composition, float64 theoretical
+  mz, and bool valid. It does not own a structural-explanation CSR.
+- `annotations.formula_explanations`: FormulaExplanationData with int64
+  formula_index, compound_index, fragment_ion_adduct_index, hydrogen_shift_index.
+- `annotations.assignments`: PeakAssignmentData with only
+  formula_explanation_ptr/index, one CSR row per observed peak in SpectrumData order.
+  Each peak can reference explanations of several formulas or several explanations
+  of one formula, without duplicating Formula IDs on the assignment table.
+- `annotations.runtime_explanations`: separate runtime row references into
+  FormulaExplanationData and SpectrumData, used to restore model-input views.
+
+SpectrumData stores branch_group_index, precursor_mz, collision_energy, metadata,
+and peak_ptr with aligned mz/intensity/precursor arrays. Source and main adduct
+are obtained through BranchGroup. The original observed adduct label is kept in
+metadata["observed_adduct"] when supplied; exported viewer dictionaries derive
+mainAdduct through the group. Annotation tables remain independent of TeacherData.
 
 ## TeacherData
 
@@ -103,11 +128,11 @@ shared. The fields are:
 | `reaction_sets` | Independent membership table |
 | `states` | Group-local context/transition foreign keys |
 | `teacher` | Context-specific labels and paths |
-| `sample_tree_index int64 [S]` | Spectrum -> SourceCompound row |
+| `sample_tree_index int64 [S]` (derived) | Spectrum -> BranchGroup -> SourceCompound; not stored |
 | `collision_energy_eV float32 [S]` | Spectrum CE in eV |
 | `sample_branch_group_index int64 [S]` | Spectrum -> branch group |
-| `branch_group_tree_index int64 [G]` | Group -> SourceCompound row |
-| `branch_group_adduct_index int64 [G]` | Group -> model main-adduct vocabulary ID |
+| `branch_groups` | BranchGroup with source_compound_index and main_adduct_index |
+| `adducts` | Shared AdductData main/fragment labels, membership CSR, signed hydrogen shifts |
 | `annotations` | Normalized measured/chemical tables, or None |
 | `observations` | Initialization-only dictionaries; normalized into annotations |
 | `formula_elements` | Formula element-column order, excluding final charge |

@@ -149,7 +149,7 @@ class SourceReactionFeatureModel(nn.Module):
         )
         source_embeddings = source if source is not None else static_features[1]
         collision_energy = self.collision_energy_encoder(data.collision_energy_eV)
-        group_adduct_index = data.branch_group_adduct_index
+        group_adduct_index = data.branch_groups.main_adduct_index
         condition = self.main_adduct_projection(self.adduct_encoder(group_adduct_index))
         # Static reaction tokens are shared by all CE/adduct conditions.
         pool = build_reaction_pool(reaction, data)

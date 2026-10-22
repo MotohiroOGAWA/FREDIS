@@ -1,5 +1,6 @@
 """Independent set identity, reference remapping, and context separation."""
 
+from fredis.ml.input.adduct_data import AdductData
 from dataclasses import fields
 
 import pytest
@@ -114,7 +115,7 @@ def test_shared_empty_set_preserves_distinct_source_compounds():
             reactions=(),
             graph_builder=generator.mol_encoder.graph_builder,
             collision_energy_eV=torch.tensor([10.0]),
-            branch_group_adduct_index=torch.tensor([0]),
+            main_adduct_index=torch.tensor([0]), adducts=AdductData.from_fragmenter(generator.fragmenter),
             max_reaction_count=1,
         )
         for smiles in ("CCO", "CC(=O)O")
@@ -123,5 +124,5 @@ def test_shared_empty_set_preserves_distinct_source_compounds():
     combined.validate()
     assert combined.reaction_sets.rows() == [[]]
     assert combined.states.candidate_reaction_set_index.tolist() == [0, 0]
-    assert combined.branch_group_tree_index.tolist() == [0, 1]
+    assert combined.branch_groups.source_compound_index.tolist() == [0, 1]
     assert combined.source_compounds.source_smiles == ("CCO", "CC(=O)O")

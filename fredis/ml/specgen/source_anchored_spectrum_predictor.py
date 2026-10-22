@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections.abc import Sequence
+from fredis.ml.input.adduct_data import AdductData
 import torch
 from torch import nn
 from fredis.domain.fragment.fragmenter import Fragmenter
@@ -269,7 +270,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                     collision_energy_eV=energies,
                     max_reaction_count=self.feature_model.max_reaction_count,
                     sample_branch_group_index=torch.tensor(sample_group),
-                    branch_group_adduct_index=group_adduct,
+                    main_adduct_index=group_adduct,
+                    adducts=AdductData.from_fragmenter(self.fragmenter),
                 )
             )
             unique_sources.append(source)
@@ -395,7 +397,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 selection.decoded,
                 unique_sources,
                 reactions,
-                chunk.branch_group_tree_index,
+                chunk.branch_groups.source_compound_index,
                 self.mol_encoder.graph_builder,
                 effect_cache=effect_cache,
             )

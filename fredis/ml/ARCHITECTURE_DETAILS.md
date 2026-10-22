@@ -46,9 +46,9 @@ A and B are illustrative structures. A's two CE conditions share structural
 search; molecular graphs are not duplicated just because CE differs.
 
 ```python
-sample_tree_index         = [0, 0, 1]  # [B=3]
+sample_tree_index         = [0, 0, 1]  # [B=3], derived through BranchGroup
 sample_branch_group_index = [0, 0, 1]  # [B=3]
-branch_group_tree_index   = [0, 1]     # [G=2]
+branch_groups.source_compound_index = [0, 1]     # [G=2]
 ```
 
 | Symbol | Setting or meaning | Example |

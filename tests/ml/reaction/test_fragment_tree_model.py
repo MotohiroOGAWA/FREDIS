@@ -1,3 +1,4 @@
+from fredis.ml.input.adduct_data import AdductData
 import math
 from unittest.mock import patch
 import pytest
@@ -97,12 +98,12 @@ def test_multi_depth_states_and_cross_ce_negative_protection():
     deep=((*shallow,(sequence,reactions[second])))
     data=prepare_source_reactions(source=source,reactions=reactions,graph_builder=generator.mol_encoder.graph_builder,
         collision_energy_eV=torch.tensor([10.,40.]),max_reaction_count=3,
-        sample_branch_group_index=torch.tensor([0,0]),branch_group_adduct_index=torch.tensor([0]),
+        sample_branch_group_index=torch.tensor([0,0]),main_adduct_index=torch.tensor([0]), adducts=AdductData.from_fragmenter(generator.fragmenter),
         teacher_paths=[[[shallow]],[[deep]]])
     assert data.collision_energy_eV.shape == (2,)
     assert data.collision_energy_eV.dtype == torch.float32
-    assert data.branch_group_adduct_index.dtype == torch.int64
-    assert data.branch_group_adduct_index[data.sample_branch_group_index].tolist() == [0, 0]
+    assert data.branch_groups.main_adduct_index.dtype == torch.int64
+    assert data.branch_groups.main_adduct_index[data.sample_branch_group_index].tolist() == [0, 0]
     assert {0, 1, 2} <= set(data.state_reaction_count.tolist())
     prefix_row = next((row for (row, depth) in enumerate(data.state_reaction_count.tolist()) if depth == 1))
     (start, stop) = data.teacher.negative_reaction_ptr[prefix_row:prefix_row + 2]

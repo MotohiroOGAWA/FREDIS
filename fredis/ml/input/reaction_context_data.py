@@ -128,19 +128,27 @@ class TeacherData(TensorTable):
         assignment = annotations.assignments
         peaks = torch.repeat_interleave(
             torch.arange(spectra.mz.numel(), device=target.device),
-            assignment.formula_ptr[1:] - assignment.formula_ptr[:-1],
+            assignment.formula_explanation_ptr[1:]
+            - assignment.formula_explanation_ptr[:-1],
         )
         samples = torch.repeat_interleave(
             torch.arange(scount, device=target.device),
             spectra.peak_ptr[1:] - spectra.peak_ptr[:-1],
         )
-        key = samples[peaks] * fcount + assignment.formula_index
+        key = (
+            samples[peaks] * fcount
+            + annotations.formula_explanations.formula_index[
+                assignment.formula_explanation_index
+            ]
+        )
         target.scatter_reduce_(
             0, key, spectra.intensity[peaks], reduce="amax", include_self=True
         )
-        ions = annotations.ions
-        formula = ions.formula_index[ions.runtime_index]
+        ions = annotations.formula_explanations
+        formula = ions.formula_index[
+            annotations.runtime_explanations.formula_explanation_index
+        ]
         return (
-            target[ions.runtime_sample_index * fcount + formula]
+            target[annotations.runtime_explanations.sample_index * fcount + formula]
             * formulas.valid[formula]
         )

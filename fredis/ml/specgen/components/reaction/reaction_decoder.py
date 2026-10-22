@@ -29,11 +29,7 @@ def build_reaction_pool(reaction_h: Tensor, data: object) -> ReactionPool:
     s = data.num_branch_groups
     a = reaction_h.shape[0]
     device = reaction_h.device
-    trees = (
-        data.branch_group_tree_index
-        if data.branch_group_tree_index.numel()
-        else data.sample_tree_index
-    )
+    trees = data.branch_groups.source_compound_index
     eligible = data.reactions.reaction_source_compound_index[None, :] == trees[:, None]
     width = int(eligible.sum(1).max().item()) if s else 0
     ids = torch.argsort(eligible.to(torch.int8), dim=1, descending=True, stable=True)[

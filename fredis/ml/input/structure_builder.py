@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from collections.abc import Sequence
 from types import SimpleNamespace
+from fredis.ml.input.adduct_data import AdductData
 import torch
 from fredis.libs.mmkit.mmkit import Compound, Adduct
 from fredis.domain.fragment.reaction import FragmentTreeLimitExceeded
@@ -229,7 +230,8 @@ class ReactionStructureBuilder:
             max_reaction_count=fragmenter.tree_max_reaction_count,
             teacher_paths=teacher_paths,
             sample_branch_group_index=torch.tensor(sample_groups),
-            branch_group_adduct_index=group_adduct,
+            main_adduct_index=group_adduct,
+            adducts=AdductData.from_fragmenter(fragmenter),
             valid_reaction_sequences=frozenset(self.last_reaction_sequence_compounds),
         )
         # Materialization adds its own Source bookkeeping root. Teacher depth
@@ -316,7 +318,7 @@ class ReactionStructureBuilder:
             synthetic,
             (source,),
             (reactions,),
-            data.branch_group_tree_index,
+            data.branch_groups.source_compound_index,
             generator.mol_encoder.graph_builder,
         )
         node_by_state = {

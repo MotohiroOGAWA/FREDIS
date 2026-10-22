@@ -252,7 +252,7 @@ def inspect_structure(file_path: Path) -> dict:
 
     source_smiles = str(metadata.get("smiles", ""))
     energies = structure.collision_energy_eV.tolist()
-    group_adducts = structure.branch_group_adduct_index.tolist()
+    group_adducts = structure.branch_groups.main_adduct_index.tolist()
     states = _reaction_states(structure)
     transitions = _transitions(structure)
 

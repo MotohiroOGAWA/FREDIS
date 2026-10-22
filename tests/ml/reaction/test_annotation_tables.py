@@ -1,5 +1,6 @@
 """Normalized identity, dependencies and trainable views of spectrum annotations."""
 
+from fredis.ml.input.adduct_data import AdductData
 from unittest.mock import patch
 import torch
 from fredis.ml.input.source_reaction_structure import SourceReactionStructure
@@ -31,12 +32,10 @@ def assert_tables(data):
         assert (ids[1:] > ids[:-1]).all()
         keys.append((int(group), tuple(ids.tolist())))
     assert len(keys) == len(set(keys))
-    c, f, ions, s, matches = a.compounds, a.formulas, a.ions, a.spectra, a.assignments
+    c, f, ions, s, matches = a.compounds, a.formulas, a.formula_explanations, a.spectra, a.assignments
     assert len(set(c.smiles)) == len(c.smiles) == c.graph.num_graphs
     assert_csr(s.peak_ptr, s.mz, data.num_samples)
-    assert_csr(f.ion_ptr, f.ion_index, len(f.composition))
-    assert_csr(matches.formula_ptr, matches.formula_index, len(s.mz))
-    assert_csr(matches.ion_ptr, matches.ion_index, len(s.mz))
+    assert_csr(matches.formula_explanation_ptr, matches.formula_explanation_index, len(s.mz))
     assert_csr(c.generating_reaction_sets_ptr, c.generating_reaction_sets_index, len(c.smiles))
     assert a.contexts.compound_index.shape == data.states.candidate_branch_group_index.shape
     assert torch.equal(a.contexts.reaction_set_index, data.states.candidate_reaction_set_index)
@@ -44,17 +43,13 @@ def assert_tables(data):
         rows = c.generating_reaction_sets_index[c.generating_reaction_sets_ptr[compound] : c.generating_reaction_sets_ptr[compound + 1]]
         expected = a.contexts.reaction_set_index[a.contexts.compound_index == compound].unique(sorted=True)
         assert torch.equal(rows, expected)
-    for formula in range(len(f.composition)):
-        rows = f.ion_index[f.ion_ptr[formula] : f.ion_ptr[formula + 1]]
-        assert ions.formula_index[rows].eq(formula).all()
     for peak in range(len(s.mz)):
-        rows = matches.ion_index[matches.ion_ptr[peak] : matches.ion_ptr[peak + 1]]
-        expected = matches.formula_index[matches.formula_ptr[peak] : matches.formula_ptr[peak + 1]]
-        assert set(ions.formula_index[rows].tolist()) == set(expected.tolist())
+        rows = matches.formula_explanation_index[matches.formula_explanation_ptr[peak]:matches.formula_explanation_ptr[peak+1]]
+        assert torch.equal(rows, rows.unique(sorted=True))
     if data.teacher.peak_index.numel():
         assert data.teacher.peak_index.max() < len(s.mz)
-    formula = ions.formula_index[ions.runtime_index]
-    torch.testing.assert_close(f.composition[formula], data.spectrum_batch.state_formula_tensor)
+    formula = ions.formula_index[a.runtime_explanations.formula_explanation_index]
+    torch.testing.assert_close(f.composition[formula].float(), data.spectrum_batch.state_formula_tensor)
     torch.testing.assert_close(f.mz[formula], data.spectrum_batch.state_mz)
     torch.testing.assert_close(
         data.teacher.spectrum_targets(a), data.spectrum_batch.target_intensity
@@ -66,15 +61,15 @@ def test_normalized_tables_share_identities_across_ce_and_molecule_batches():
     assert_tables(data)
     a = data.annotations
     # Two CE spectra reuse ion identities, formulas and compound structures.
-    runtime = a.ions.runtime_index
-    assert runtime.numel() == 2 * a.ions.compound_index.numel()
+    runtime = a.runtime_explanations.formula_explanation_index
+    assert runtime.numel() == 2 * a.formula_explanations.compound_index.numel()
     n = runtime.numel() // 2
     assert torch.equal(runtime[:n], runtime[n:])
     assert a.spectra.peak_ptr.tolist() == [0, 2, 4]
     batch = SourceReactionStructure.from_structures([data, data])
     assert_tables(batch)
     assert batch.annotations.compounds.smiles == a.compounds.smiles
-    assert batch.annotations.ions.compound_index.numel() == a.ions.compound_index.numel()
+    assert batch.annotations.formula_explanations.compound_index.numel() == a.formula_explanations.compound_index.numel()
     assert batch.annotations.spectra.peak_ptr.tolist() == [0, 2, 4, 6, 8]
     assert batch.teacher.peak_index.tolist() == list(range(8))
 
@@ -164,7 +159,7 @@ def test_compound_reaction_set_csr_keeps_sets_without_duplicating_nodes():
         source=source, reactions=reactions,
         graph_builder=generator.mol_encoder.graph_builder,
         collision_energy_eV=torch.tensor([20.]),
-        branch_group_adduct_index=torch.tensor([0]), max_reaction_count=2,
+        main_adduct_index=torch.tensor([0]), adducts=AdductData.from_fragmenter(generator.fragmenter), max_reaction_count=2,
         teacher_paths=[[paths]],
     )
     assert data.reaction_sets.reaction_ptr.tolist() == [0, 0, 1, 3, 4]
@@ -191,11 +186,11 @@ def test_compound_reaction_set_csr_keeps_sets_without_duplicating_nodes():
     annotation = AnnotatedSpectrumData.from_runtime(
         batch, ({"precursorMz": 47.0491, "collisionEnergy": 20.,
                  "adduct": "[M+H]+", "peaks": []},),
-        torch.tensor([0]), torch.tensor([0]), generator.tensorizer.element_order,
+        torch.tensor([0]), generator.tensorizer.element_order,
         torch.tensor([0, 0, 0, 0]),
-        context_reaction_set_index=data.states.candidate_reaction_set_index,
+        context_reaction_set_index=data.states.candidate_reaction_set_index, adducts=data.adducts,
     )
-    annotation.validate()
+    annotation.validate(data.adducts)
     compounds = annotation.compounds
     assert compounds.graph.num_graphs == 1
     assert compounds.generating_reaction_sets_ptr.tolist() == [0, 4]  # C + 1, not V + 1
@@ -206,7 +201,7 @@ def test_compound_reaction_set_csr_keeps_sets_without_duplicating_nodes():
         compounds, generating_reaction_sets_index=torch.tensor([0, 1, 2, 2]),
     ))
     with pytest.raises(ValueError, match="each materialized pair once"):
-        invalid.validate()
+        invalid.validate(data.adducts)
 
 
 def test_independent_reaction_sets_survive_collation_selection_and_save(tmp_path):

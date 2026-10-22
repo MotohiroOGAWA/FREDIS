@@ -1,7 +1,7 @@
 # SourceReactionStructure schema
 
-SourceCompound, Reaction, ReactionSet, and CompoundBatch describe the implemented Batch
-tables in schema `fredis.annotated-spectrum-training`. External references are shown by name,
+The sections below describe the implemented Batch tables and annotation references
+in schema `fredis.annotated-spectrum-training`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
 ## 2.1 SourceCompound: independent Batch structure
@@ -502,6 +502,7 @@ The saved format is `fredis.annotated-spectrum-training` without a version suffi
 
 ## 2.5 AdductData: shared adduct rules and hydrogen shifts
 
+`structure.adducts` stores [AdductData](adduct_data.py).
 This shared schema centralizes main adducts, fragment ion adducts, and signed
 hydrogen shifts. All index values below refer to this table's ordering, which
 must be shared by preparation and model inputs. These are chemical rule
@@ -607,9 +608,11 @@ match that produced by its Compound/adduct/shift combination. Identical rows
 are shared across peak assignments; different structures explaining the same
 formula remain separate rows. All four columns are int64 [N_formula_explanation].
 
-This is the target schema. Existing Python names `IonCandidateData`,
-`FormulaData.ion_ptr/ion_index`, and the separate `ion_adducts` vocabulary still
-need to be replaced to implement this organization.
+Implementation: `structure.annotations.formulas` and
+`structure.annotations.formula_explanations` in [annotated_spectrum_data.py](annotated_spectrum_data.py).
+Runtime condition rows reference explanations through the separate
+`runtime_explanations.formula_explanation_index` and `runtime_explanations.sample_index`
+arrays; these are not additional FormulaExplanationData identity columns.
 
 ## 2.7 BranchGroup: SourceCompound and main-adduct context
 
@@ -618,10 +621,8 @@ It supplies the context in which branch predictions/topology are shared.
 CE, measured peaks, and observed intensities are not part of its identity.
 The group ID is its implicit row number; there is no additional group_id vector.
 
-This diagram defines the logical field names `source_compound_index` and
-`main_adduct_index`. There is currently no standalone BranchGroup class: the
-corresponding arrays live in SourceReactionStructure under the names mapped
-below. This section changes documentation only, not those Python field names.
+The [BranchGroup](branch_group.py) class is stored as `structure.branch_groups`.
+Its two columns reference SourceCompound and the shared `structure.adducts` table.
 
 ### Fields and references
 
@@ -672,8 +673,8 @@ CSR belongs in BranchGroup. Its purpose is context/sharing, not Compound identit
 
 | Logical schema field / relation | Current storage |
 |---|---|
-| `BranchGroup.source_compound_index` | `SourceReactionStructure.branch_group_tree_index` |
-| `BranchGroup.main_adduct_index` | `SourceReactionStructure.branch_group_adduct_index` |
+| `BranchGroup.source_compound_index` | `SourceReactionStructure.branch_groups.source_compound_index` |
+| `BranchGroup.main_adduct_index` | `SourceReactionStructure.branch_groups.main_adduct_index` |
 | Spectrum -> group | `SpectrumData.branch_group_index`; model-input view `sample_branch_group_index` |
 | Candidate context -> group | `ReactionContextData.candidate_branch_group_index` |
 
@@ -681,14 +682,11 @@ The last two entries are references from their respective records, not extra
 columns owned by BranchGroup. SpectrumData below references these implicit group
 rows. Its Source and main-adduct information are obtained through the group.
 
-Implementation: [group arrays](source_reaction_structure.py),
-[preparation vocabulary](../data_preparation/fragment_tree/context.py).
+Implementation: [BranchGroup](branch_group.py), [AdductData](adduct_data.py).
 
 ## 2.8 SpectrumData: observed spectrum rows and peak lists
 
-This is the refined logical schema for `structure.annotations.spectra`.
-The Python class still stores `source_index` and `adducts`; this documentation
-change does not yet remove those stored fields.
+This schema is implemented by `structure.annotations.spectra`.
 One row is one observed spectrum. N_spectrum counts spectra and N_peak counts
 their total observed peaks. A spectrum ID is its implicit row number; there is
 no separately stored spectrum_id vector. Different CE observations remain
@@ -845,5 +843,5 @@ consistency and admissibility for the spectrum's BranchGroup and available
 Compounds. Empty slices are not Teacher negative labels. SpectrumData:precursor
 remains an independent mass-tolerance annotation.
 
-This is the target schema. The current Python implementation still uses separate
-formula and ion CSR arrays; implementation has not yet been updated.
+Implementation: [PeakAssignmentData](annotated_spectrum_data.py). The only stored
+assignment fields are `formula_explanation_ptr` and `formula_explanation_index`.
