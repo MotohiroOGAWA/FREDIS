@@ -1,7 +1,8 @@
 # SourceReactionStructure schema
 
-Sections 2.1–2.9 describe the implemented tables. Sections 2.10–2.13 propose
-a Compound-node / Reaction-edge graph and its teacher paths for review.
+Sections 2.1–2.9 describe existing tables; the Source-to-Compound mapping in
+section 2.1 is an additional proposal. Sections 2.10–2.13 propose
+a Compound-node / Reaction-edge graph and its branch/intensity supervision for review.
 The existing Python implementation is unchanged. The saved schema identifier remains `fredis.annotated-spectrum-training`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
@@ -18,7 +19,37 @@ not a single-molecule RDB row. `source_smiles` is stored alongside the Batch in
 SourceReactionStructure. The implemented `SourceCompound` class owns `source_graph`, `source_smiles`,
 and the shared `symbols` vocabulary, under `structure.source_compounds`.
 `structure.source_graph` and `structure.source_smiles` are read-only views.
-There are no external foreign keys in this component.
+The existing fields remain as described below. The proposal additionally links
+each Source row to its shared CompoundBatch identity.
+
+### Proposal: Source-to-CompoundBatch correspondence
+
+Add compound_index to SourceCompound, one shared Compound row ID per Source
+row. Source atom graphs and reaction atom references retain their Source row /
+atom index spaces. compound_index is a separate index space and need not equal
+the Source row number.
+
+```mermaid
+flowchart TB
+    subgraph SC["SourceCompound"]
+        C["compound_index<br/>int64 [N_source_compound]<br/>one Compound ID per Source row"]
+    end
+    CB["CompoundBatch:compounds"]
+    C --> CB
+    click CB "SCHEMA.md#24-compoundbatch" "CompoundBatch"
+```
+
+References: [CompoundBatch](#24-compoundbatch)
+
+| Proposed field | Type / shape | Example | Direct reference |
+|---|---|---|---|
+| `compound_index` | int64 [N_source_compound], the existing M rows | `[0,5]` | → [CompoundBatch](#24-compoundbatch):`compounds` |
+
+This mapping example assumes CompoundBatch row 0 is CCO and row 5 is CC(=O)O.
+Multiple main-adduct groups for one Source reuse its Source row and this mapping.
+The corresponding structures must agree, and every mapped root must reference
+an existing Compound row; -1 is not permitted for root resolution.
+This addition is proposed only; the Python class is unchanged.
 
 ### Batch schema with concrete field values
 
@@ -977,32 +1008,33 @@ The shared structural edge registry remains in CompoundReactionGraph.
 flowchart TB
     subgraph RC["ReactionContextData: BranchGroup rows"]
         ROW["same BranchGroup row order<br/>N_branch_group rows"]
-        ROOT["root_compound_index<br/>int64 [N_branch_group]"]
+        ROOT["root_source_compound_index<br/>int64 [N_branch_group]"]
         EDGE["edge (CSR)<br/>N_branch_group rows<br/>edge IDs"]
         LABEL["edge_label<br/>int8 [N_group_edge_link]<br/>aligned with edge IDs"]
         ROW ~~~ ROOT ~~~ EDGE ~~~ LABEL
     end
     BR["BranchGroup:group_id"]
-    CR["CompoundBatch:compounds"]
+    CR["SourceCompound:compound_index"]
     ER["CompoundReactionGraph:reaction_index"]
     ROW --> BR
     ROOT --> CR
     EDGE --> ER
     click BR "SCHEMA.md#27-branchgroup" "BranchGroup"
-    click CR "SCHEMA.md#24-compoundbatch" "CompoundBatch"
+    click CR "SCHEMA.md#21-sourcecompound" "SourceCompound"
     click ER "SCHEMA.md#210-compoundreactiongraph" "CompoundReactionGraph"
 ```
 
-References: [BranchGroup](#27-branchgroup) · [CompoundBatch](#24-compoundbatch) · [CompoundReactionGraph](#210-compoundreactiongraph)
+References: [BranchGroup](#27-branchgroup) · [SourceCompound](#21-sourcecompound) · [CompoundReactionGraph](#210-compoundreactiongraph)
 
 | Field / relation | Type / shape | Example | Meaning / reference |
 |---|---|---|---|
-| `root_compound_index` | int64 [N_branch_group] | `[0,0]` | → [CompoundBatch](#24-compoundbatch):`compounds`; initial Source node for each group |
+| `root_source_compound_index` | int64 [N_branch_group] | `[0,0]` | → [SourceCompound](#21-sourcecompound):`compound_index`; Source row IDs selected by each group |
 | `edge (CSR)` | N_branch_group variable-length rows | `[[0,1,2,3,4],[0,1,2,3]]` | → [CompoundReactionGraph](#210-compoundreactiongraph):`reaction_index`; edge row IDs |
 | `edge_label` | int8 [N_group_edge_link] | `[1,1,1,1,0, 1,1,0,-1]` | 1 supported candidate; 0 weak negative; -1 excluded from branch loss |
 
 ```python
-root_compound_index = [0,0]
+root_source_compound_index = [0,0]  # Source row IDs
+# SourceCompound.compound_index = [0,5] -> initial Compound IDs [0,0]
 edge_ptr = [0,5,9]                   # int64 [N_branch_group + 1]
 edge_index = [0,1,2,3,4, 0,1,2,3]   # int64 [N_group_edge_link]
 edge_label = [1,1,1,1,0, 1,1,0,-1]  # int8  [N_group_edge_link]
@@ -1015,7 +1047,10 @@ for computation but contributes no branch-label loss; it is different from an
 edge omitted from the group's candidate graph. Valid outgoing candidates at
 intermediate nodes are included too: for A→B→C, the CSR contains candidates
 leaving A and candidates leaving B, not only the observed path's edges.
-Root node IDs reference CompoundBatch, not SourceCompound's separate row space.
+root_source_compound_index references Source rows. Resolve initial Compound
+nodes as SourceCompound.compound_index[root_source_compound_index]. Each root
+Source ID must agree with BranchGroup.source_compound_index for the same group.
+The diagram shows only direct references; section 2.1 shows the next reference.
 An isolated root is retained even for an empty edge slice.
 
 ### Edge-level branch objective
