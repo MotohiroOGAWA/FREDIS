@@ -411,6 +411,9 @@ def create_reaction_training_data(
         with stage_pretrained_models(chemistry_config) as staged:
             _reset_output(output, overwrite)
             chemistry_config = staged.install(output)
+        (output / "fragment-tree.fragmenter.pft").write_text(
+            json.dumps(chemistry_config["fragmenter_params"], indent=2)
+        )
     else:
         _reset_output(output, overwrite)
     (output / "invalid_records.json").write_text(
@@ -439,7 +442,7 @@ def create_reaction_training_data(
         for tree, (smiles, rows) in enumerate(grouped.items())
     )
     if preparation_config is None:
-        (output / "preparation_config.json").write_text(
+        (output / "fragment-tree.training-data-config.pft").write_text(
             json.dumps(
                 dict(
                     split=split,
@@ -1153,6 +1156,9 @@ def main(argv: list[str] | None = None) -> None:
         archived = staged.install(output)
     config.clear()
     config.update(archived)
+    (output / "fragment-tree.fragmenter.pft").write_text(
+        json.dumps(config["fragmenter_params"], indent=2)
+    )
     workbench_path.unlink(missing_ok=True)
     aliases = {
         "validation_input": "validationInput",
@@ -1199,8 +1205,9 @@ def main(argv: list[str] | None = None) -> None:
         restored.pop("datasets", None)
         restored.pop("datasetMode", None)
     preparation_config["workbench_config"] = restored
-    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
-        (output / name).write_text(json.dumps(preparation_config, indent=2))
+    (output / "fragment-tree.training-data-config.pft").write_text(
+        json.dumps(preparation_config, indent=2)
+    )
     (output / "split_manifest.json").write_text(json.dumps({
         "version": 1, "key": "rdkit-canonical-isomeric-smiles", "seed": args.validation_seed,
         "validationRatio": args.validation_ratio, "testRatio": args.test_ratio,
@@ -1243,8 +1250,9 @@ def main(argv: list[str] | None = None) -> None:
             json.dumps(split_config, indent=2)
         )
     (output / "invalid_records.json").write_text(json.dumps(reports, indent=2))
-    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
-        (output / name).write_text(json.dumps(preparation_config, indent=2))
+    (output / "fragment-tree.training-data-config.pft").write_text(
+        json.dumps(preparation_config, indent=2)
+    )
 
 
 if __name__ == "__main__":

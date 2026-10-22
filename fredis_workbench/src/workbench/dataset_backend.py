@@ -469,39 +469,26 @@ def training_sources(payload):
     import torch
     from fredis.ml.training.fragment_tree_training.sources import (
         inherit_model_config,
-        dataset_sources,
     )
 
+    from fredis.ml.training.fragment_tree_training.sources import prepared_dataset_paths
+    train_dir, val_dir = prepared_dataset_paths(payload["datasetDir"])
+    if payload.get("pretrainedPatterns") or payload.get("fineTuneCheckpoint") or (payload.get("modelConfig") or {}).get("fine_tuning"):
+        raise ValueError("Select pretrained reactions during dataset preparation, not training")
     saved = None
-    path = payload.get("resume") or payload.get("fineTuneCheckpoint")
-    if path:
-        saved = torch.load(path, map_location="cpu", weights_only=False)["model_config"]
-        if not payload.get("resume"):
-            inherited = dataset_sources(payload["trainDir"], payload["valDir"])
-            saved = {
-                **saved,
-                "fragmenter_params": inherited["fragmenter_params"],
-                "adduct_type_strs": inherited["adduct_type_strs"],
-            }
+    if payload.get("resume"):
+        saved = torch.load(payload["resume"], map_location="cpu", weights_only=False)["model_config"]
     config = inherit_model_config(
-        saved or payload.get("modelConfig") or {},
-        payload["trainDir"],
-        payload["valDir"],
-        saved_model=saved,
+        saved or payload.get("modelConfig") or {}, train_dir, val_dir, saved_model=saved,
     )
-    if not payload.get("resume") and payload.get("pretrainedPatterns"):
-        from fredis.ml.training.fragment_tree_training.pattern_models import (
-            assemble_config,
-        )
-
-        config = assemble_config(config, payload["pretrainedPatterns"])
-        config = inherit_model_config(
-            config, payload["trainDir"], payload["valDir"], saved_model=config
-        )
     return {"modelConfig": config, "patternModels": describe_patterns(config)}
 
 
 def training_assignment_score_counts(payload):
+    from fredis.ml.training.fragment_tree_training.sources import prepared_dataset_paths
+    train_dir, val_dir = prepared_dataset_paths(payload["datasetDir"])
+    payload = {**payload, "trainDir": train_dir, "valDir": val_dir}
+
     from fredis.ml.training.fragment_tree_training.prepared_dataset import (
         prepared_piece_sequence,
     )
@@ -587,15 +574,6 @@ def pattern_export(payload):
     return export_pattern(payload["path"], payload["pattern_id"], payload["output"])
 
 
-def training_integrate(payload):
-    from fredis.ml.training.fragment_tree_training.integration import (
-        integrate_checkpoints,
-    )
-
-    return integrate_checkpoints(
-        payload["checkpoints"], payload["headCheckpoint"], payload["output"]
-    )
-
 
 def main():
     request = json.loads(sys.stdin.read())
@@ -605,7 +583,6 @@ def main():
                 "pattern-definitions": pattern_definitions,
                 "model-inspect": model_inspect,
                 "pattern-export": pattern_export,
-                "training-integrate": training_integrate,
                 "training-sources": training_sources,
                 "training-checkpoint": training_checkpoint,
                 "training-assignment-score-counts": training_assignment_score_counts,

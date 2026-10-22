@@ -196,7 +196,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                 4,
             )
             self.assertEqual(len(list((root / "cli").rglob("*.preft.pt"))), 1)
-            saved = json.loads((root / "cli/preparation_config.json").read_text())
+            saved = json.loads((root / "cli/fragment-tree.training-data-config.pft").read_text())
             self.assertEqual(saved["input"], str(file))
             self.assertEqual(saved["max_unique_fragment_smiles"], -1)
             self.assertEqual(saved["max_reaction_combinations"], -1)
@@ -411,13 +411,18 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(saved["validationSeed"], 7)
             self.assertEqual(saved["maxUniqueFragmentSmiles"], 100)
             self.assertEqual(saved["maxReactionCombinations"], 200)
-            prepared = json.loads((output / "preparation_config.json").read_text())
+            prepared = json.loads((output / "fragment-tree.training-data-config.pft").read_text())
+            self.assertFalse((output / "preparation_config.json").exists())
+            self.assertFalse((output / "fragment-tree.training-data.pft").exists())
             self.assertEqual(
-                prepared,
-                json.loads(
-                    (output / "fragment-tree.training-data-config.pft").read_text()
-                ),
+                json.loads((output / "fragment-tree.fragmenter.pft").read_text()),
+                prepared["chemistry_config"]["fragmenter_params"],
             )
+            for split in ("train_structures", "validation_structures"):
+                for filename in ("fragment-tree.training-data.pft", "invalid_records.json",
+                                 "manifest.tsv", "assignment_scores.tsv",
+                                 "reaction_statistics.json", "skipped_sources.json"):
+                    self.assertTrue((output / split / filename).is_file(), (split, filename))
             self.assertEqual(prepared["max_unique_fragment_smiles"], 100)
             self.assertEqual(prepared["max_reaction_combinations"], 200)
             self.assertEqual(saved["minimumRelativeIntensity"], 0.2)
@@ -612,7 +617,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(
                 len(list((root / "out/validation_structures").rglob("*.preft.pt"))), 2
             )
-            self.assertTrue((root / "out/preparation_config.json").is_file())
+            self.assertTrue((root / "out/fragment-tree.training-data-config.pft").is_file())
             self.assertFalse(
                 (root / "out/train_structures/preparation_config.json").exists()
             )
@@ -1166,7 +1171,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                         "1",
                     ]
                 )
-            saved = json.loads((root / "out/preparation_config.json").read_text())
+            saved = json.loads((root / "out/fragment-tree.training-data-config.pft").read_text())
             script = """
 const Module=require('module'),load=Module._load;
 Module._load=function(name,...rest){return name==='vscode'?{window:{},Uri:{file:fsPath=>({fsPath})}}:load.call(this,name,...rest);};

@@ -2,8 +2,7 @@
 
 ```bash
 python -m fredis.cli train fragment-tree \
-  --train-dir data/prepared/train_structures \
-  --val-dir data/prepared/validation_structures \
+  --dataset-dir data/prepared \
   --output-dir models/my-model \
   --node-dim 32 --graph-dim 128 \
   --epochs 100 --batch-size 4 --lr 0.0001
@@ -23,11 +22,11 @@ new data preparation.
 
 In **Workbench → Fragment Tree Training**, **Load Configuration** and **Save Configuration** are in the page header; the load control also accepts a dropped `*.pfttrain.json` file. Saved training configurations contain run settings and the trainable Mol Encoder / Branch / Fragment Transformer / Ion-State / Intensity parameters. Fragmenter settings, Reaction Patterns, ion-adduct rules, Symbols, and adduct ordering are inherited from the prepared train/validation datasets.
 
-After selecting both prepared datasets, Workbench checks that their Fragmenter settings, adduct ordering, and Symbols agree. Reaction Pattern Sets and Ion Adduct Rule Sets are shown read-only, while Mol Encoder architecture parameters are editable for joint training.
+After selecting the preparation output directory, Workbench checks that their Fragmenter settings, adduct ordering, and Symbols agree. Reaction Pattern Sets and Ion Adduct Rule Sets are shown read-only, while Mol Encoder architecture parameters are editable for joint training.
 
-## Initialize from or resume a checkpoint
+## Resume a checkpoint
 
-Use `--initialize-from models/base/last.pt` to fine-tune compatible model weights with a fresh optimizer and epoch counter. Configuration and prepared structures must match the checkpoint architecture. Use `--resume` to continue an interrupted training run with its optimizer state instead.
+Use `--resume models/base/last.pt` together with `--dataset-dir` to continue an interrupted run with its optimizer state. Reaction definitions and pretrained sources are selected only during dataset preparation.
 
 ## Reaction models belong to Training Data preparation
 
@@ -79,7 +78,7 @@ A SMARTS atom input is `[raw chemical features | external-neighborhood feature |
 
 Existing pretrained checkpoints retain their legacy input/position encoding. Fresh training and new pattern settings use `pattern_input_version=3`, and checkpoints record each pattern's input mode. Imported modules are not silently converted. Pattern-owned neighborhood weights are exported, initialized, frozen and integrated with their Graphormer/readout.
 
-The source ID belongs to the imported checkpoint. IDs in the prepared dataset are reassigned from chemical definitions. Imported architectures are restored from their source rather than overridden. The usual `train fragment-tree --train-dir ... --val-dir ...` then automatically freezes imported features and trains new pattern modules and downstream predictors.
+The source ID belongs to the imported checkpoint. IDs in the prepared dataset are reassigned from chemical definitions. Imported architectures are restored from their source rather than overridden. The usual `train fragment-tree --dataset-dir ...` then automatically freezes imported features and trains new pattern modules and downstream predictors.
 
 Dataset preparation copies every selected pretrained checkpoint or `.reaction-model.pt` into the output's `pretrained_models/` directory. SHA-256 names deduplicate repeated references to the same file contents, and `manifest.json` records each copy's size and checksum. Configuration files store paths relative to their own location; train and validation splits share the copies in their dataset root. Copy or move the entire output directory, including `pretrained_models/`, to use it elsewhere. Training resolves the local copies automatically and never needs the original pretrained files. Workbench also resolves these relative paths when restoring preparation settings. Direct Python preparation calls bundle their dependencies in the same way.
 
@@ -93,93 +92,11 @@ python -m fredis.cli train export-pattern \
   --output models/bond.reaction-model.pt
 ```
 
-## Fine-tune immutable pattern features
+## Use pretrained reactions when learning new reactions
 
-Use `--fine-tune-checkpoint models/base/last.pt` with train/validation structures
-prepared using the complete expanded pattern set. The checkpoint can be a fresh,
-already fine-tuned, or integrated model. Architecture settings are inherited
-from it. No adapter layers or low-rank residuals are attached.
+Select all pretrained checkpoints and new reaction definitions during data preparation. Preparation checks compatibility and archives the checkpoints in `pretrained_models/`. Start training with `--dataset-dir` pointing to that preparation output. Imported reaction features and their shared source encoders stay frozen; new reaction features and downstream prediction heads are trained. Training cannot add reactions or select another pretrained source. Workbench provides the same workflow through one **Prepared dataset directory** field.
 
-| Module | During pattern fine-tuning |
-| --- | --- |
-| Molecular encoder and descriptor fusion | Frozen, evaluation mode |
-| Shared source atom projection, SMARTS roles, status and hop projections | Frozen |
-| Existing pattern Graphormers | Frozen, evaluation mode |
-| Existing pattern rule/product embeddings and final reaction-feature readout | Frozen |
-| New pattern Graphormers and complete feature readouts | Trained |
-| Reaction Sequence/SetTransformer, branch scorer, condition projections | Trained |
-| Fragment/tree processing, ion classification and intensity predictors | Trained |
-
-Thus the **final reaction feature**, not only a Graphormer intermediate, stays
-unchanged for inherited patterns on identical source inputs. Predictions may
-change because downstream predictors are trained and additional patterns are
-available. Each pattern owns its own rule/product embeddings and final readout,
-so growing another pattern's vocabulary does not modify its features.
-`trainable_parameters.json` lists the actual trainable tensors for each run.
-
-```bash
-python -m fredis.cli train fragment-tree \
-  --train-dir data/expanded/train_structures \
-  --val-dir data/expanded/validation_structures \
-  --output-dir models/expanded --device cuda \
-  --fine-tune-checkpoint models/base/last.pt
-```
-
-Repeat with `models/expanded/last.pt` and another superset to add a further stage.
-Use `--resume models/expanded/last.pt` with the same pattern universe to restore
-optimizer/epoch state; this continues the existing stage rather than starting
-another expansion. Old GNN/shared-readout or adapter checkpoints require
-retraining against this architecture.
-
-## Integrate independent branches
-
-```bash
-python -m fredis.cli train integrate-patterns \
-  --checkpoints models/pc/last.pt models/pe/last.pt \
-  --head-checkpoint models/pc/last.pt \
-  --output models/lipids.pt
-```
-
-Integration matches patterns by chemical definition, remaps their numeric IDs,
-and copies their complete feature encoders. It never averages weights. Shared
-feature configurations/weights must match, and duplicate pattern definitions
-must have identical complete encoder weights. Conflicts fail with the offending
-pattern or tensor; independently pretrained molecular encoders cannot be merged
-this way. Branches should descend from the same base.
-
-The downstream predictor is taken from `--head-checkpoint`, which must be an
-input checkpoint. It is an initialization for union-pattern training, not a
-claim that either specialist's accuracy is preserved by integration alone.
-Integration also exports `models/lipids.fragmenter.pft` for preparing union data.
-Both output files must be new paths. The integrated checkpoint is self-contained
-for prediction and does not load its source checkpoints.
-
-Prepare data with that exported configuration, then train the downstream model
-without changing any pattern features:
-
-```bash
-python -m fredis.cli train fragment-tree \
-  --train-dir data/lipids/train_structures \
-  --val-dir data/lipids/validation_structures \
-  --output-dir models/lipids_heads --device cuda \
-  --fine-tune-checkpoint models/lipids.pt --head-only
-```
-
-Workbench uses **New model** and **Resume training**. Add checkpoints or single reaction models under **Training Data → Fragmentation**, then select those prepared datasets in New model. Imported patterns are frozen; patterns without imported models are trained from scratch. Import an integrated checkpoint to train its prediction modules with every reaction feature frozen. **Integrate Pattern Models** combines compatible branches and selects their downstream predictor.
-
-To reproduce the complete small experimental-data workflow, run:
-
-```bash
-PYTHONPATH=. python tests/workflows/verify_pattern_workflow.py \
-  --output data/workflow_verification_new
-```
-
-It requires CUDA and the local MoNA flavonoid dataset (override `--source` for
-its location), and uses four experimental records. The added carbonyl/ether
-patterns are workflow probes, not validated fragmentation rules. This checks
-preparation, training, parallel specialist branches, sequential expansion,
-resume, integration, downstream-only training, exact feature preservation and
-strict checkpoint-based prediction. It does not measure predictive accuracy.
+The root contains `fragment-tree.training-data-config.pft`, the standalone `fragment-tree.fragmenter.pft`, `split_manifest.json`, input-validation `invalid_records.json`, and optional `pretrained_models/`. It does not duplicate the shared configuration in `preparation_config.json`, or create a root `fragment-tree.training-data.pft`. Each split retains its own `fragment-tree.training-data.pft`, `invalid_records.json`, manifests, scores, statistics, skipped-source report and `data/` tensors. The root invalid-record report preserves failures detected before splitting; it is distinct from split-local validation results.
 
 ## Monitoring
 
@@ -191,8 +108,7 @@ For large training datasets, evaluate a validation subset between epoch boundari
 
 ```bash
 python -m fredis.cli train fragment-tree \
-  --train-dir data/prepared/train_structures \
-  --val-dir data/prepared/validation_structures \
+  --dataset-dir data/prepared \
   --output-dir models/my-model \
   --epochs 100 \
   --validation-interval-steps 1000 \
@@ -209,17 +125,7 @@ Each check emits an `intermediate_validation_end` JSON event with step, sample c
 
 Full validation still runs at each epoch end. Learning-rate scheduling, early stopping, and best-checkpoint selection use full-validation results; intermediate checks are for monitoring.
 
-Independent branches share a frozen pretrained feature model. Define different
-SMARTS for newly trained specialists, import the same base into each dataset,
-train each branch, and use `train integrate-patterns` to collect their pattern
-models. The integrated fragmenter generates matching reactions and the encoder
-dispatches each reaction to its pattern ID. Matching general and specialist patterns
-may both produce reactions; this does not replace a general pattern or arbitrate
-between overlapping definitions. Duplicate chemical definitions with conflicting
-weights are rejected. After integration, prepare a union dataset from the integrated
-checkpoint and train the downstream predictors while all imported pattern features
-remain frozen.
-
+To combine reactions learned in compatible branches, select their checkpoints together during preparation. Shared encoders and overlapping reaction features must have identical weights. Then train from the resulting preparation output directory.
 
 New version 3 pattern models enable `neighborhood_edge_features=true`. Version 1/2
 imports retain their original connectivity-only neighborhood weights and any

@@ -93,15 +93,15 @@ form.elements.trainLogIntervalSteps.value='1.5';form.elements.trainLogIntervalSt
 assert(d.querySelector('#trainingPreflight').textContent.includes('○ Non-negative integer train metrics interval'));
 form.elements.trainLogIntervalSteps.value='25';form.elements.trainLogIntervalSteps.dispatchEvent(event());
 const path='/fixtures/train_structures';
-form.elements.trainDir.value=path;form.querySelector('[data-training-inspect=trainDir]').click();assert.equal(messages.at(-1).type,'workbench/trainingInspect');
+form.elements.datasetDir.value='/fixtures';form.querySelector('[data-training-inspect=trainDir]').click();assert.equal(messages.at(-1).type,'workbench/trainingInspect');
 post({type:'workbench/trainingDataset',field:'trainDir',path,count:68,bytes:101043264,summary:{num_samples:3157,num_sources:68},files:['data/example.preft.pt']});assert(d.querySelector('#trainDirTrainingDetails').textContent.includes('3157'));
-form.elements.valDir.value='/fixtures/validation_structures';form.elements.valDir.dispatchEvent(event());
+form.elements.datasetDir.dispatchEvent(event());
 const sourceRequest=messages.filter(m=>m.type==='training/sources').at(-1);assert(sourceRequest);
 post({type:'training/sources',requestId:sourceRequest.requestId,modelConfig:{fragmenter_params:preset.fragmenter_params,mol_encoder_params:{...preset.mol_encoder_params,node_dim:48},adduct_type_strs:preset.adduct_type_strs}});
 const configuredModel=w.eval('getTrainingConfig()').modelConfig;assert.equal(configuredModel.reaction_model_params.hidden_dim,64);assert.equal(configuredModel.mol_encoder_params.node_dim,preset.mol_encoder_params.node_dim);for(const key of ['fragmenter_params','adduct_type_strs'])assert(!(key in configuredModel));assert(form.querySelector('[data-model-block=mol_encoder_params]'));
 const inherited=d.getElementById('trainingInheritedConfig');assert(inherited.textContent.includes('Reaction Pattern Set'));assert(inherited.textContent.includes('Ion Adduct Rule Set'));assert(!inherited.textContent.includes('Molecular Encoder Parameters'),'Mol Encoder architecture is configured by training, not inherited from prepared data');assert(inherited.querySelectorAll('details details').length>1,'patterns and adduct rules must be independently collapsible');assert.equal(inherited.querySelectorAll('input,select,textarea,button').length,0,'inherited settings must be read-only');assert(inherited.querySelector('.training-symbols'));assert.equal(inherited.querySelectorAll('.training-symbols span').length,preset.mol_encoder_params.symbols.length);
 let lastSourceRequest=sourceRequest;
-for(const [field,value]of [['trainDir',path],['valDir','/fixtures/validation_structures']]){
+for(const [field,value]of [['datasetDir','/fixtures']]){
  const count=messages.filter(m=>m.type==='training/sources').length;post({type:'picked',form:'training',field,value});
  assert(!inherited.textContent.includes('Reaction Pattern Set'),'reselection must clear stale inherited settings immediately');assert(d.getElementById('trainingStart').disabled);
  form.elements[field].dispatchEvent(event());const refreshed=messages.filter(m=>m.type==='training/sources').at(-1);assert.equal(messages.filter(m=>m.type==='training/sources').length,count+1);assert.notEqual(refreshed.requestId,lastSourceRequest.requestId);
@@ -110,8 +110,8 @@ for(const [field,value]of [['trainDir',path],['valDir','/fixtures/validation_str
 }
 form.querySelector('[data-model-mol]').click();assert(!form.querySelector('[data-model-block=mol_encoder_params] [data-parameter-path="mol_encoder_params.node_dim"]').disabled);
 
-post({type:'picked',form:'training',field:'valDir',value:'/fixtures/validation_structures'});form.elements.valDir.dispatchEvent(event());const failedRefresh=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:failedRefresh.requestId,error:'Dataset symbols do not match the MolEncoder symbols'});assert(d.getElementById('trainingStart').disabled);assert(d.getElementById('trainingSourcesStatus').textContent.includes('do not match'));assert(!inherited.textContent.includes('Reaction Pattern Set'));
-post({type:'picked',form:'training',field:'valDir',value:'/fixtures/validation_structures'});form.elements.valDir.dispatchEvent(event());lastSourceRequest=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:lastSourceRequest.requestId,modelConfig:{fragmenter_params:preset.fragmenter_params,mol_encoder_params:{...preset.mol_encoder_params,node_dim:48},adduct_type_strs:preset.adduct_type_strs}});assert(inherited.textContent.includes('Reaction Pattern Set'));
+post({type:'picked',form:'training',field:'datasetDir',value:'/fixtures'});form.elements.datasetDir.dispatchEvent(event());const failedRefresh=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:failedRefresh.requestId,error:'Dataset symbols do not match the MolEncoder symbols'});assert(d.getElementById('trainingStart').disabled);assert(d.getElementById('trainingSourcesStatus').textContent.includes('do not match'));assert(!inherited.textContent.includes('Reaction Pattern Set'));
+post({type:'picked',form:'training',field:'datasetDir',value:'/fixtures'});form.elements.datasetDir.dispatchEvent(event());lastSourceRequest=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:lastSourceRequest.requestId,modelConfig:{fragmenter_params:preset.fragmenter_params,mol_encoder_params:{...preset.mol_encoder_params,node_dim:48},adduct_type_strs:preset.adduct_type_strs}});assert(inherited.textContent.includes('Reaction Pattern Set'));
 assert(!form.elements.fineTunePatternSet);
 function mode(value){const radio=form.querySelector('input[name=trainingMode][value='+value+']');radio.checked=true;radio.dispatchEvent(event());}
 mode('resume');form.elements.resume.value='/model/resume.pt';form.elements.resume.dispatchEvent(event());assert(messages.some(m=>m.type==='training/checkpoint'&&m.path==='/model/resume.pt'));
@@ -129,13 +129,8 @@ post({type:'workbench/logs',job:{id:'partial-test',type:'training',name:'Live tr
 assert(d.querySelector('#jobProgress').textContent.includes('Step 100 · Mean train loss 0.750000'));
 assert(d.querySelector('#jobLossChart svg'));
 assert(!form.elements.adapterWidth);
-form.elements.integrationCheckpoints.value='/models/pc/last.pt\n/models/pe/last.pt';
-form.elements.integrationHead.value='/models/pc/last.pt';form.elements.integrationOutput.value='/models/lipids.pt';
-d.getElementById('trainingIntegrate').click();const integration=messages.filter(m=>m.type==='training/integrate').at(-1);
-assert.deepEqual(Array.from(integration.checkpoints),['/models/pc/last.pt','/models/pe/last.pt']);assert.equal(integration.headCheckpoint,'/models/pc/last.pt');
-post({type:'training/integrated',output:'/models/lipids.pt',patterns:[{id:0},{id:1}]});
-assert(d.getElementById('trainingIntegrationStatus').textContent.includes('Integrated 2 patterns'));
-assert(!d.getElementById('trainingIntegrate').disabled);
+assert(!d.getElementById('trainingIntegrate'));
+assert(!form.elements.trainDir);assert(!form.elements.valDir);
 mode('new');
 assert.equal(form.querySelectorAll('input[name=trainingMode]').length,2);
 assert.equal(d.getElementById('dataReactionPatterns').parentElement.dataset.modelBlock,'fragmenter_params');assert.equal(d.querySelectorAll('#dataReactionPatterns').length,1);

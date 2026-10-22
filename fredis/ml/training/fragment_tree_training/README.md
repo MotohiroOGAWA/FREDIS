@@ -6,8 +6,7 @@ propagates fragment probabilities, then assigns conditional ion/shift probabilit
 
 ```bash
 python -m fredis.cli train fragment-tree \
-  --train-dir prepared/train_structures \
-  --val-dir prepared/validation_structures \
+  --dataset-dir prepared \
   --output-dir training/run \
   --node-dim 32 --graph-dim 128 \
   --epochs 20 --device cuda \

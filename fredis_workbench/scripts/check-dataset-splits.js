@@ -16,7 +16,7 @@ for (const fraction of [0, 0.1, 0.25]) {
   const html = workbenchHtml(saved,{});
   assert(html.includes('name="testRatio"'));
   for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(match[1]);
-  const trainArgs = require('../src/extension').buildTrainingArgs({trainDir:'out/train_structures',valDir:'out/validation_structures',testRatio:fraction});
+  const trainArgs = require('../src/extension').buildTrainingArgs({datasetDir:'out',testRatio:fraction});
   assert(!trainArgs.includes('--test-ratio'));
   assert(!trainArgs.includes('out/test_structures'));
 }

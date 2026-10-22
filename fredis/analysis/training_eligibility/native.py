@@ -114,7 +114,7 @@ def default_model(chemistry):
     from fredis.domain.fragment import Fragmenter
 
     args = build_arg_parser().parse_args(
-        ["--train-dir", "unused", "--val-dir", "unused", "--output-dir", "unused"]
+        ["--dataset-dir", "unused", "--output-dir", "unused"]
     )
     model = training_model_config(args)
     # Eligibility needs finite forward/backward passes, not a full-size model.

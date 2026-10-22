@@ -85,10 +85,10 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
 
     // Fragment Tree Training: folder fields are validated as folders and follow the Browse flow.
     const trainingForm = d.getElementById('trainingForm');
-    const trainDirZone = trainingForm.elements.trainDir.closest('.path').querySelector('.file-drop-zone');
+    const trainDirZone = trainingForm.elements.datasetDir.closest('.path').querySelector('.file-drop-zone');
     assert.equal(trainDirZone.textContent, 'Drop a folder here or click to Browse');
     await drop(trainDirZone, { 'text/uri-list': 'file:///workspaces/FREDIS/prepared/train' });
-    assert.equal(trainingForm.elements.trainDir.value, '/workspaces/FREDIS/prepared/train');
+    assert.equal(trainingForm.elements.datasetDir.value, '/workspaces/FREDIS/prepared/train');
     assert.equal(statKinds.at(-1), 'folder');
     uploads.length = 0;
     await drop(trainDirZone, {}, [{ name: 'train', size: 0 }]);

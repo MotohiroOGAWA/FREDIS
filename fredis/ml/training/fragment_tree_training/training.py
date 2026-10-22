@@ -6,7 +6,6 @@ import json
 import math
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 import torch
 from tqdm.auto import tqdm
@@ -1305,8 +1304,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         )
     for flag, (default, text) in SPECTRUM_LOSS_OPTIONS.items():
         parser.add_argument("--" + flag, type=float, default=default, help=text)
-    for name in ("train-dir", "val-dir"):
-        parser.add_argument("--" + name, required=True)
+    parser.add_argument("--dataset-dir", required=True, help="Preparation output containing train_structures, validation_structures and shared configuration.")
     parser.add_argument("--output-dir", required=True, type=output_directory)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -1316,24 +1314,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-architecture",
-        help="Architecture JSON: model_config and pretrained_patterns; new models only",
+        help="Model architecture JSON; reaction definitions and pretrained sources come only from the prepared dataset",
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--resume")
-    parser.add_argument(
-        "--initialize-from",
-        help="Initialize compatible joint-model weights with a fresh optimizer.",
-    )
-    parser.add_argument(
-        "--head-only",
-        action="store_true",
-        help="Freeze all pattern features and train downstream prediction only; requires --fine-tune-checkpoint.",
-    )
-    parser.add_argument(
-        "--fine-tune-checkpoint",
-        help="Checkpoint to extend with immutable pattern features; fine-tuned/integrated checkpoints are supported.",
-    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -1387,8 +1372,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
-    if args.head_only and not args.fine_tune_checkpoint:
-        raise ValueError("--head-only requires --fine-tune-checkpoint")
+    from .sources import prepared_dataset_paths
+    args.train_dir, args.val_dir = map(str, prepared_dataset_paths(args.dataset_dir))
+    architecture = None
+    if args.model_architecture or args.model_architecture_json:
+        if args.resume:
+            raise ValueError("--model-architecture cannot change a resumed checkpoint")
+        architecture = json.loads(
+            args.model_architecture_json or Path(args.model_architecture).read_text()
+        )
+        if architecture.get("pretrained_patterns") or architecture.get("model_config", architecture).get("fine_tuning"):
+            raise ValueError("Pretrained reactions must be selected during dataset preparation, not training")
     output = Path(args.output_dir)
     confirm_output_overwrite(
         output,
@@ -1397,79 +1391,21 @@ def main(argv: list[str] | None = None) -> None:
         protected_paths=(
             args.train_dir,
             args.val_dir,
-            args.fine_tune_checkpoint,
-            args.initialize_from,
+            args.dataset_dir,
         ),
     )
     output.mkdir(parents=True, exist_ok=True)
     (output / "training_args.json").write_text(json.dumps(vars(args), indent=2))
     model_config = training_model_config(args)
-    if args.model_architecture or args.model_architecture_json:
-        if args.resume or args.fine_tune_checkpoint:
-            raise ValueError("--model-architecture cannot change a resumed checkpoint")
+    if architecture is not None:
         from .sources import inherit_model_config
-        from .pattern_models import assemble_config
 
-        architecture = json.loads(
-            args.model_architecture_json or Path(args.model_architecture).read_text()
-        )
         model_config = inherit_model_config(
             architecture.get("model_config", architecture),
             args.train_dir,
             args.val_dir,
             saved_model=None,
         )
-        if architecture.get("pretrained_patterns"):
-            from .sources import dataset_sources
-
-            if dataset_sources(args.train_dir, args.val_dir).get("reaction_models"):
-                raise ValueError(
-                    "Reaction models are fixed by dataset preparation; do not override them at training time"
-                )
-            model_config = assemble_config(
-                model_config, architecture["pretrained_patterns"]
-            )
-    # A new expansion must be materialized before training.  Ordinary and
-    # resumed runs defer inheritance to train_reactions(), where the already
-    # loaded dataset supplies max_roles without another complete disk scan.
-    if args.fine_tune_checkpoint and not args.resume:
-        from .sources import dataset_sources, inherit_model_config
-
-        saved_model = torch.load(
-            args.fine_tune_checkpoint, map_location="cpu", weights_only=False
-        )["model_config"]
-        saved_params = saved_model
-        inherited = dataset_sources(args.train_dir, args.val_dir)
-        saved_model = {
-            **saved_params,
-            "fragmenter_params": inherited["fragmenter_params"],
-            "adduct_type_strs": inherited["adduct_type_strs"],
-        }
-        model_config = inherit_model_config(
-            saved_model, args.train_dir, args.val_dir, saved_model=saved_model
-        )
-        model_config.pop("fine_tuning", None)
-        model_config["max_samples"] = args.max_samples
-        from .fine_tuning import prepare_model_config
-
-        with tempfile.TemporaryDirectory(prefix="fredis-training-config-") as directory:
-            config_path = Path(directory) / "model.json"
-            config_path.write_text(json.dumps(model_config))
-            patterns_path = Path(directory) / "patterns.json"
-            patterns_path.write_text(
-                json.dumps(
-                    model_config["fragmenter_params"]["fragment_ion_tree_builder"][
-                        "reaction_pattern_set"
-                    ]
-                )
-            )
-            model_config = prepare_model_config(
-                checkpoint_path=args.fine_tune_checkpoint,
-                pattern_set_path=patterns_path,
-                new_params_path=config_path,
-                head_only=args.head_only,
-            )
-            model_config["fine_tuning"].pop("pattern_set_path", None)
     train_reactions(
         model_config=model_config,
         train_dir=args.train_dir,
@@ -1495,7 +1431,7 @@ def main(argv: list[str] | None = None) -> None:
         min_lr=args.min_lr,
         train_mol_encoder=args.train_mol_encoder,
         cache_dataset_in_memory=args.cache_dataset_in_memory,
-        initialize_from=args.initialize_from,
+        initialize_from=None,
         train_log_interval_steps=args.train_log_interval_steps,
         validation_interval_steps=args.validation_interval_steps,
         validation_fraction=args.validation_fraction,

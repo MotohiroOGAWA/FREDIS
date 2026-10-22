@@ -25,7 +25,7 @@ export type WorkbenchEvent =
 
 export type ParameterRequest =
   | { type: 'training/checkpoint'; path: string }
-  | { type: 'training/sources'; requestId: string; config: { trainDir: string; valDir: string; resume?: string; fineTuneCheckpoint?: string } }
+  | { type: 'training/sources'; requestId: string; config: { datasetDir: string; resume?: string } }
   | { type: 'parameters/pick'; target: 'data' | 'training' | 'trainable' }
   | { type: 'parameters/import'; target: 'data' | 'training' | 'trainable'; name: string; json: string }
   | { type: 'parameters/load'; target: 'data' | 'training' | 'trainable'; path: string }

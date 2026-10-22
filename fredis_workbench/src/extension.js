@@ -121,10 +121,9 @@ function defaultTrainingConfig(context) {
   // Architecture defaults not listed here are filled in by the parameter editor.
   const modelConfig = { mol_encoder_params: { node_dim: 16, graph_dim: 64, num_layers: 2, num_heads: 4, dropout: 0.5 }, reaction_model_params:{hidden_dim:128}, spectrum_model_params:{} };
   return workbenchDefaults.workflowDefaults('training',{
-    application: 'fragment-tree-training', modelConfig, trainDir: '', valDir: '',
+    application: 'fragment-tree-training', modelConfig, datasetDir: '',
     outputDir: '',
     experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.5,    intensityLossWeight:1, cosineLossWeight:1, intensityExponent:0.5,   gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
-    fineTuneCheckpoint: '', headOnly: false
   },root);
 }
 
@@ -231,14 +230,6 @@ function resolveWorkbenchPanel(context, output, panel, initialPage = "home", ini
         const command = shellDisplay(python, buildTrainingArgs(normalizeTrainingConfig(message.config)));
         await vscode.env.clipboard.writeText(command);
         panel.webview.postMessage({ type: 'trainingStatus', status: 'idle', text: 'Command copied.', command });
-      } else if (message.type === 'training/pickIntegrationOutput') {
-        const selected=await vscode.window.showSaveDialog({filters:{'FREDIS checkpoint':['pt']}});
-        if(selected)panel.webview.postMessage({type:'training/integrationOutput',path:selected.fsPath});
-      } else if (message.type === 'training/integrate') {
-        try {
-          const result=await require('./workbench/services').backend(context,projectRoot(context),'training-integrate',message,{timeoutMs:0});
-          panel.webview.postMessage({type:'training/integrated',output:message.output,...result});
-        } catch(error) { panel.webview.postMessage({type:'training/integrated',error:error.message}); }
       } else if (message.type === 'runTraining') {
         await runTraining(context, output, normalizeTrainingConfig(message.config), panel);
       } else if (message.type === 'stop') {
@@ -400,10 +391,9 @@ function normalizeTrainingConfig(config) {
 
 async function runTraining(context, output, config, panel) {
   if (runningProcess) throw new Error('Another FREDIS process is already running.');
-  for (const key of ['trainDir', 'valDir', 'outputDir']) {
+  for (const key of ['datasetDir', 'outputDir']) {
     if (!config[key]) throw new Error(`${key} is required.`);
   }
-  if (config.initializeFrom && (config.resume || config.fineTuneCheckpoint)) throw new Error('Use pretrained weight initialization, resume, or frozen-base expansion separately.');
   const root = projectRoot(context);
   const python = vscode.workspace.getConfiguration('fredis').get('pythonPath', 'python');
   await workbench.startTraining(context, panel, output, root, python, config, buildTrainingArgs);
@@ -476,11 +466,12 @@ function buildArgs(c) {
 function buildTrainingArgs(c) {
   if(c.tuning?.enabled){const trials=require('./workbench/tuning').plan(c,buildTrainingArgs);return ['-m','fredis.cli','train','tune-fragment-tree','--plan-json',JSON.stringify({outputDir:c.outputDir,trials})];}
   const a = ['-m', 'fredis.cli', 'train', 'fragment-tree',
-    '--train-dir', c.trainDir, '--val-dir', c.valDir, '--output-dir', c.outputDir,
+    '--dataset-dir', c.datasetDir, '--output-dir', c.outputDir,
     '--epochs', String(c.epochs || 1), '--batch-size', String(c.batchSize || 4),
     '--device', c.device || 'cuda', '--lr', String(c.lr ?? 0.0001)];
-  if(!c.resume&&!c.fineTuneCheckpoint){
-    if(c.pretrainedPatterns?.length||c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.reaction_model_params.edge_dropout=c.dropout??0;model.spectrum_model_params??={};a.push('--model-architecture-json',JSON.stringify({model_config:model,pretrained_patterns:c.pretrainedPatterns||[]}));}
+  if(c.pretrainedPatterns?.length||c.fineTuneCheckpoint||c.initializeFrom||c.headOnly)throw new Error('Select pretrained reactions during dataset preparation, not training.');
+  if(!c.resume){
+    if(c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.reaction_model_params.edge_dropout=c.dropout??0;model.spectrum_model_params??={};a.push('--model-architecture-json',JSON.stringify({model_config:model}));}
 
     const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',edge_num_layers:'reaction-edge-layers'},spectrum_model_params:{"adduct_embedding_dim":"adduct-embedding-dim","collision_energy_dim": "collision-energy-feature-dim", "ce_fc_dims": "ce-fc-dims", "ce_center": "ce-center", "ce_scale": "ce-scale", "fragment_fc_dims": "fragment-fc-dims", "fragment_dropout": "fragment-dropout", "state_fc_dims": "state-fc-dims", "state_dropout": "state-dropout"},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist',dropout:'dropout'}};
     for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,Array.isArray(value)?value.join(','):String(value));}
@@ -489,10 +480,7 @@ function buildTrainingArgs(c) {
   for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (!(c.resume&&key==='dropout')&&c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));
   if(c.cacheDatasetInMemory)a.push('--cache-dataset-in-memory');
   if(c.overwrite)a.push('--overwrite');
-  if (c.initializeFrom) a.push('--initialize-from', c.initializeFrom);
   if (c.resume) a.push('--resume', c.resume);
-  if (c.fineTuneCheckpoint && !c.resume) a.push('--fine-tune-checkpoint', c.fineTuneCheckpoint);
-  if(c.headOnly&&c.fineTuneCheckpoint&&!c.resume)a.push('--head-only');
   return a;
 }
 
@@ -803,9 +791,7 @@ const HELP = {
   overwrite: 'Overwrite existing .preft.pt structure files.', overwritePreprocessingConfig: 'Overwrite an existing preprocessing configuration without prompting.',
   saveTrainValidRecords: 'Save successfully processed training records as an MSDataset.', saveValidationValidRecords: 'Save successfully processed validation records as an MSDataset.',
   keepParallelTemp: 'Keep temporary parallel-processing files after merging.'
-  ,trainDir: 'Directory containing generated training structures and preprocessing_config.pftprep.json.',
-  valDir: 'Directory containing generated validation structures with compatible preprocessing settings.',
-  initializeFrom: 'Initialize compatible Source-anchored model weights for fine-tuning with a fresh optimizer.',
+  ,datasetDir: 'Preparation output directory containing train_structures, validation_structures and shared configuration.',
   dropout: 'Dropout shared by the reaction-state encoder and the spectrum model. Mol Encoder dropout is configured in its architecture section.',
   assignmentScoreThreshold: 'Minimum assignment score accepted for training and the filtered validation view. Reads assignment_scores.tsv from each split. Default: 0.8. Validation also evaluates all samples by combining disjoint above- and below-threshold results without repeating inference.',
   maxSamples: 'Maximum spectra packed into one loaded compound batch.',

@@ -199,10 +199,8 @@ def test_mlp_cli_forwarding_and_configuration():
     parser = build_arg_parser()
     args = parser.parse_args(
         [
-            "--train-dir",
-            "train",
-            "--val-dir",
-            "val",
+            "--dataset-dir",
+            "dataset",
             "--output-dir",
             "out",
             "--ce-fc-dims",
@@ -232,10 +230,8 @@ def test_mlp_cli_forwarding_and_configuration():
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
-                "--train-dir",
-                "t",
-                "--val-dir",
-                "v",
+                "--dataset-dir",
+                "dataset",
                 "--output-dir",
                 "o",
                 "--propagation-steps",
@@ -248,10 +244,8 @@ def test_mlp_cli_forwarding_and_configuration():
                 parser,
                 parser.parse_args(
                     [
-                        "--train-dir",
-                        "t",
-                        "--val-dir",
-                        "v",
+                        "--dataset-dir",
+                        "dataset",
                         "--output-dir",
                         "o",
                         "--fragment-fc-dims",

@@ -5,6 +5,20 @@ import json
 from pathlib import Path
 
 
+def prepared_dataset_paths(directory):
+    """Resolve the split directories of one portable preparation output."""
+    root = Path(directory).expanduser().resolve()
+    if not (root / "fragment-tree.training-data-config.pft").is_file():
+        # Older preparation outputs used this equivalent configuration file.
+        if not (root / "preparation_config.json").is_file():
+            raise ValueError(f"Prepared dataset configuration was not found in {root}")
+    paths = tuple(root / name for name in ("train_structures", "validation_structures"))
+    for path in paths:
+        if not path.is_dir():
+            raise ValueError(f"Prepared dataset split was not found: {path}")
+    return paths
+
+
 def canonical_symbols(symbols):
     """Return the feature order used by AtomFeatureLayer."""
     return tuple(sorted(set(symbols))) if symbols is not None else None
