@@ -216,3 +216,61 @@ def materialize_reaction_states(
             dtype=torch.long,
         ),
     )
+
+
+def compound_graph_display(data):
+    """Domain tree views for display only; model indices remain CompoundBatch IDs."""
+    from ..input.source_reaction_structure import rows
+
+    graph = data.compound_graph
+    execution = data.execution_graph
+    trees = []
+    for group, edges in enumerate(
+        rows(data.reaction_contexts.edge_ptr, data.reaction_contexts.edge_index)
+    ):
+        root = int(
+            data.source_compounds.compound_index[
+                data.reaction_contexts.root_source_compound_index[group]
+            ]
+        )
+        ids = [root] + sorted(
+            set(
+                execution.compound_index[execution.branch_group_index == group].tolist()
+            )
+            - {root}
+        )
+        local = {cid: i for i, cid in enumerate(ids)}
+        nodes = tuple(
+            FragmentNode(i, data.compounds.smiles[cid]) for i, cid in enumerate(ids)
+        )
+        domain_edges = []
+        for edge in edges:
+            src, dst = int(graph.source_compound_index[edge]), int(
+                graph.target_compound_index[edge]
+            )
+            if src in local and dst in local and src != dst:
+                domain_edges.append(
+                    FragmentEdge(len(domain_edges), local[src], local[dst])
+                )
+        trees.append(
+            FragmentTree.from_nodes_and_edges(
+                smiles=data.compounds.smiles[root],
+                nodes=nodes,
+                edges=tuple(domain_edges),
+            )
+        )
+    return DecodedFragmentTreeBatch(
+        data.compounds.graph,
+        torch.stack((graph.source_compound_index, graph.target_compound_index)),
+        torch.full(
+            (len(data.compounds.compounds),), -1, dtype=torch.long, device=data.device
+        ),
+        graph.reaction_index,
+        data.source_compounds.compound_index,
+        torch.zeros(len(data.compounds.compounds), device=data.device),
+        tuple(trees),
+        data.compounds.compounds,
+        0,
+        0,
+        reaction_state_graph=True,
+    )

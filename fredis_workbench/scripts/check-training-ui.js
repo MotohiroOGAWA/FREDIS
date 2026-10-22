@@ -30,10 +30,9 @@ const dimension=form.querySelector('[data-parameter-path="reaction_model_params.
 assert(!form.querySelector('[id$=SaveDefaults]'));
 assert(d.querySelector('#trainingStart').closest('.training-bottom'));
 assert(!d.querySelector('#trainingLossFields').hidden);
-for(const name of ['weightDecay','gradientClip','branchWeight','negativeWeight','branchMilTemperature','intensityLossWeight','cosineLossWeight'])assert(form.elements[name]);
+for(const name of ['weightDecay','gradientClip','branchWeight','negativeWeight','intensityLossWeight','cosineLossWeight'])assert(form.elements[name]);
 assert(!form.querySelector('[data-parameter-path$="loss_weight"]'));
 for(const key of ['branch_path_threshold','max_fragment_nodes','peak_intensity_threshold'])assert(form.querySelector('[data-parameter-path="generation_params.'+key+'"]'));
-assert.equal(form.elements.branchMilTemperature.value,'0.1');
 assert.equal(form.elements.negativeWeight.value,'0.5');
 assert.equal(form.elements.cosineLossWeight.value,'1');
 for(const input of form.querySelectorAll('#trainingLossFields input')){

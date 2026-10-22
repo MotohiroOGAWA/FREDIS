@@ -1,15 +1,15 @@
 # FREDIS architecture, tensor flow, and training objectives
 
-Implementation reference: 2026-10-20. This document describes the current code,
+Implementation reference: 2026-10-22. This document describes the current code,
 including separate main-adduct-specific Fragment and State Heads. Numbers below are either explicitly identified defaults or a
 worked example; they are not measurements from a trained checkpoint.
 
 ## 1. Model boundary and execution order
 
 `SourceAnchoredFragmentSpectrumGenerator` constructs the shared molecular
-encoder, reaction feature model, structural decoder, and competitive spectrum
+encoder, reaction edge feature model, and competitive spectrum
 model. Its `forward()` returns reaction selection only; `predict_batches()` and
-`_predict_group_batches()` implement the complete spectrum pipeline.
+`predict()` implement the complete spectrum pipeline.
 
 ```text
 SMILES + precursor adduct + collision energy (CE)
@@ -18,13 +18,13 @@ SMILES + precursor adduct + collision energy (CE)
      -> conflict / invalidation relations
      -> molecular graphs and reaction input tensors
   -> shared MolEncoder and pattern-owned reaction encoders
-  -> main-adduct-conditioned reaction-set search (no CE)
-  -> RDKit materialization of accepted structural states
+  -> prepared CompoundReactionGraph and formula explanation candidates
+  -> main-adduct-conditioned edge scoring and reachable selection (no CE)
   -> Fragment Head: Child / Self / Sink softmax per parent fragment
   -> one topological DAG pass for fragment survival probabilities
   -> State Head: ion-adduct x hydrogen-shift softmax per fragment
   -> joint probabilities = fragment probability * conditional state probability
-  -> mmkit formula and mass annotations
+  -> prepared mmkit formula and mass annotations
   -> formula aggregation, valid-peak normalization and export
 ```
 
@@ -301,79 +301,32 @@ CE is used only in spectrum transition scoring, not structural search.
 Code: [feature model](specgen/source_reaction_feature_model.py),
 [CE layer](specgen/components/condition/collision_energy_feature.py).
 
-## 9. Reaction pools, set encoding and branch logits
+## 9. CE-independent edge classification
 
-The example pool pads to three reactions per group:
+Each BranchGroup selects canonical CompoundReactionGraph edges by CSR. The edge
+MLP concatenates source Compound embedding, target Compound embedding, concrete
+reaction embedding and main-adduct projection. `edge_num_layers` controls its
+hidden layers; `edge_dropout` controls dropout. CE does not enter branch logits.
+Sigmoids are independent edge probabilities. Prediction accumulates their log
+probabilities along admissible reaction histories and applies the path threshold
+and unique-Compound budget per group, shared across CE.
 
-```python
-pool.reaction_index = [[0,1,2], [3,4,-1]]  # [2,3]
-pool.valid = [[True,True,True], [True,True,False]]
-# pool.embeddings [2,3,128]
-```
+## 10. Shared structures and admissible histories
 
-Four example states, with M=3 reaction slots:
+Preparation performs reaction chemistry before neural scoring and interns unique
+Compound structures and ReactionSets. Formula explanations use these shared
+Compound IDs directly; SourceCompound maps each root to CompoundBatch.
+Training and prediction use the same prepared chemical component classes.
 
-```python
-state = [[-1,-1,-1], [0,-1,-1], [0,1,-1], [1,-1,-1]]  # [4,3]
-state_sample_index = [0,0,0,1]                         # [4]
-```
+A derived finite execution graph distinguishes `(group, Compound, ReactionSet)`
+histories while reusing molecular embeddings. Edges add one unused compatible
+reaction and must match a registered generating set at their destination.
+Structural cycles and identity self loops therefore do not cause infinite
+propagation or introduce impossible merged paths. This runtime expansion is
+not serialized. Predicted final mass is summed over histories of each Compound.
 
-Reaction indices in a state are local pool slots. Add learned BOS and mask PAD:
-
-```text
-selected reactions  [4,3,128]
-BOS + reactions     [4,4,128]
-key_padding_mask    [4,4]  # True means excluded as key/value
-2 SAB layers        [4,4,128]
-BOS readout         [4,128]
-```
-
-No reaction-order positional embedding is used. Padding supports batched
-variable-size sets and is not a semantic reaction. `SAB` uses projected Q/K/V,
-then `nn.MultiheadAttention` (which has its own projections), residual/LN, and
-a GELU FFN `128 -> 256 -> 128`. Default four heads have width 32.
-
-```text
-concat(state_h, group_adduct_h) [4,256]
-query: Linear(256,128)          [4,128]
-key(pool.embeddings)           [2,3,128]  # no key bias
-keys selected by state group   [4,3,128]
-logits = dot(query,key)/sqrt(128) -> [4,3]
-```
-
-Chemical expansion checks pair relations,
-intersects retained-atom bitsets, and rejects repeated/no-op/over-budget sets.
-Invalid logits become `-inf`. Current fragment molecular embeddings and CE do
-not enter branch logits.
-
-A path accumulates `logsigmoid(logit)`; candidate branches are independent
-sigmoids, not a candidate-wise softmax. Duplicate sets keep their best path
-score. There is no learned STOP/EOS head. Defaults are
-`branch_path_threshold=0`, `max_fragment_nodes=100`; depth is bounded by M.
-The node budget is shared by a whole group, not reset for each CE or depth.
-All valid edges between accepted sets are restored, allowing multiple parents.
-
-Code: [set encoder](specgen/components/reaction/reaction_sequence_encoder.py),
-[decoder](specgen/components/reaction/reaction_decoder.py),
-[compatibility](specgen/components/reaction/reaction_compatibility.py).
-
-## 10. Materialization and shared fragment embeddings
-
-Accepted reaction sets become `ReactionSequence` objects. `compile(source)` and
-`run(source)` materialize structures with RDKit on CPU after neural selection.
-This is discrete and not differentiable. Equivalent molecular embeddings are
-cached, but different reaction-set states remain separate graph states.
-
-For a worked example assume A has four nodes with diamond edges
-`0->1, 0->2, 1->3, 2->3`, and B has three nodes with two chain edges. These counts
-are illustrative, not asserted outcomes for particular molecules.
-
-```text
-structural nodes, both groups: 7
-molecular embeddings:         [7,64]
-```
-
-Code: [materialization](specgen/materialization.py),
+Code: [canonical input](input/source_reaction_structure.py),
+[edge model](specgen/source_reaction_feature_model.py),
 [batched generator](specgen/source_anchored_spectrum_predictor.py).
 
 ## 11. Complete ion-condition state grid and metadata
@@ -417,8 +370,8 @@ shift        = [-1,0,-1,0]
 
 Each state directly indexes its condition. With a second CE, the node labels repeat but sample IDs change. Source and fragment
 molecular vectors are selected by node IDs; CE is selected by sample IDs.
-Formula/mz fields are populated after inference propagation. Training preparation
-populates them earlier only to construct targets. They are not condition IDs.
+Formula/mz fields are prepared in the common input for training and prediction.
+They annotate candidates and do not enter neural event features or softmaxes.
 
 Code: [state preparation and annotation](specgen/fragment_spectrum_model.py),
 [sample selection/collation](input/reaction_batching.py).
@@ -511,67 +464,37 @@ Batch output uses `merge_candidate_peaks()`. The Workbench backend retains
 candidate/node rows for inspection rather than applying that same aggregation;
 its candidate rows must not be mistaken for already formula-merged peaks.
 
-## 15. Teacher graphs and target construction
+## 15. Measurements and targets
 
-Training uses CPU-prepared structures and ion-condition grids rather than
-running learned branch search inside each differentiable forward pass.
-Prepared tensors use schema `fredis.fragment-tree-training`.
-Rebuild prepared data for this architecture; no old-format conversion is supplied.
+The shared input is SpectrumPredictionData. SourceReactionStructure adds
+SpectrumData observations, PeakAssignmentData and derived SpectrumFormulaTarget.
+See the authoritative [schema](input/SCHEMA.md) and [workflow](input/README.md).
+A peak can reference several FormulaExplanationData rows, which can explain
+several formulas. Each explanation refers to one Formula, Compound, fragment
+adduct and hydrogen shift. SpectrumExplanationData supplies candidate explanation
+CSR per spectrum, including unmatched candidates.
 
-Observed peaks are assigned chemical explanations during preparation. Branch
-teachers are unioned across CE within a `(molecule, main adduct)` group.
-A chemically valid continuation not present in the union is a weak negative;
-an impossible reaction is not a weak negative. Empty-step-only paths do not
-contribute positive branch-path MIL.
+For each (spectrum, Formula), target intensity is the maximum assigned measured
+intensity; predicted explanation contributions are summed. Valid unmatched
+candidates have target zero. Unavailable or invalid targets are masked out,
+including from cosine normalization. `observed` is metadata, not a presence head.
+Observed peaks with no represented candidate do not contribute intensity loss.
 
-For each valid ion-condition state i, intensity target is the maximum observed
-intensity within the configured m/z tolerance, or zero if unmatched. Invalid
-negative-element formulas and non-positive masses receive zero targets.
-After grouping by formula, teacher targets use maximum rather than sum:
+## 16. Weighted branch edge loss
 
-```text
-y_F = max_i_in_formula_F target_i
-P_F = sum_i_in_formula_F final_probability_i
-```
-
-Observed peaks with no candidate representation do not directly appear in this
-loss vector. Report candidate coverage separately from conditional intensity fit.
-
-Code: [structure/teacher builder](input/structure_builder.py),
-[teacher tensors](input/source_reaction_structure.py).
-
-## 16. Branch loss: positive path MIL and weak negatives
-
-For a teacher path p:
+Preparation unions supported branch edges across CE within each BranchGroup.
+Labels aligned to the group's edge CSR are 1 (positive), 0 (weak negative),
+and -1 (excluded). The implemented objective is
 
 ```text
-s_p = sum_steps log(sigmoid(branch_logit_at_step))
+L_branch = (sum_positive softplus(-logit)
+          + negative_weight * sum_negative softplus(logit))
+           / (N_positive + negative_weight * N_negative)
 ```
 
-There is no path-length normalization or measured-intensity weighting here.
-Alternative paths for one teacher peak use normalized smooth maximum:
-
-```text
-SM_tau(s_1,...,s_n) = tau * log((1/n) * sum_p exp(s_p/tau))
-L_positive = -mean_teacher_peaks SM_tau(paths_for_peak)
-```
-
-Default `branch_mil_temperature=0.1`. Gradient weight per alternative path is
-`softmax(s_p/tau)`. For paths `[0.8,0.5]` and `[0.3]`, scores are
-`[log(0.4),log(0.3)] ~ [-0.916,-1.204]`, positive loss is about 0.980, and
-alternative-path gradient weights are approximately `[0.947,0.053]`.
-
-```text
-L_negative = mean_weak_negatives softplus(negative_logit)
-L_branch = L_positive + negative_weight * L_negative
-```
-
-Default `negative_weight=0.5`. For negative logits `[-1,0.5]`, negative loss is
-about 0.644, so the example branch loss is `0.980+0.5*0.644 ~ 1.302`.
-Empty applicable loss terms are zero. These are teacher-peak/event means,
-not an additional per-molecule-balanced reduction.
-
-Code: [smooth_max_mil and branch_mil_loss](training/fragment_tree_training/model.py).
+The empty objective is zero. Ignored labels have zero gradient.
+Default `negative_weight=0.5`; there is no MIL temperature or path-label table.
+Code: [branch_edge_loss](training/fragment_tree_training/model.py).
 
 ## 17. Spectrum loss: cross entropy and cosine
 
@@ -619,7 +542,7 @@ Code: [spectrum objective](specgen/competitive_spectrum_model.py),
 ## 18. Total objective and gradient boundaries
 
 ```text
-L_total = branch_weight * (L_positive + negative_weight * L_negative)
+L_total = branch_weight * L_branch
         + L_spectrum
 ```
 
@@ -632,7 +555,7 @@ the precursor-excluded term.
 | Shared MolEncoder, including configured external fusion | Yes | Yes |
 | Reaction-instance encoders | Yes | Yes |
 | Branch adduct embedding/projection | Yes | No |
-| Reaction-set SAB/BOS and branch query/key | Yes | No |
+| Compound/reaction edge MLP | Yes | No |
 | CE MLP | No | Yes |
 | Main-adduct Fragment Head | No | Yes |
 | Main-adduct State Head | No | Yes |
@@ -641,8 +564,8 @@ the precursor-excluded term.
 Freezing overrides updates for affected parameters. Spectrum gradients flow
 through probability propagation but not discrete search, pruning, reaction-set
 materialization or chemical target assignment. Training and inference therefore
-use different sources of structural graphs: prepared teacher graphs versus
-learned proposal graphs.
+use the same canonical structural tables; inference selects a reachable
+subgraph using predicted edge scores.
 
 ## 19. Configuration and UI map
 
@@ -653,8 +576,8 @@ learned proposal graphs.
 | Molecular dropout | `--dropout` | 0 |
 | Reaction `hidden_dim` | `--reaction-hidden-dim` | 128 |
 | `branch_main_adduct_dim` | `--reaction-main-adduct-dim` | 128 |
-| Branch `num_heads`, `state_num_layers` | `--reaction-num-heads`, `--reaction-state-layers` | 4, 2 |
-| Branch `state_dropout` | `--fragment-tree-dropout` | 0.5 in CLI |
+| Reaction `num_heads`, branch `edge_num_layers` | `--reaction-num-heads`, `--reaction-edge-layers` | 4, 2 |
+| Branch `edge_dropout` | `--fragment-tree-dropout` | 0.5 in CLI |
 | `adduct_embedding_dim` | `--adduct-embedding-dim` | 32, branch only |
 | `collision_energy_dim` | `--collision-energy-feature-dim` | 16 |
 | `ce_fc_dims`, `ce_center`, `ce_scale` | `--ce-fc-dims`, `--ce-center`, `--ce-scale` | `[32]`, 0, 100 |
@@ -663,12 +586,12 @@ learned proposal graphs.
 | `state_fc_dims` | `--state-fc-dims` | `[128,64]`, State Head |
 | `state_dropout` | `--state-dropout` | 0 |
 | Spectrum `descriptors` | `--intensity-descriptors` | `[]` |
-| Branch / weak-negative / MIL temperature | `--branch-weight`, `--negative-weight`, `--branch-mil-temperature` | 1, 0.5, 0.1 |
+| Branch / weak-negative weight | `--branch-weight`, `--negative-weight` | 1, 0.5 |
 | Spectrum / cosine weights | `--intensity-loss-weight`, `--cosine-loss-weight` | 1, 1 |
 | Search/output limits | `--branch-path-threshold`, `--max-fragment-nodes`, `--peak-intensity-threshold` | 0, 100, 0 |
 
 API constructor defaults and Workbench presets can differ from CLI defaults;
-for example the reaction API's state dropout defaults to 0, while the CLI sets
+for example the reaction API's edge dropout defaults to 0, while the CLI sets
 0.5. Inspect saved model_config for the effective architecture.
 `external_feature_dim` is a MolEncoder configuration/API field, not an automatic
 external-feature data provider or dedicated training CLI flag.

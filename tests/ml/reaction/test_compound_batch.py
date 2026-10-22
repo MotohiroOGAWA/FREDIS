@@ -26,7 +26,7 @@ def test_compound_batch_stores_no_duplicate_identity_or_reference_side_columns(
         [[47.049141]],
         [[1.0]],
     )
-    table = data.annotations.compounds
+    table = data.compounds
     assert isinstance(table, CompoundBatch)
     assert {f.name for f in fields(table)} == {
         "compounds",
@@ -46,20 +46,15 @@ def test_compound_batch_stores_no_duplicate_identity_or_reference_side_columns(
         data.spectrum_batch.decoded.node_graph,
     ):
         assert "descriptors" not in graph
-    assert data.annotations.occurrences.compound_index.numel() == len(
-        data.spectrum_batch.decoded.compounds
-    )
-    assert torch.equal(
-        data.annotations.contexts.reaction_set_index,
-        data.states.candidate_reaction_set_index,
-    )
+    assert "occurrences" not in vars(data.annotations)
+    assert data.formula_explanations.compound_index.max() < len(table.compounds)
     path = tmp_path / "compound-batch.preft.pt"
     data.save(path)
     loaded = SourceReactionStructure.load(path)
     loaded.validate()
-    assert isinstance(loaded.annotations.compounds, CompoundBatch)
-    assert "smiles" not in vars(loaded.annotations.compounds)
-    assert loaded.annotations.compounds.smiles == table.smiles
+    assert isinstance(loaded.compounds, CompoundBatch)
+    assert "smiles" not in vars(loaded.compounds)
+    assert loaded.compounds.smiles == table.smiles
     assert "descriptors" not in loaded.spectrum_batch.decoded.node_graph
 
 
@@ -85,7 +80,7 @@ def test_descriptors_are_computed_only_after_model_selection_and_on_demand():
             first = generator.spectrum_model._encode_molecules(
                 data.spectrum_batch, None, None
             )
-        assert compute.call_count == len(data.annotations.compounds.compounds)
+        assert compute.call_count == len(data.compounds.compounds)
         assert all(
             call.args[1] == ("TPSA", "MolLogP") for call in compute.call_args_list
         )

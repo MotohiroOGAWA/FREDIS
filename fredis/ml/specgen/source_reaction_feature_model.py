@@ -32,8 +32,8 @@ class SourceReactionFeatureModel(nn.Module):
         branch_main_adduct_dim: int = 128,
         max_reaction_count: int = 3,
         num_heads: int = 4,
-        state_num_layers: int = 2,
-        state_dropout: float = 0.0,
+        edge_num_layers: int = 2,
+        edge_dropout: float = 0.0,
         adduct_encoder: nn.Module | None = None,
         collision_energy_encoder: nn.Module | None = None,
         pattern_smarts: dict[int, str] | None = None,
@@ -74,14 +74,16 @@ class SourceReactionFeatureModel(nn.Module):
             nn.GELU(),
             nn.LayerNorm(branch_main_adduct_dim),
         )
-        self.decoder = BranchingReactionDecoder(
-            hidden_dim,
-            branch_main_adduct_dim,
-            max_reaction_count,
-            num_heads,
-            state_num_layers,
-            state_dropout,
-        )
+        if edge_num_layers < 1:
+            raise ValueError("edge_num_layers must be positive")
+        layers = []
+        width = 2 * mol_encoder.graph_dim + hidden_dim + branch_main_adduct_dim
+        for _ in range(edge_num_layers):
+            layers.extend(
+                [nn.Linear(width, hidden_dim), nn.GELU(), nn.Dropout(edge_dropout)]
+            )
+            width = hidden_dim
+        self.edge_head = nn.Sequential(*layers, nn.Linear(width, 1))
         self.max_reaction_count = max_reaction_count
 
     def freeze_mol_encoder(self) -> None:
@@ -160,3 +162,41 @@ class SourceReactionFeatureModel(nn.Module):
             source_embeddings,
             collision_energy,
         )
+
+    def encode_compounds(self, data, features, max_graphs=128):
+        from torch_geometric.data import Batch
+
+        graphs = data.compounds.graph.to_data_list()
+        cached = {
+            int(cid): features.source_embeddings[i]
+            for i, cid in enumerate(data.source_compounds.compound_index.tolist())
+        }
+        missing = [i for i in range(len(graphs)) if i not in cached]
+        for offset in range(0, len(missing), max_graphs):
+            ids = missing[offset : offset + max_graphs]
+            encoded = self.mol_encoder(
+                Batch.from_data_list([graphs[i] for i in ids]).to(data.device)
+            )
+            cached.update((cid, encoded[j]) for j, cid in enumerate(ids))
+        return torch.stack([cached[i] for i in range(len(graphs))])
+
+    def score_edges(self, data, features, molecular=None):
+        molecular = (
+            self.encode_compounds(data, features) if molecular is None else molecular
+        )
+        ctx, graph = data.reaction_contexts, data.compound_graph
+        groups = torch.repeat_interleave(
+            torch.arange(data.num_branch_groups, device=data.device),
+            ctx.edge_ptr.diff(),
+        )
+        edge = ctx.edge_index
+        inputs = torch.cat(
+            (
+                molecular[graph.source_compound_index[edge]],
+                molecular[graph.target_compound_index[edge]],
+                features.reaction_h[graph.reaction_index[edge]],
+                features.branch_main_adduct_h[groups],
+            ),
+            1,
+        )
+        return self.edge_head(inputs).flatten(), molecular

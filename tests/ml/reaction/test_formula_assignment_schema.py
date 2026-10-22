@@ -41,7 +41,7 @@ def test_schema_columns_and_shared_adduct_membership():
         "metadata",
     }
     assert "sample_tree_index" not in vars(data)
-    assert data.annotations.formulas.composition.dtype == torch.long
+    assert data.formulas.composition.dtype == torch.long
     adducts = data.adducts
     assert adducts.fragment_ion_adduct_ptr.shape == (len(adducts.main_adducts) + 1,)
     for i, rule in enumerate(generator.fragmenter.adduct_rule_set.adduct_rules):
@@ -59,7 +59,7 @@ def test_peak_with_multiple_formulas_and_multiple_explanations_survives_lifecycl
 ):
     _, data = prepared_two_ce()
     annotations = data.annotations
-    explanations = annotations.formula_explanations
+    explanations = data.formula_explanations
     counts = torch.bincount(explanations.formula_index)
     formula = int((counts > 1).nonzero()[0])
     same = (explanations.formula_index == formula).nonzero().flatten()[:2]
@@ -72,7 +72,7 @@ def test_peak_with_multiple_formulas_and_multiple_explanations_survives_lifecycl
     )
     data = replace(
         data, annotations=replace(annotations, assignments=assignment)
-    ).without_teacher()
+    ).with_targets()
     data.validate()
     path = tmp_path / "ambiguous.preft.pt"
     data.save(path)
@@ -101,7 +101,7 @@ def test_observed_adduct_is_metadata_and_main_adduct_is_derived():
     )
     assert all("mainAdduct" not in row for row in metadata)
     for sample in data.sample_annotations:
-        assert sample["adduct"] == "[M+H-H2O]+"
+        assert sample["adduct"] == data.conditions.observed_adducts[0]
         assert sample["mainAdduct"] == "[M+H]+"
     stripped = tuple(
         {k: v for k, v in row.items() if k != "observed_adduct"} for row in metadata
@@ -122,17 +122,11 @@ def test_observed_adduct_is_metadata_and_main_adduct_is_derived():
 def test_invalid_registry_references_are_rejected(defect):
     _, data = prepared_two_ce()
     if defect == "foreign_key":
-        e = data.annotations.formula_explanations
+        e = data.formula_explanations
         data = replace(
             data,
-            annotations=replace(
-                data.annotations,
-                formula_explanations=replace(
-                    e,
-                    formula_index=torch.full_like(
-                        e.formula_index, len(data.annotations.formulas.mz)
-                    ),
-                ),
+            formula_explanations=replace(
+                e, formula_index=torch.full_like(e.formula_index, len(data.formulas.mz))
             ),
         )
     elif defect == "duplicate_assignment":
@@ -173,5 +167,5 @@ def test_collation_rejects_adduct_ids_with_different_meanings():
             data.adducts, hydrogen_shifts=data.adducts.hydrogen_shifts.flip(0)
         ),
     )
-    with pytest.raises(ValueError, match="adduct rule vocabularies"):
+    with pytest.raises(ValueError, match="vocabularies"):
         SourceReactionStructure.from_structures([data, other])

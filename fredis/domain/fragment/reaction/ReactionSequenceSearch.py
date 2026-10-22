@@ -83,6 +83,7 @@ class ReactionSequenceSearch:
         reactions: tuple[ReactionInstance, ...],
         *,
         max_reaction_count: int,
+        relations: ReactionRelations | None = None,
         seed_reaction_sequences: Sequence[ReactionSequence] | None = None,
         addable_reactions: Sequence[ReactionInstance] | None = None,
         include_source: bool = False,
@@ -112,7 +113,17 @@ class ReactionSequenceSearch:
         )
         if not self.addable_reactions <= set(self.reactions):
             raise ValueError("addable_reactions must belong to the reaction universe")
-        self.relations = ReactionRelations.from_reactions(self.reactions)
+        self.relations = (
+            relations
+            if relations is not None
+            else ReactionRelations.from_reactions(self.reactions)
+        )
+        if len(self.relations.conflict_mask) != len(self.reactions) or len(
+            self.relations.invalidation_mask
+        ) != len(self.reactions):
+            raise ValueError(
+                "Cached reaction relations must match the reaction registry"
+            )
         self.max_reaction_count = max_reaction_count
         self.seeds = seeds
         self.include_source = include_source

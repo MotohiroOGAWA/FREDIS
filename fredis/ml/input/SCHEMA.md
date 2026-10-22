@@ -1,9 +1,10 @@
 # SourceReactionStructure schema
 
-Sections 2.1–2.9 describe existing tables; the Source-to-Compound mapping in
-section 2.1 is an additional proposal. Sections 2.10–2.13 propose
-a Compound-node / Reaction-edge graph and its branch/intensity supervision for review.
-The existing Python implementation is unchanged. The saved schema identifier remains `fredis.annotated-spectrum-training`. External references are shown by name,
+The tables below are implemented for preparation, training, and prediction.
+`SpectrumPredictionData` owns the shared chemical tables and spectrum conditions.
+`SourceReactionStructure` adds observations and derived targets for training.
+Prediction inputs have no annotations, intensity targets, or branch labels.
+The saved schema identifier remains `fredis.annotated-spectrum-training`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
 The References links below each diagram are ordinary Markdown links to the
@@ -19,12 +20,12 @@ not a single-molecule RDB row. `source_smiles` is stored alongside the Batch in
 SourceReactionStructure. The implemented `SourceCompound` class owns `source_graph`, `source_smiles`,
 and the shared `symbols` vocabulary, under `structure.source_compounds`.
 `structure.source_graph` and `structure.source_smiles` are read-only views.
-The existing fields remain as described below. The proposal additionally links
+The mapping below links
 each Source row to its shared CompoundBatch identity.
 
-### Proposal: Source-to-CompoundBatch correspondence
+### Source-to-CompoundBatch correspondence
 
-Add compound_index to SourceCompound, one shared Compound row ID per Source
+SourceCompound stores compound_index, one shared Compound row ID per Source
 row. Source atom graphs and reaction atom references retain their Source row /
 atom index spaces. compound_index is a separate index space and need not equal
 the Source row number.
@@ -49,7 +50,7 @@ This mapping example assumes CompoundBatch row 0 is CCO and row 5 is CC(=O)O.
 Multiple main-adduct groups for one Source reuse its Source row and this mapping.
 The corresponding structures must agree, and every mapped root must reference
 an existing Compound row; -1 is not permitted for root resolution.
-This addition is proposed only; the Python class is unchanged.
+The Python class stores this mapping.
 
 ### Batch schema with concrete field values
 
@@ -181,9 +182,8 @@ independent graph nodes only when `"H"` is in `symbols`; hydrogen counts remain
 atom features. One shared configuration applies to a packed Batch.
 
 `source_id` is a batch-local row number, not an immutable dataset-global ID.
-SMILES uniqueness is not automatically enforced by the dataclass. Whether to
-require a unique molecular identity is a separate schema decision to make
-before adding dependent tables.
+Source rows may repeat when independently prepared batches are collated.
+Their CompoundBatch mapping still shares one unique structural identity.
 
 Implementation references:
 [MolGraphBuilder](../mol/graph_builder.py),
@@ -261,7 +261,7 @@ r must lie inside that Source's interval.
 **reaction_type.** The columns are `[reaction_pattern_id, reaction_rule_id,
 product_molecule_id]`. For example row 2 `[10,1,0]` selects pattern ID 10, rule ID
 1, and product slot 0. The implementation calls the last field
-`product_molecule_id`, but it does not reference `annotations.compounds`.
+`product_molecule_id`, but it does not reference `compounds`.
 Pattern/rule definitions belong to the preparation Fragmenter; their schema is
 outside this Reaction section. The concrete reaction row additionally encodes
 which Source and which matched/retained atoms are involved.
@@ -469,7 +469,7 @@ Implementation: [SourceCompound](source_compound.py),
 **unique product compounds and their generating sets**
 
 This is the implemented `CompoundBatch` class at
-`structure.annotations.compounds`. Distinguish a single **mmkit.Compound** molecule object from the
+`structure.compounds`. Distinguish a single **mmkit.Compound** molecule object from the
 **CompoundBatch** container holding multiple unique molecules.
 
 ### Three fields in CompoundBatch
@@ -685,11 +685,10 @@ match that produced by its Compound/adduct/shift combination. Identical rows
 are shared across peak assignments; different structures explaining the same
 formula remain separate rows. All four columns are int64 [N_formula_explanation].
 
-Implementation: `structure.annotations.formulas` and
-`structure.annotations.formula_explanations` in [annotated_spectrum_data.py](annotated_spectrum_data.py).
-Runtime condition rows reference explanations through the separate
-`runtime_explanations.formula_explanation_index` and `runtime_explanations.sample_index`
-arrays; these are not additional FormulaExplanationData identity columns.
+Implementation: `structure.formulas` and
+`structure.formula_explanations` in [annotated_spectrum_data.py](annotated_spectrum_data.py).
+SpectrumExplanationData references candidate explanations by CSR, one row per
+spectrum. These references do not change FormulaExplanationData identity.
 
 ## 2.7 BranchGroup
 
@@ -947,7 +946,7 @@ assignment fields are `formula_explanation_ptr` and `formula_explanation_index`.
 
 **CompoundBatch nodes and concrete-reaction edges**
 
-The proposed `structure.compound_graph` stores the structural graph. A node ID is directly a
+The `structure.compound_graph` stores the structural graph. A node ID is directly a
 CompoundBatch row ID; there is no separate node table or reaction-history node.
 Each edge is one `(source Compound, target Compound, Reaction)` triple. The same
 Compound has one node across all histories and BranchGroups. Distinct reactions
@@ -993,15 +992,15 @@ reaction by subtracting the sets associated with two Compound rows.
 If Compound sharing creates cycles or structure-preserving reaction edges,
 the current DAG propagator cannot consume them directly. Enforce history/depth
 constraints in a finite execution view or explicitly choose another propagation
-strategy. Canonical Compound nodes remain shared. This is a schema proposal only.
+strategy. Canonical Compound nodes remain shared. This expansion is derived at runtime and is not serialized.
 
 ## 2.11 ReactionContextData
 
 **Proposed CE-independent branch candidates and edge labels**
 
-This replaces the former Q/V reaction-context proposal. One CSR row corresponds
+This replaces the former Q/V reaction-context table. One CSR row corresponds
 to one BranchGroup; there is no candidate_branch_group_index vector, candidate
-ReactionSet foreign key, or occurrence-row reference in this proposed table.
+ReactionSet foreign key, or occurrence-row reference in this table.
 The shared structural edge registry remains in CompoundReactionGraph.
 
 ```mermaid
@@ -1059,10 +1058,9 @@ For each selected edge predict a logit z(group, edge), conditioned on the group'
 main adduct and the source Compound, target Compound, and concrete Reaction.
 CE is not an input to this branch objective. Train labelled entries with weighted
 binary cross entropy: positive loss softplus(-z), weak-negative loss
-negative_weight * softplus(z); mask label -1. Normalize over supervised entries
-or their weights with an explicit consistent choice; a group without labelled
-entries contributes zero. This is an edge-classification objective, replacing
-the current path MIL rather than reproducing its alternative-path semantics.
+negative_weight * softplus(z); mask label -1. Normalize by the sum of supervised weights (N_positive + negative_weight *
+N_weak_negative). No supervised weight contributes zero. This edge classification
+does not retain alternative-path MIL semantics.
 
 A positive label means the edge is useful in at least one retained explanation
 at some CE, not that its physical occurrence has been established. A weak
@@ -1190,6 +1188,6 @@ metadata, not a newly introduced presence classifier or BCE loss. Samples with
 no positive target intensity are skipped by the current objective. An independent
 presence loss, if desired later, requires a separate model/loss decision.
 
-This section is a schema proposal only; no Python implementation is changed.
-The proposed edge-level branch loss replaces the current branch MIL; the current
-intensity objective can be retained using the explanation-to-formula aggregation above.
+The implemented branch loss is weighted binary cross entropy on the selected
+edges (1: positive, 0: weak negative, -1: excluded). Intensity predictions use
+the explanation-to-formula aggregation above before distribution and cosine loss.

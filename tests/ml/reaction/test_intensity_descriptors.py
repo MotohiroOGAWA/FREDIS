@@ -38,7 +38,7 @@ def test_descriptors_only_affect_post_branch_intensity():
         before_features, before = output(data)
         assert "descriptors" not in data.source_graph
         assert "descriptors" not in data.spectrum_batch.decoded.node_graph
-        assert "descriptors" not in data.annotations.compounds.graph
+        assert "descriptors" not in data.compounds.graph
         with patch(
             "fredis.ml.specgen.competitive_spectrum_model.selected_descriptor_values",
             return_value=(100.0, 100.0),

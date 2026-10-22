@@ -231,19 +231,15 @@ def _validate_training_settings(settings: dict) -> SpectrumLossSettings:
     spectrum_loss = SpectrumLossSettings(
         **{key: settings[key] for key in SPECTRUM_LOSS_KEYS}
     )
-    if (
-        any(
-            not math.isfinite(value) or value < 0
-            for value in (
-                settings["weight_decay"],
-                settings["gradient_clip"],
-                settings["branch_weight"],
-                settings["negative_weight"],
-                settings["min_lr"],
-            )
+    if any(
+        not math.isfinite(value) or value < 0
+        for value in (
+            settings["weight_decay"],
+            settings["gradient_clip"],
+            settings["branch_weight"],
+            settings["negative_weight"],
+            settings["min_lr"],
         )
-        or not math.isfinite(settings["branch_mil_temperature"])
-        or settings["branch_mil_temperature"] <= 0
     ):
         raise ValueError("Optimizer and loss settings must be finite and non-negative")
     if settings["branch_weight"] + spectrum_loss.intensity_loss_weight <= 0:
@@ -342,7 +338,6 @@ def train_reactions(
     gradient_clip: float = 1.0,
     branch_weight: float = 1.0,
     negative_weight: float = 0.5,
-    branch_mil_temperature: float = 0.1,
     intensity_loss_weight: float = 1.0,
     cosine_loss_weight: float = 1.0,
     max_samples: int = 128,
@@ -365,7 +360,6 @@ def train_reactions(
     import time
     from .sources import inherit_model_config
     from ...input.reaction_batching import select_samples
-    from ...specgen.fragment_spectrum_model import deduplicate_molecular_graphs
     from torch.utils.tensorboard import SummaryWriter
 
     model_config = dict(model_config)
@@ -387,7 +381,6 @@ def train_reactions(
             "gradient_clip",
             "branch_weight",
             "negative_weight",
-            "branch_mil_temperature",
             *SPECTRUM_LOSS_KEYS,
             "max_samples",
             "seed",
@@ -455,7 +448,6 @@ def train_reactions(
         for key in (
             "branch_weight",
             "negative_weight",
-            "branch_mil_temperature",
             "train_mol_encoder",
             "gradient_clip",
             "warmup_steps",
@@ -466,7 +458,6 @@ def train_reactions(
             settings[key] = prior[key]
         branch_weight = settings["branch_weight"]
         negative_weight = settings["negative_weight"]
-        branch_mil_temperature = settings["branch_mil_temperature"]
         for key in SPECTRUM_LOSS_KEYS:
             settings[key] = prior[key]
         spectrum_loss = SpectrumLossSettings(
@@ -523,7 +514,6 @@ def train_reactions(
         spectrum_model=generator.spectrum_model,
         branch_weight=branch_weight,
         negative_weight=negative_weight,
-        branch_mil_temperature=branch_mil_temperature,
         spectrum_loss=spectrum_loss,
     ).to(device)
     model.set_checkpoint_model_config(model_config)
@@ -757,12 +747,7 @@ def train_reactions(
             model.eval()
             with torch.no_grad():
                 for data in grouped_batches(intermediate_pieces, groups):
-                    data = replace(
-                        data,
-                        spectrum_batch=deduplicate_molecular_graphs(
-                            data.spectrum_batch, data.source_smiles
-                        ),
-                    ).to(device)
+                    data = data.to(device)
                     result = model(data)
                     for key, value in metric_values(result).items():
                         scalar = float(value.detach())
@@ -890,13 +875,7 @@ def train_reactions(
                         stage_progress.set_postfix_str(stages[0], refresh=True)
                         # Repeated molecular graphs (including Source roots) are
                         # encoded once and gathered for each sample's tree.
-                        source_keys = data.source_smiles
-                        data = replace(
-                            data,
-                            spectrum_batch=deduplicate_molecular_graphs(
-                                data.spectrum_batch, source_keys
-                            ),
-                        ).to(device)
+                        data = data.to(device)
                         stage_progress.update(1)
                         stage_progress.set_postfix_str("forward", refresh=True)
                         if name == "train":
@@ -1128,7 +1107,7 @@ def train_reactions(
         ]
         for item in history:
             lines.append(
-                f"| {item['epoch']} | {item['train_loss']:.6g} | {item['validation_loss']:.6g} | {item.get('validation/branch_positive_mil_loss',0):.4f} | {item.get('validation/branch_negative_loss',0):.4f} | {item.get('validation/spectrum_cosine_similarity',0):.4f} | {item.get('learning_rate',0):.3g} |"
+                f"| {item['epoch']} | {item['train_loss']:.6g} | {item['validation_loss']:.6g} | {item.get('validation/branch_positive_loss',0):.4f} | {item.get('validation/branch_negative_loss',0):.4f} | {item.get('validation/spectrum_cosine_similarity',0):.4f} | {item.get('learning_rate',0):.3g} |"
             )
         if intermediate_history:
             lines.extend(
@@ -1214,7 +1193,7 @@ MODEL_OPTIONS = {
         128,
     ),
     "reaction-num-heads": ("reaction_model_params", "num_heads", int, 4),
-    "reaction-state-layers": ("reaction_model_params", "state_num_layers", int, 2),
+    "reaction-edge-layers": ("reaction_model_params", "edge_num_layers", int, 2),
     "adduct-embedding-dim": ("spectrum_model_params", "adduct_embedding_dim", int, 32),
     "collision-energy-feature-dim": (
         "spectrum_model_params",
@@ -1232,7 +1211,12 @@ MODEL_OPTIONS = {
         mlp_dims("128,64"),
     ),
     "fragment-dropout": ("spectrum_model_params", "fragment_dropout", float, 0.0),
-    "state-fc-dims": ("spectrum_model_params", "state_fc_dims", mlp_dims, mlp_dims("128,64")),
+    "state-fc-dims": (
+        "spectrum_model_params",
+        "state_fc_dims",
+        mlp_dims,
+        mlp_dims("128,64"),
+    ),
     "state-dropout": ("spectrum_model_params", "state_dropout", float, 0.0),
     "branch-path-threshold": ("generation_params", "branch_path_threshold", float, 0.0),
     "max-fragment-nodes": ("generation_params", "max_fragment_nodes", int, 100),
@@ -1295,7 +1279,7 @@ def training_model_config(args):
     # Mol Encoder dropout uses --dropout. The reaction-state and spectrum modules have their
     # own setting to avoid overloading it.
     fragment_dropout = args.fragment_tree_dropout
-    config["reaction_model_params"]["state_dropout"] = fragment_dropout
+    config["reaction_model_params"]["edge_dropout"] = fragment_dropout
     # A closed-choice architecture setting, kept out of the generic int/float
     # MODEL_OPTIONS loop below.
     return config
@@ -1355,7 +1339,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ("gradient-clip", 1.0),
         ("branch-weight", 1.0),
         ("negative-weight", 0.5),
-        ("branch-mil-temperature", 0.1),
         ("min-lr", 1e-6),
         ("minimum-assignment-score", 0.0),
         ("minimum-assignment-score-without-precursor", 0.0),
@@ -1496,7 +1479,6 @@ def main(argv: list[str] | None = None) -> None:
         gradient_clip=args.gradient_clip,
         branch_weight=args.branch_weight,
         negative_weight=args.negative_weight,
-        branch_mil_temperature=args.branch_mil_temperature,
         **{key: getattr(args, key) for key in SPECTRUM_LOSS_KEYS},
         max_samples=args.max_samples,
         minimum_assignment_score=args.minimum_assignment_score,

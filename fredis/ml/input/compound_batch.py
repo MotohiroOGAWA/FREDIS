@@ -22,7 +22,7 @@ class CompoundBatch:
     def to(self, device):
         return replace(
             self,
-            graph=self.graph.to(device),
+            graph=self.graph.clone().to(device),
             generating_reaction_sets_ptr=self.generating_reaction_sets_ptr.to(device),
             generating_reaction_sets_index=self.generating_reaction_sets_index.to(
                 device

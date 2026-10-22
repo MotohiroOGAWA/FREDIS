@@ -39,8 +39,8 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  // Branch dropout remains linked to the shared setting; the new State Head
  // dropout is independently editable in the spectrum model.
  const dropoutConfigRoot=new Element('div');
- createParameterEditor(dropoutConfigRoot,{reaction_model_params:{state_dropout:0.3},spectrum_model_params:{}},'training');
- assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.state_dropout'));
+ createParameterEditor(dropoutConfigRoot,{reaction_model_params:{edge_dropout:0.3},spectrum_model_params:{}},'training');
+ assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.edge_dropout'));
  assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
  assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
  // Generation settings are their own model_config section, filled in with
@@ -74,7 +74,7 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  // Dropout is one shared training-level flag, not a per-component model_config override.
  const dropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',dropout:0.3});
  assert.equal(dropoutArgs[dropoutArgs.indexOf('--fragment-tree-dropout')+1],'0.3');
- const sharedDropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:{reaction_model_params:{state_dropout:0.1},spectrum_model_params:{dropout:0.1}}});
+ const sharedDropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:{reaction_model_params:{edge_dropout:0.1},spectrum_model_params:{dropout:0.1}}});
  assert(!sharedDropoutArgs.includes('--reaction-state-dropout'));assert(!sharedDropoutArgs.includes('--spectrum-dropout'));
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-parameter-import-'));try{
  const file=path.join(temp,'fragmenter config.json');fs.writeFileSync(file,JSON.stringify({fragment_ion_tree_builder:{max_reaction_count:2},mass_tolerance:'0.04Da'}));let handler;const messages=[];service.attach({webview:{onDidReceiveMessage:fn=>handler=fn,postMessage:data=>messages.push(data)}},{},()=>app);

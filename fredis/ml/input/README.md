@@ -1,161 +1,70 @@
-# Prepared input tables
+# Prepared training and prediction inputs
 
-Schema and reference diagrams: [SCHEMA.md](SCHEMA.md).
-Current saved format: `fredis.annotated-spectrum-training`.
+Detailed field types, values and direct references: [SCHEMA.md](SCHEMA.md).
+The saved identifier is `fredis.annotated-spectrum-training`, without a version.
+Prepared data and models must be regenerated when their contract changes.
 
-## Independent tables
+`SpectrumPredictionData` owns the common input tables. `SourceReactionStructure`
+adds observed spectra, peak assignments and derived intensity targets for training.
+`training_data.for_prediction()` returns the common input type with no annotations,
+targets or branch labels. Prediction uses `ReactionStructureBuilder.build_prediction()`
+to construct the same components without measured peaks.
 
-| Class | Structure | Contents |
+| Component | Field | Meaning |
 |---|---|---|
-| [SourceCompound](source_compound.py) | `structure.source_compounds` | `source_graph: Batch`, `source_smiles: tuple[str,...]`, `symbols: tuple[str,...]` |
-| [ReactionTensorData](reaction_tensor_data.py) | `structure.reactions` | Concrete reactions referencing Source rows/atoms and other reaction rows |
-| [ReactionSet](reaction_set.py) | `structure.reaction_sets` | Only `reaction_ptr: int64 [N_set+1]` and `reaction_index: int64 [N_members]` |
+| SourceCompound | `source_compounds` | Packed source graphs, SMILES, symbol vocabulary and `compound_index` into CompoundBatch |
+| ReactionTensorData | `reactions` | Concrete reactions with Source/atom references and reaction conflicts |
+| ReactionSet | `reaction_sets` | Interned sorted sets of global reaction IDs, including one shared empty set |
+| CompoundBatch | `compounds` | Unique mmkit Compound objects, molecular graphs and generating ReactionSet CSR |
+| AdductData | `adducts` | Main/fragment adduct registries, their CSR relation and hydrogen shifts |
+| BranchGroup | `branch_groups` | Unique (Source, main adduct) pairs, independent of CE |
+| CompoundReactionGraph | `compound_graph` | Shared source Compound, target Compound and reaction edge columns |
+| ReactionContextData | `reaction_contexts` | Root Source and selected-edge CSR per BranchGroup; optional aligned int8 labels |
+| FormulaData | `formulas` | Integer elemental composition/charge, theoretical m/z and validity |
+| FormulaExplanationData | `formula_explanations` | Formula, Compound, fragment adduct and hydrogen-shift references |
+| SpectrumExplanationData | `spectrum_explanations` | Candidate explanation CSR per spectrum, including unobserved candidates |
+| SpectrumConditions | `conditions` | BranchGroup, float32 CE and observed precursor adduct label per spectrum |
+| AnnotatedSpectrumData | `annotations` (training) | SpectrumData measurements and PeakAssignmentData explanation CSR per peak |
+| SpectrumFormulaTarget | `targets` (training) | Derived (spectrum, Formula) observation, intensity and mask |
 
-Each ReactionSet row is one unique ascending set of Batch-global concrete
-reaction IDs. Order, CE, main adduct, topology and teacher labels do not define
-another set. The empty set is one shared row; its Source must be supplied by the
-referencing context. Nonempty sets may not mix reactions from different Sources.
-`from_rows()` interns sets and returns the input-row -> canonical-ID mapping.
+Compound structures are shared across histories and adduct groups. Source roots
+reference SourceCompound, which maps to CompoundBatch. ReactionSet IDs represent
+sets, not paths. No descriptor values are prepared or stored; selected descriptors
+are evaluated by the intensity model only when configured.
 
-```python
-reaction_sets, ids = ReactionSet.from_rows([[], [1, 0], [0, 1], [0], []])
-# reaction_sets.rows() == [[], [0, 1], [0]]
-# ids.tolist() == [0, 1, 1, 2, 0]
+## Preparation, training and prediction
 
-# Different groups may reference the same independent set ID.
-contexts.candidate_branch_group_index = [0, 0, 1, 1]
-contexts.candidate_reaction_set_index = [0, 1, 0, 1]
-```
+Preparation enumerates valid chemistry and peak explanations, interns the shared
+tables, and labels each group's selected edges: 1 positive, 0 weak negative,
+-1 excluded. Branch labels pool evidence across that group's CE measurements.
+Spectral targets remain specific to each measured spectrum. A formula can have
+several structural explanations, and one peak can have several assigned formulas.
 
-## Contexts reference sets; they do not own memberships
+The branch network scores source/target Compound features, concrete reaction
+features and main-adduct features, without CE. Training applies weighted edge BCE;
+excluded edges contribute no loss. `negative_weight` controls weak-negative weight.
+The intensity model uses CE and a finite runtime expansion of admissible reaction
+histories. A reaction cannot be repeated and incompatible additions are rejected.
+This prevents structural cycles or merged Compound identities from introducing
+invalid paths. Structures remain shared; the expansion is derived, not serialized.
 
-`structure.states` is [ReactionContextData](reaction_context_data.py). V denotes
-candidate **context** rows, each unique on `(branch group, reaction-set ID)`.
-Q denotes active teacher-context rows selected from V. Neither table owns a
-reaction membership CSR.
+Intensity contributions from explanations of the same Formula are summed before
+comparison with the maximum assigned measured intensity for that (spectrum,
+Formula). Valid unmatched candidates receive zero; invalid candidates are masked.
+The objective combines distribution cross entropy and cosine loss, both with and
+without the precursor. `observed` is target metadata, not a separate presence head.
 
-| Field | Shape / referenced rows |
-|---|---|
-| `candidate_branch_group_index` | int64 [V], branch-group rows |
-| `candidate_reaction_set_index` | int64 [V], independent ReactionSet rows |
-| `candidate_fragment_index` | int64 [V], runtime occurrence rows; -1 if unmaterialized |
-| `candidate_index` | int64 [Q], V context rows |
-| `branch_group_index` | int64 [Q], branch groups of the selected V rows |
-| `parent_index` | int64 [Q], representative Q parent; -1 for roots |
-| `added_reaction_index` | int64 [Q], added registry reaction; -1 for roots |
-| `fragment_node_index` | int64 [Q], runtime occurrence; -1 if unmaterialized |
-| `transition_parent_index` | int64 [N_transition], Q parent rows |
-| `transition_child_index` | int64 [N_transition], Q child rows |
-| `transition_reaction_index` | int64 [N_transition], added registry reactions |
-| `next_ptr` / `next_reaction_index` | CSR, Q context -> valid registry additions |
-| `next_state_index` | Same continuation positions, V destination contexts |
+`generator.predict()` and `predict_batches(..., max_samples=...)` prepare teacher-free
+inputs, share Source/reaction encodings across conditions, select reachable edges,
+and predict spectra. Batched outputs expose `sample_input_index` to restore original
+input order. `.select_samples()` supports reordering/repetition; `.from_structures()`
+collates inputs while remapping shared registries and foreign keys.
 
-`structure.candidate_reactions()` and `active_reactions()` gather memberships
-through these foreign keys as temporary CSR projections. Their values reference
-the global registry. `state_reaction_count` computes Q-context reaction counts.
-Training translates global reaction IDs into the decoder's local pool slots only
-at scoring time. There is no persisted group-local membership table.
+Workbench opens the saved training structure to show the Compound graph and
+positive/weak-negative/excluded edges per BranchGroup. Selecting a CE measurement
+shows its measured intensities, peak explanations and corresponding Compounds.
 
-## CompoundBatch and annotation references
-
-[CompoundBatch](compound_batch.py) stores only `compounds: tuple[mmkit.Compound,...]`,
-`graph`, and `generating_reaction_sets_ptr/index`; SMILES is a derived view.
-[AnnotatedSpectrumData](annotated_spectrum_data.py) holds spectra, unique
-Compounds, charged formulas, formula explanations, and peak assignments. Same-structure Compounds
-share one graph and identity. Within a group they share a materialized node,
-even when reached through different ReactionSets.
-
-| Field | Meaning |
-|---|---|
-| `occurrences.compound_index` | Runtime occurrence -> unique Compound ID |
-| `contexts.compound_index` | [V] materialization context -> Compound ID; -1 if unavailable |
-| `contexts.reaction_set_index` | [V] context -> canonical ReactionSet ID |
-| `compounds.generating_reaction_sets_ptr/index` | CSR, Compound -> unique generating ReactionSet IDs; pointer length N_compound+1 |
-| `occurrences.branch_group_index` | Branch group per runtime occurrence |
-
-The inverse CSR stores distinct `(Compound, ReactionSet)` pairs, not context IDs.
-Repeated groups do not duplicate a pair. The same empty set may occur under more
-than one Compound because its Source context is held by the reference side.
-Observation intensity and formula assignment targets are derived without copying
-measurements into canonical chemical tables.
-
-## Formula and peak annotation tables
-
-`structure.adducts` stores `AdductData`: `main_adducts`, `fragment_ion_adducts`,
-`fragment_ion_adduct_ptr/index` (one row per main adduct), and signed
-`hydrogen_shifts`. `structure.branch_groups` stores the unique Source/main-adduct
-pairs, referencing this shared registry. Collation requires the same ordered
-adduct rules; integer embedding IDs must retain their meanings.
-
-- `annotations.formulas`: FormulaData with int64 composition, float64 theoretical
-  mz, and bool valid. It does not own a structural-explanation CSR.
-- `annotations.formula_explanations`: FormulaExplanationData with int64
-  formula_index, compound_index, fragment_ion_adduct_index, hydrogen_shift_index.
-- `annotations.assignments`: PeakAssignmentData with only
-  formula_explanation_ptr/index, one CSR row per observed peak in SpectrumData order.
-  Each peak can reference explanations of several formulas or several explanations
-  of one formula, without duplicating Formula IDs on the assignment table.
-- `annotations.runtime_explanations`: separate runtime row references into
-  FormulaExplanationData and SpectrumData, used to restore model-input views.
-
-SpectrumData stores branch_group_index, precursor_mz, collision_energy, metadata,
-and peak_ptr with aligned mz/intensity/precursor arrays. Source and main adduct
-are obtained through BranchGroup. The original observed adduct label is kept in
-metadata["observed_adduct"] when supplied; exported viewer dictionaries derive
-mainAdduct through the group. Annotation tables remain independent of TeacherData.
-
-## TeacherData
-
-Teacher labels and paths reference Q contexts, which in turn reference canonical
-ReactionSets. Thus labels remain specific to group/context while membership is
-shared. The fields are:
-
-- `peak_index [H]`: observed peak rows; `peak_branch_group_index [H]`: group context.
-- `observed bool [Q]`: whether a context explains an observed ion.
-- `positive_reaction_ptr/index`, `negative_reaction_ptr/index`: Q-context CSR lists
-  of positive and weak-negative global registry additions.
-- `peak_path_ptr [H+1]`: alternative paths per supervised peak.
-- `path_step_ptr [N_path+1]`: ordered steps per path.
-- `path_step_state_index [N_step]`: parent Q contexts.
-- `path_step_reaction_index [N_step]`: added global concrete reaction IDs.
-
-## SourceReactionStructure fields and lifecycle
-
-| Field | Meaning |
-|---|---|
-| `source_compounds` | Independent SourceCompound table |
-| `reactions` | Concrete reaction registry |
-| `reaction_sets` | Independent membership table |
-| `states` | Group-local context/transition foreign keys |
-| `teacher` | Context-specific labels and paths |
-| `sample_tree_index int64 [S]` (derived) | Spectrum -> BranchGroup -> SourceCompound; not stored |
-| `collision_energy_eV float32 [S]` | Spectrum CE in eV |
-| `sample_branch_group_index int64 [S]` | Spectrum -> branch group |
-| `branch_groups` | BranchGroup with source_compound_index and main_adduct_index |
-| `adducts` | Shared AdductData main/fragment labels, membership CSR, signed hydrogen shifts |
-| `annotations` | Normalized measured/chemical tables, or None |
-| `observations` | Initialization-only dictionaries; normalized into annotations |
-| `formula_elements` | Formula element-column order, excluding final charge |
-| `spectrum_batch` | Expanded runtime topology/ion rows, or None |
-| `source_atom_capacity` | Maximum Source-local atom capacity in a collated batch |
-| `max_reaction_role_count` | Maximum matched Source atom count per reaction |
-
-`source_graph` and `source_smiles` are read-only views of `source_compounds`.
-Adduct is group-level int64 and CE is spectrum-level float32. `device`,
-`num_samples`, and `num_branch_groups` are derived properties. `sample_annotations`
-exports normalized data as viewer dictionaries.
-
-- `from_structures()` collates Source/reaction registries, shifts global reaction
-  members, interns sets, and remaps dependent context and Compound references.
-- `select_samples()` shares the independent registries and slices/remaps context,
-  peak, ion and topology rows. Unused independent rows can remain available.
-- `without_teacher()` removes Q projections and labels, retaining V contexts,
-  the ReactionSet table, materialization and observations.
-- `validate()` checks canonical membership and cross-table references, including
-  Source ownership and Compound's inverse set CSR.
-- `.to(device)` moves tensor-bearing tables and returns a replaced structure.
-- Save/load omits redundant runtime graph/formula caches and restores them from
-  normalized annotations. Loading/validation does not rerun chemistry.
-
-Dataclasses are frozen, but tensors themselves are not deeply immutable. Device
-transfers and replacements must keep the independent table foreign keys aligned.
+`_reaction_preparation.py`, `_preparation_histories.py` and
+`_annotation_preparation.py` are transient chemistry-building helpers. Their
+history/occurrence tables are not the persisted model input or public schema.
+Neural forward passes use prepared tensors without running reaction chemistry.

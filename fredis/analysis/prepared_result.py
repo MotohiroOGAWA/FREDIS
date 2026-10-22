@@ -21,7 +21,7 @@ def load_prepared_structure(file_path: str | Path):
         raise TypeError("This .preft.pt file has no saved structure.")
     structure = payload["structure"]
     required = (
-        "states",
+        "reaction_contexts",
         "sample_branch_group_index",
         "reactions",
     )
@@ -117,18 +117,18 @@ def state_reaction_combinations(
     structure,
 ) -> dict[tuple[int, int], list[tuple[int, ...]]]:
     """Map ``(branch group, fragment node)`` to every saved reaction combination."""
-    ptr, values = structure.candidate_reactions()
-    pointers = ptr.tolist()
-    indexes = values.tolist()
-    groups = structure.states.candidate_branch_group_index.tolist()
-    nodes = structure.states.candidate_fragment_index.tolist()
+    execution = structure.execution_graph
+    memberships = structure.reaction_sets.rows()
     result: dict[tuple[int, int], list[tuple[int, ...]]] = defaultdict(list)
-    for row, (group, node) in enumerate(zip(groups, nodes)):
-        if node < 0:
-            continue
-        combination = tuple(sorted(indexes[pointers[row] : pointers[row + 1]]))
-        if combination not in result[(group, node)]:
-            result[(group, node)].append(combination)
+    for group, compound, set_id in zip(
+        execution.branch_group_index.tolist(),
+        execution.compound_index.tolist(),
+        execution.reaction_set_index.tolist(),
+    ):
+        combination = tuple(memberships[set_id])
+        if combination not in result[(group, compound)]:
+            result[(group, compound)].append(combination)
+
     return dict(result)
 
 
@@ -154,7 +154,7 @@ def iter_prepared_samples(
         for peak in annotation.get("peaks", ()):
             matches = []
             for match in peak.get("matches", ()):
-                for node in match.get("nodeIndices", ()):
+                for node in match.get("nodeIds", ()):
                     for combination in combinations.get((group, node), ()):
                         reaction_rows = [
                             reactions[reaction] for reaction in combination

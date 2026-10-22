@@ -331,7 +331,7 @@ label for 500ms to see its description.
 The default CLI is `python -m fredis.cli train fragment-tree`; it jointly
 trains a newly initialized Mol Encoder. Training options include
 `--weight-decay`, `--gradient-clip`, `--branch-weight`, `--negative-weight`,
-`--branch-mil-temperature`, `--intensity-loss-weight` and
+`--intensity-loss-weight` and
 `--cosine-loss-weight`, all in **Optimization and Loss**. Weak negative reaction
 weight defaults to `0.5`; cosine loss weight defaults to `1`. Hover over each
 label for its description. Mouse-wheel scrolling does not change numeric input

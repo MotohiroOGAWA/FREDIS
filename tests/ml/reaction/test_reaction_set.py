@@ -73,22 +73,24 @@ def test_prepared_groups_share_sets_and_compound_inverse_ids(tmp_path):
     data.validate()
     assert isinstance(data.source_compounds, SourceCompound)
     assert data.source_compounds.symbols == generator.mol_encoder.graph_builder.symbols
-    contexts = data.states
+    contexts = data.reaction_contexts
     assert data.num_branch_groups == 2
-    first = contexts.candidate_reaction_set_index[
-        contexts.candidate_branch_group_index == 0
+    first = data.execution_graph.reaction_set_index[
+        data.execution_graph.branch_group_index == 0
     ]
-    second = contexts.candidate_reaction_set_index[
-        contexts.candidate_branch_group_index == 1
+    second = data.execution_graph.reaction_set_index[
+        data.execution_graph.branch_group_index == 1
     ]
     assert set(first.tolist()) == set(second.tolist())
-    assert len(data.reaction_sets) < contexts.candidate_reaction_set_index.numel()
+    assert len(data.reaction_sets) < data.execution_graph.reaction_set_index.numel()
     assert data.reaction_sets.rows().count([]) == 1
-    compounds = data.annotations.compounds
+    compounds = data.compounds
     assert compounds.graph.num_graphs == len(set(compounds.smiles))
     for c in range(len(compounds.smiles)):
         ids = compounds.generating_reaction_sets_index[
-            compounds.generating_reaction_sets_ptr[c] : compounds.generating_reaction_sets_ptr[c + 1]
+            compounds.generating_reaction_sets_ptr[
+                c
+            ] : compounds.generating_reaction_sets_ptr[c + 1]
         ]
         assert ids.tolist() == sorted(set(ids.tolist()))
     # Selecting a different adduct keeps the immutable registry/set tables and
@@ -102,27 +104,25 @@ def test_prepared_groups_share_sets_and_compound_inverse_ids(tmp_path):
     loaded = SourceReactionStructure.load(path)
     loaded.validate()
     assert loaded.reaction_sets.rows() == data.reaction_sets.rows()
-    assert loaded.states.candidate_reaction_set_index.tolist() == second.tolist()
+    assert loaded.branch_groups.main_adduct_index.tolist() == [1]
 
 
 def test_shared_empty_set_preserves_distinct_source_compounds():
-    from fredis.ml.input.source_reaction_structure import prepare_source_reactions
-
     generator = create_spectrum_generator(config())
     structures = [
-        prepare_source_reactions(
-            source=Compound.from_smiles(smiles),
-            reactions=(),
-            graph_builder=generator.mol_encoder.graph_builder,
-            collision_energy_eV=torch.tensor([10.0]),
-            main_adduct_index=torch.tensor([0]), adducts=AdductData.from_fragmenter(generator.fragmenter),
-            max_reaction_count=1,
-        )
+        ReactionStructureBuilder(generator).build(
+            Compound.from_smiles(smiles),
+            [Adduct.parse("[M+H]+")],
+            [10.0],
+            [[]],
+            [[]],
+            precomputed_reactions=(),
+        )[0]
         for smiles in ("CCO", "CC(=O)O")
     ]
     combined = SourceReactionStructure.from_structures(structures)
     combined.validate()
     assert combined.reaction_sets.rows() == [[]]
-    assert combined.states.candidate_reaction_set_index.tolist() == [0, 0]
     assert combined.branch_groups.source_compound_index.tolist() == [0, 1]
     assert combined.source_compounds.source_smiles == ("CCO", "CC(=O)O")
+    assert combined.source_compounds.compound_index.unique().numel() == 2

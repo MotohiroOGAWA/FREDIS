@@ -92,6 +92,7 @@ class FragmentTreeBuilder:
         max_reaction_count: int | None,
         max_reaction_combinations: int = -1,
         precomputed_reactions: Sequence[ReactionInstance] | None = None,
+        precomputed_relations=None,
     ) -> tuple[ReactionSequenceSearch, Iterable[_ReactionSequenceCandidate]]:
         if not isinstance(source_compound, Compound):
             raise TypeError("source_compound must be a Compound.")
@@ -129,6 +130,7 @@ class FragmentTreeBuilder:
         addable_reactions = None if addable_pattern_ids is None else reactions
         search = ReactionSequenceSearch(
             reactions,
+            relations=precomputed_relations,
             max_reaction_count=limit,
             seed_reaction_sequences=seeds,
             addable_reactions=addable_reactions,
@@ -254,6 +256,7 @@ class FragmentTreeBuilder:
         max_reaction_count: int | None = None,
         print_info: bool = False,
         precomputed_reactions: Sequence[ReactionInstance] | None = None,
+        precomputed_relations=None,
     ) -> FragmentTree:
         return self._build_result(
             compound,
@@ -261,6 +264,7 @@ class FragmentTreeBuilder:
             seed_compounds=seed_compounds,
             addable_pattern_ids=addable_pattern_ids,
             precomputed_reactions=precomputed_reactions,
+            precomputed_relations=precomputed_relations,
             max_unique_fragment_smiles=max_unique_fragment_smiles,
             max_reaction_combinations=max_reaction_combinations,
             max_reaction_count=max_reaction_count,
@@ -279,6 +283,7 @@ class FragmentTreeBuilder:
         max_reaction_count: int | None = None,
         print_info: bool = False,
         precomputed_reactions: Sequence[ReactionInstance] | None = None,
+        precomputed_relations=None,
     ) -> dict[str, Any]:
         """Build one source tree; -1 disables either search limit.
 
@@ -300,6 +305,7 @@ class FragmentTreeBuilder:
             include_source_seed=seed_compounds is not None,
             max_reaction_combinations=max_reaction_combinations,
             precomputed_reactions=precomputed_reactions,
+            precomputed_relations=precomputed_relations,
         )
         try:
             return self._build_from_candidates(

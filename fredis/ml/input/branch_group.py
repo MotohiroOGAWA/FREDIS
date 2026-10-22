@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import torch
 from torch import Tensor
-from .reaction_context_data import TensorTable
+from .tensor_table import TensorTable
 
 
 @dataclass(frozen=True)

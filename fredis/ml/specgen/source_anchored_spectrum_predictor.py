@@ -10,7 +10,6 @@ from fredis.domain.fragment.fragmenter import Fragmenter
 from fredis.libs.mmkit.mmkit import Adduct, Compound
 from ..input.source_reaction_structure import (
     SourceReactionStructure,
-    prepare_source_reactions,
 )
 from ..mol.mol_encoder import MolEncoder
 from ..mol.formula_encoder import FormulaTensorizer
@@ -31,9 +30,16 @@ from .fragment_spectrum_model import (
 
 
 @dataclass(frozen=True)
+class CompoundEdgeSelection:
+    edge_index: torch.Tensor
+    edge_probability: torch.Tensor
+    branch_group_index: torch.Tensor
+
+
+@dataclass(frozen=True)
 class SourceAnchoredSelectionOutput:
     features: SourceReactionFeatures
-    decoded: ReactionDecoderOutput
+    decoded: CompoundEdgeSelection
 
 
 @dataclass(frozen=True)
@@ -191,100 +197,167 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
     def set_generation(self, settings: GenerationSettings) -> None:
         """Search and output settings used by every subsequent prediction."""
         self.generation = settings
-        self.feature_model.decoder.apply_generation(settings)
 
-    def forward(self, data: SourceReactionStructure) -> SourceAnchoredSelectionOutput:
-        """Neural forward, including validation, never invokes RDKit."""
+    def forward(self, data):
+        """Neural edge scoring on shared canonical inputs; no chemistry."""
         features = self.feature_model(data)
+        logits, _ = self.feature_model.score_edges(data, features)
         return SourceAnchoredSelectionOutput(
             features,
-            self.feature_model.decoder(features.pool, features.branch_main_adduct_h),
+            CompoundEdgeSelection(
+                data.reaction_contexts.edge_index,
+                logits.sigmoid(),
+                torch.repeat_interleave(
+                    torch.arange(data.num_branch_groups, device=data.device),
+                    data.reaction_contexts.edge_ptr.diff(),
+                ),
+            ),
         )
 
-    def prepare(
-        self,
-        sources: Sequence[Compound],
-        precursor_types: Sequence[Adduct],
-        collision_energy: Sequence[float],
-        *,
-        precomputed: dict[str, dict] | None = None,
-    ) -> tuple[
-        SourceReactionStructure,
-        tuple[Compound, ...],
-        tuple[tuple, ...],
-        tuple[Adduct, ...],
-        tuple[int, ...],
-    ]:
+    def prepare(self, sources, precursor_types, collision_energy, *, precomputed=None):
+        from ..input.structure_builder import ReactionStructureBuilder
+        from ..input.source_reaction_structure import SpectrumPredictionData
+
         if not sources or not len(sources) == len(precursor_types) == len(
             collision_energy
         ):
             raise ValueError(
                 "sources, precursor_types and collision_energy need equal nonzero lengths"
             )
-        grouped: dict[str, list[int]] = {}
+        grouped = {}
         for i, source in enumerate(sources):
             grouped.setdefault(source.smiles, []).append(i)
-        structures, unique_sources, universes, ordered_adducts, input_indices = (
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
+        inputs = []
+        unique = []
+        reactions = []
+        adducts = []
+        indices = []
         for rows in grouped.values():
             source = sources[rows[0]]
+            builder = ReactionStructureBuilder(self)
             cached = precomputed.get(source.smiles) if precomputed else None
-            if cached is not None:
-                # Primitive reactions came from a prior, possibly subprocess-
-                # isolated preparation pass and are reused verbatim.
-                reactions = cached["reactions"]
-                relations = cached["relations"]
-            else:
-                relations = None
-                reactions = (
-                    self.fragmenter.fragment_ion_tree_builder.create_reaction_instances(
-                        source
-                    )
-                )
-            main = [
-                self.fragmenter._resolve_main_adduct_type(precursor_types[i])
-                for i in rows
-            ]
-            energies = torch.tensor(
-                [collision_energy[i] for i in rows], dtype=torch.float32
+            kwargs = (
+                {}
+                if cached is None
+                else {
+                    "precomputed_reactions": cached["reactions"],
+                    "precomputed_relations": cached["relations"],
+                }
             )
-            group_keys = {}
-            sample_group = []
-            for adduct in main:
-                sample_group.append(group_keys.setdefault(str(adduct), len(group_keys)))
-            group_adduct = torch.tensor(
-                [self.adduct_type_strs.index(key) for key in group_keys],
-                dtype=torch.long,
+            data, kept = builder.build_prediction(
+                source,
+                [precursor_types[i] for i in rows],
+                [collision_energy[i] for i in rows],
+                **kwargs,
             )
-            structures.append(
-                prepare_source_reactions(
-                    source=source,
-                    reactions=reactions,
-                    relations=relations,
-                    graph_builder=self.mol_encoder.graph_builder,
-                    collision_energy_eV=energies,
-                    max_reaction_count=self.feature_model.max_reaction_count,
-                    sample_branch_group_index=torch.tensor(sample_group),
-                    main_adduct_index=group_adduct,
-                    adducts=AdductData.from_fragmenter(self.fragmenter),
-                )
-            )
-            unique_sources.append(source)
-            universes.append(reactions)
-            ordered_adducts.extend(precursor_types[i] for i in rows)
-            input_indices.extend(rows)
-        data = SourceReactionStructure.from_structures(structures)
+            inputs.append(data)
+            unique.append(source)
+            reactions.append(builder.last_reactions)
+            adducts.extend(precursor_types[rows[i]] for i in kept)
+            indices.extend(rows[i] for i in kept)
         return (
+            SpectrumPredictionData.from_structures(inputs),
+            tuple(unique),
+            tuple(reactions),
+            tuple(adducts),
+            tuple(indices),
+        )
+
+    def _select_graph(self, data, logits):
+        """Keep high-probability reachable branches with one budget per main-adduct group."""
+        from ..input.source_reaction_structure import csr
+        from ..input.annotated_spectrum_data import SpectrumExplanationData
+        import heapq, math
+
+        execution = data.execution_graph
+        graph = data.compound_graph
+        ctx = data.reaction_contexts
+        edge_lookup = {
+            (int(a), int(b), int(r)): i
+            for i, (a, b, r) in enumerate(
+                zip(
+                    graph.source_compound_index,
+                    graph.target_compound_index,
+                    graph.reaction_index,
+                )
+            )
+        }
+        edge_rows = []
+        selected_compounds = []
+        threshold = (
+            -math.inf
+            if self.generation.branch_path_threshold == 0
+            else math.log(self.generation.branch_path_threshold)
+        )
+        for group in range(data.num_branch_groups):
+            first, last = ctx.edge_ptr[group : group + 2]
+            scores = {
+                int(edge): float(torch.nn.functional.logsigmoid(logits[int(first) + j]))
+                for j, edge in enumerate(ctx.edge_index[first:last])
+            }
+            outgoing = {}
+            for parent, child, reaction in zip(
+                execution.source_index.tolist(),
+                execution.target_index.tolist(),
+                execution.reaction_index.tolist(),
+            ):
+                if int(execution.branch_group_index[parent]) != group:
+                    continue
+                eid = edge_lookup[
+                    (
+                        int(execution.compound_index[parent]),
+                        int(execution.compound_index[child]),
+                        reaction,
+                    )
+                ]
+                outgoing.setdefault(parent, []).append((child, eid))
+            root = int(execution.root_index[group])
+            reached = {root: 0.0}
+            compounds = {int(execution.compound_index[root])}
+            kept = set()
+            queue = [(0.0, root)]
+            while queue:
+                negative_score, parent = heapq.heappop(queue)
+                if -negative_score < reached[parent]:
+                    continue
+                for child, eid in outgoing.get(parent, []):
+                    score = -negative_score + scores[eid]
+                    compound = int(execution.compound_index[child])
+                    if score < threshold:
+                        continue
+                    if (
+                        compound not in compounds
+                        and len(compounds) >= self.generation.max_fragment_nodes
+                    ):
+                        continue
+                    compounds.add(compound)
+                    kept.add(eid)
+                    if score > reached.get(child, -math.inf):
+                        reached[child] = score
+                        heapq.heappush(queue, (-score, child))
+            edge_rows.append(sorted(kept))
+            selected_compounds.append(compounds)
+        ep, ei = csr(edge_rows, data.device)
+        candidates = []
+        e = data.formula_explanations
+        for sample, group in enumerate(data.sample_branch_group_index.tolist()):
+            a, b = data.spectrum_explanations.formula_explanation_ptr[
+                sample : sample + 2
+            ]
+            candidates.append(
+                [
+                    i
+                    for i in data.spectrum_explanations.formula_explanation_index[
+                        a:b
+                    ].tolist()
+                    if int(e.compound_index[i]) in selected_compounds[group]
+                ]
+            )
+        xp, xi = csr(candidates, data.device)
+        return replace(
             data,
-            tuple(unique_sources),
-            tuple(universes),
-            tuple(ordered_adducts),
-            tuple(input_indices),
+            reaction_contexts=replace(ctx, edge_ptr=ep, edge_index=ei, edge_label=None),
+            spectrum_explanations=SpectrumExplanationData(xp, xi),
         )
 
     @torch.no_grad()
@@ -297,176 +370,95 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         max_samples=None,
         precomputed=None,
     ):
-        limit = self.max_samples if max_samples is None else max_samples
+        from .fragment_spectrum_model import spectrum_batch_from_input
+
         if self.training:
             raise ValueError("Call eval() before predict_batches()")
+        limit = self.max_samples if max_samples is None else max_samples
         if type(limit) is not int or limit < 1:
             raise ValueError("max_samples must be positive")
         if not sources or not len(sources) == len(precursor_types) == len(
             collision_energy
         ):
             raise ValueError("Input lengths must match and be nonzero")
-        # Keep every condition of a shared source in one group. Packs bound the
-        # source/reaction tensors too, rather than merely slicing final scores.
         groups = {}
         for i, source in enumerate(sources):
             groups.setdefault(source.smiles, []).append(i)
         packs = []
-        current = []
+        pack = []
         for rows in groups.values():
-            if current and len(current) + len(rows) > limit:
-                packs.append(current)
-                current = []
-            current.extend(rows)
-            if len(current) >= limit:
-                packs.append(current)
-                current = []
-        if current:
-            packs.append(current)
+            if pack and len(pack) + len(rows) > limit:
+                packs.append(pack)
+                pack = []
+            pack.extend(rows)
+            if len(pack) >= limit:
+                packs.append(pack)
+                pack = []
+        if pack:
+            packs.append(pack)
+        device = next(self.parameters()).device
         for rows in packs:
-            for output in self._predict_group_batches(
+            data, _, _, _, order = self.prepare(
                 [sources[i] for i in rows],
                 [precursor_types[i] for i in rows],
                 [collision_energy[i] for i in rows],
-                max_samples=limit,
                 precomputed=precomputed,
-            ):
-                yield replace(
-                    output,
-                    sample_input_index=tuple(
-                        rows[i] for i in output.sample_input_index
+            )
+            data = data.to(device)
+            static = self.feature_model.encode_static(data, max_graphs=limit)
+            features = self.feature_model(data, static_features=static)
+            molecular = self.feature_model.encode_compounds(
+                data, features, max_graphs=limit
+            )
+            logits, _ = self.feature_model.score_edges(data, features, molecular)
+            selected = self._select_graph(data, logits)
+            for start in range(0, selected.num_samples, limit):
+                indices = list(range(start, min(start + limit, selected.num_samples)))
+                chunk = selected.select_samples(indices)
+                batch = spectrum_batch_from_input(chunk)
+                chunk_features = self.feature_model(chunk, static_features=static)
+                spectrum = self.spectrum_model(
+                    batch,
+                    reaction_h=chunk_features.reaction_h,
+                    collision_energy_h=chunk_features.collision_energy_h,
+                    source_embeddings=chunk_features.source_embeddings,
+                    molecular_embeddings=molecular,
+                )
+                chunk_logits, _ = self.feature_model.score_edges(
+                    chunk, chunk_features, molecular
+                )
+                selection = SourceAnchoredSelectionOutput(
+                    chunk_features,
+                    CompoundEdgeSelection(
+                        chunk.reaction_contexts.edge_index,
+                        chunk_logits.sigmoid(),
+                        torch.repeat_interleave(
+                            torch.arange(chunk.num_branch_groups, device=device),
+                            chunk.reaction_contexts.edge_ptr.diff(),
+                        ),
                     ),
                 )
-
-    @torch.no_grad()
-    def _predict_group_batches(
-        self,
-        sources,
-        precursor_types,
-        collision_energy,
-        *,
-        max_samples=None,
-        precomputed=None,
-    ):
-        """Yield bounded outputs, with global input indices and shared static tokens."""
-        if self.training:
-            raise ValueError("Call eval() before predict_batches()")
-        limit = self.max_samples if max_samples is None else max_samples
-        if type(limit) is not int or limit < 1:
-            raise ValueError("max_samples must be positive")
-        data, unique_sources, reactions, adducts, indices = self.prepare(
-            sources, precursor_types, collision_energy, precomputed=precomputed
-        )
-        from ..input.reaction_batching import select_samples
-        from .fragment_spectrum_model import deduplicate_molecular_graphs
-
-        device = next(self.parameters()).device
-        static = self.feature_model.encode_static(data, max_graphs=limit)
-        effect_cache = {}
-        molecular_cache = {
-            source.smiles: static[1][i] for i, source in enumerate(unique_sources)
-        }
-        # Never split a branch group across chunks. A group with more spectra
-        # than ``limit`` is processed intact so search and its node budget are
-        # still applied exactly once for (compound, main adduct).
-        chunks = []
-        current = []
-        for group in range(data.num_branch_groups):
-            rows = (
-                (data.sample_branch_group_index == group).nonzero().flatten().tolist()
-            )
-            if current and len(current) + len(rows) > limit:
-                chunks.append(current)
-                current = []
-            current.extend(rows)
-            if len(current) >= limit:
-                chunks.append(current)
-                current = []
-        if current:
-            chunks.append(current)
-        for selected in chunks:
-            chunk = select_samples(data, selected).to(device)
-            features = self.feature_model(chunk, static_features=static)
-            selection = SourceAnchoredSelectionOutput(
-                features,
-                self.feature_model.decoder(
-                    features.pool, features.branch_main_adduct_h
-                ),
-            )
-            decoded = materialize_reaction_states(
-                selection.decoded,
-                unique_sources,
-                reactions,
-                chunk.branch_groups.source_compound_index,
-                self.mol_encoder.graph_builder,
-                effect_cache=effect_cache,
-            )
-            spectrum_batch = prepare_spectrum_model_batch(
-                decoded,
-                self.fragmenter,
-                [adducts[i] for i in selected],
-                self.tensorizer,
-                sample_branch_group_index=chunk.sample_branch_group_index,
-                ion_type_strs=self.ion_type_strs,
-                annotate=False,
-            )
-            spectrum_batch = deduplicate_molecular_graphs(
-                spectrum_batch, tuple(source.smiles for source in unique_sources)
-            )
-            graph_keys = [
-                key
-                for key, index in zip(
-                    spectrum_batch.unique_smiles,
-                    spectrum_batch.unique_source_index.tolist(),
+                yield SourceAnchoredSpectrumOutput(
+                    selection,
+                    batch.decoded,
+                    spectrum,
+                    batch,
+                    tuple(rows[order[i]] for i in indices),
                 )
-                if index < 0
-            ]
-            graphs = spectrum_batch.unique_node_graph.to_data_list()
-            missing = [
-                i for i, key in enumerate(graph_keys) if key not in molecular_cache
-            ]
-            if missing:
-                from torch_geometric.data import Batch
-
-                # Also bound molecular graph encoding for large selected trees.
-                for offset in range(0, len(missing), limit):
-                    ids = missing[offset : offset + limit]
-                    embeddings = self.mol_encoder(
-                        Batch.from_data_list([graphs[i] for i in ids]).to(device)
-                    )
-                    molecular_cache.update(
-                        (graph_keys[i], embeddings[j]) for j, i in enumerate(ids)
-                    )
-            molecular = torch.stack(
-                [molecular_cache[key] for key in spectrum_batch.unique_smiles]
-            )[spectrum_batch.node_graph_inverse.to(device)]
-            spectrum_batch = spectrum_batch.to(device)
-            spectra = self.spectrum_model(
-                spectrum_batch,
-                reaction_h=features.reaction_h,
-                collision_energy_h=features.collision_energy_h,
-                source_embeddings=features.source_embeddings,
-                molecular_embeddings=molecular,
-            )
-            spectrum_batch = replace(
-                spectrum_batch,
-                state_formula_tensor=spectra.formula_tensor,
-                state_mz=spectra.mz,
-            )
-            yield SourceAnchoredSpectrumOutput(
-                selection,
-                decoded,
-                spectra,
-                spectrum_batch,
-                tuple(indices[i] for i in selected),
-            )
 
     @torch.no_grad()
     def predict(self, sources, precursor_types, collision_energy, *, precomputed=None):
         if len(sources) > self.max_samples:
             raise ValueError("Use predict_batches() for inputs exceeding max_samples")
-        return next(
+        outputs = list(
             self.predict_batches(
-                sources, precursor_types, collision_energy, precomputed=precomputed
+                sources,
+                precursor_types,
+                collision_energy,
+                max_samples=self.max_samples,
+                precomputed=precomputed,
             )
         )
+        if len(outputs) != 1:
+            raise ValueError("Use predict_batches() for multi-pack inputs")
+        return outputs[0]

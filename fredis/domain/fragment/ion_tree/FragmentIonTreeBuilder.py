@@ -47,6 +47,7 @@ class FragmentIonTreeBuilder(FragmentTreeBuilder):
         addable_pattern_ids: frozenset[int] | None = None,
         print_info: bool = False,
         precomputed_reactions: Sequence | None = None,
+        precomputed_relations=None,
     ) -> FragmentIonTree:
         """Build FragmentIonTree from Compound."""
 
@@ -60,6 +61,7 @@ class FragmentIonTreeBuilder(FragmentTreeBuilder):
             addable_pattern_ids=addable_pattern_ids,
             print_info=print_info,
             precomputed_reactions=precomputed_reactions,
+            precomputed_relations=precomputed_relations,
         )
 
         fragment_tree: FragmentTree = result["fragment_tree"]

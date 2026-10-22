@@ -125,24 +125,29 @@ def distribution(values):
 def _node_depths(spectrum_batch, sample, precursor_mz, tolerance):
     """Measure graph depth in the predicted tree from precursor-emitting nodes (precursor is depth 0)."""
     decoded = spectrum_batch.decoded
-    sample_nodes = set(
-        torch.nonzero(decoded.node_sample_index == sample, as_tuple=False)
-        .flatten()
-        .tolist()
-    )
-    candidate_rows = (
-        torch.nonzero(
-            spectrum_batch.state_sample_index == sample, as_tuple=False
+    if spectrum_batch.canonical_data is not None:
+        core = spectrum_batch.canonical_data
+        group = int(core.sample_branch_group_index[sample])
+        sample_nodes = set(
+            core.execution_graph.compound_index[
+                core.execution_graph.branch_group_index == group
+            ].tolist()
         )
+    else:
+        sample_nodes = set(
+            torch.nonzero(decoded.node_sample_index == sample, as_tuple=False)
+            .flatten()
+            .tolist()
+        )
+    candidate_rows = (
+        torch.nonzero(spectrum_batch.state_sample_index == sample, as_tuple=False)
         .flatten()
         .tolist()
     )
     seeds = {
         int(spectrum_batch.state_node_index[row])
         for row in candidate_rows
-        if tolerance.within(
-            float(spectrum_batch.state_mz[row]), float(precursor_mz)
-        )
+        if tolerance.within(float(spectrum_batch.state_mz[row]), float(precursor_mz))
     }
     if not seeds and sample_nodes:
         seeds.add(min(sample_nodes))
@@ -164,16 +169,12 @@ def _node_depths(spectrum_batch, sample, precursor_mz, tolerance):
 def _formula_depths(spectrum_batch, sample, node_depths, precursor_mz, tolerance):
     result = {}
     for row in (
-        torch.nonzero(
-            spectrum_batch.state_sample_index == sample, as_tuple=False
-        )
+        torch.nonzero(spectrum_batch.state_sample_index == sample, as_tuple=False)
         .flatten()
         .tolist()
     ):
         node = int(spectrum_batch.state_node_index[row])
-        if tolerance.within(
-            float(spectrum_batch.state_mz[row]), float(precursor_mz)
-        ):
+        if tolerance.within(float(spectrum_batch.state_mz[row]), float(precursor_mz)):
             result[row] = 0
         elif node in node_depths:
             result[row] = node_depths[node]
@@ -362,8 +363,7 @@ def validate_spectra(
                     annotation = annotations[input_index]
                     formula_rows = (
                         torch.nonzero(
-                            output.spectrum_batch.state_sample_index
-                            == sample,
+                            output.spectrum_batch.state_sample_index == sample,
                             as_tuple=False,
                         )
                         .flatten()
@@ -493,16 +493,14 @@ def validate_spectra(
                             "generated_peak_count": len(predicted),
                         }
                     branch_group = int(data.sample_branch_group_index[sample])
-                    nodes = output.fragments.node_sample_index == branch_group
-                    raw = output.selection.decoded.state_sample_index == branch_group
+                    core = output.spectrum_batch.canonical_data
+                    group = int(core.sample_branch_group_index[sample])
+                    execution = core.execution_graph
+                    raw = execution.branch_group_index == group
+                    node_count = execution.compound_index[raw].unique().numel()
                     path_depth = (
-                        float(
-                            (output.selection.decoded.state_reaction_index[raw] >= 0)
-                            .sum(1)
-                            .float()
-                            .mean()
-                        )
-                        if torch.any(raw)
+                        float(core.state_reaction_count[raw].float().mean())
+                        if bool(raw.any())
                         else 0.0
                     )
                     top_metrics = top_n_assignment_metrics(
@@ -568,14 +566,9 @@ def validate_spectra(
                             ),
                             generated_peak_count=sum(value > 0 for value in intensity),
                             generated_fragment_nodes=int(raw.sum()),
-                            unique_fragment_nodes=int(nodes.sum()),
+                            unique_fragment_nodes=int(node_count),
                             mean_path_depth=path_depth,
-                            duplicate_states_removed=(
-                                float(output.selection.decoded.duplicate_states_removed)
-                                if output.selection.decoded.duplicate_states_removed
-                                is not None
-                                else 0.0
-                            ),
+                            duplicate_states_removed=0.0,
                             generated_mz=mz,
                             generated_intensity=intensity,
                             generated_peaks=generated,

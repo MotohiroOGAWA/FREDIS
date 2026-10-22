@@ -36,6 +36,8 @@ class SpectrumModelBatch:
     unique_source_index: Tensor | None = None
     unique_smiles: tuple[str, ...] = ()
     node_smiles: tuple[str, ...] = ()
+    canonical_data: object | None = None
+    target_mask: Tensor | None = None
 
     @property
     def state_adducts(self) -> tuple[str, ...]:
@@ -64,12 +66,18 @@ class SpectrumModelBatch:
             "state_adduct_index",
             "state_hydrogen_shift",
             "target_intensity",
+            "target_mask",
             "node_graph_inverse",
             "unique_source_index",
         )
         return replace(
             self,
             decoded=self.decoded.to(device),
+            canonical_data=(
+                self.canonical_data.to(device)
+                if self.canonical_data is not None
+                else None
+            ),
             unique_node_graph=(
                 self.unique_node_graph.to(device)
                 if self.unique_node_graph is not None
@@ -109,6 +117,7 @@ class SpectrumModelOutput:
     fragment_sample_index: Tensor | None = None
     state_fragment_index: Tensor | None = None
     state_probability: Tensor | None = None
+    formula_explanation_index: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -201,9 +210,7 @@ def annotate_ion_conditions(
     formulas = []
     mzs = []
     for row, node in enumerate(data.state_node_index.tolist()):
-        ion = Adduct.parse(
-            data.ion_type_strs[int(data.state_adduct_index[row])]
-        )
+        ion = Adduct.parse(data.ion_type_strs[int(data.state_adduct_index[row])])
         shift = Adduct.from_dict({"H": int(data.state_hydrogen_shift[row])})
         formula = ion.apply_to_formula(
             shift.apply_to_formula(data.decoded.compounds[node].formula)
@@ -213,12 +220,8 @@ def annotate_ion_conditions(
     device = data.state_node_index.device
     return replace(
         data,
-        state_formula_tensor=tensorizer.formulas_to_tensor(
-            formulas, device=device
-        ),
-        state_mz=torch.tensor(
-            mzs, dtype=torch.float64, device=device
-        ),
+        state_formula_tensor=tensorizer.formulas_to_tensor(formulas, device=device),
+        state_mz=torch.tensor(mzs, dtype=torch.float64, device=device),
     )
 
 
@@ -268,7 +271,8 @@ def collate_spectrum_model_batches(
         mzs.append(item.state_mz)
         remap = torch.tensor(
             [ion_index[value] for value in item.ion_type_strs],
-            dtype=torch.long, device=item.state_adduct_index.device,
+            dtype=torch.long,
+            device=item.state_adduct_index.device,
         )
         adduct_indices.append(remap[item.state_adduct_index])
         hydrogen_shifts.append(item.state_hydrogen_shift)
@@ -336,4 +340,49 @@ def deduplicate_molecular_graphs(data: SpectrumModelBatch, source_smiles=()):
         node_graph_inverse=torch.tensor(inverse),
         unique_source_index=torch.tensor(shared),
         unique_smiles=tuple(keys),
+    )
+
+
+def spectrum_batch_from_input(data, targets=None):
+    """Same FormulaExplanation-based model input for training and prediction."""
+    from .materialization import compound_graph_display
+
+    explanation = data.spectrum_explanations.formula_explanation_index
+    counts = data.spectrum_explanations.formula_explanation_ptr.diff()
+    samples = torch.repeat_interleave(
+        torch.arange(data.num_samples, device=data.device), counts
+    )
+    e = data.formula_explanations
+    formula = e.formula_index[explanation]
+    target = None
+    mask = None
+    if targets is not None:
+        dense = data.formulas.mz.new_zeros(
+            (data.num_samples, len(data.formulas.mz)), dtype=torch.float32
+        )
+        dense[targets.spectrum_index, targets.formula_index] = (
+            targets.intensity * targets.supervision_mask
+        )
+        target = dense[samples, formula]
+        available = torch.zeros_like(dense, dtype=torch.bool)
+        available[targets.spectrum_index, targets.formula_index] = (
+            targets.supervision_mask
+        )
+        mask = available[samples, formula]
+    return SpectrumModelBatch(
+        decoded=compound_graph_display(data),
+        state_node_index=e.compound_index[explanation],
+        state_sample_index=samples,
+        state_formula_tensor=data.formulas.composition[formula].float(),
+        state_mz=data.formulas.mz[formula],
+        state_adduct_index=e.fragment_ion_adduct_index[explanation],
+        state_hydrogen_shift=data.adducts.hydrogen_shifts[
+            e.hydrogen_shift_index[explanation]
+        ],
+        target_intensity=target,
+        precursor_adducts=data.conditions.observed_adducts,
+        ion_type_strs=data.adducts.fragment_ion_adducts,
+        node_smiles=data.compounds.smiles,
+        canonical_data=data.for_prediction(),
+        target_mask=mask,
     )
