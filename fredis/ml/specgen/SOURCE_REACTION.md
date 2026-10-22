@@ -1,7 +1,7 @@
 # Source-anchored competitive fragmentation model
 
 The architecture is `fragment-tree-competitive-ion`. Prepared training tensors
-use schema `fredis.fragment-tree-training`. Regenerate prepared data and
+use schema `fredis.annotated-spectrum-training`. Regenerate prepared data and
 train a new checkpoint for this architecture; retired ion-embedding models are
 not converted or silently accepted.
 
@@ -9,14 +9,16 @@ not converted or silently accepted.
 
 Each reaction instance is encoded from the original source molecule using a
 pattern-owned external-neighborhood encoder, reactant Graphormer, and
-pattern readout. Reaction-set attention uses a BOS token.
+pattern readout. Branch edges use shared source/target Compound embeddings,
+reaction embeddings and main-adduct features in an MLP.
 The main precursor adduct conditions branch selection; CE does not change the
 structural search. Each (molecule, main adduct) shares a branch graph across CE.
 
-Batch prediction computes conflict, invalidation, and dominance relations in
+Batch prediction computes conflict and invalidation relations in
 CPU preparation workers, once per unique molecule. Inference reuses them.
-Search retains the best proposal score per reaction set, then restores all
-valid edges between accepted sets before materializing chemical structures.
+Chemistry and formula candidates are prepared before neural scoring, using the
+same components as training. Edge selection keeps reachable admissible histories
+within the path threshold and unique-Compound budget. See [shared inputs](../input/README.md).
 
 ## Fragment Head and topological probability flow
 
@@ -49,7 +51,8 @@ for child in children[i]:
 Self and Sink mass are final and never propagated again. Sink is unobserved
 additional fragmentation or disappearance. Multiple-parent contributions add.
 Terminal fragments predict Self and Sink with the same head. For each sample,
-`sum(final_fragment_prob) + sum(sink_prob) = 1`. Cyclic break graphs are rejected.
+`sum(final_fragment_prob) + sum(sink_prob) = 1`. Structural cycles are expanded into finite compatible reaction histories before
+propagation; molecular structures remain shared.
 
 ## State Head and joint probabilities
 
@@ -90,9 +93,8 @@ formula = fragment_ion_adduct.apply_to_formula(
 mz = formula.exact_mass / abs(fragment_ion_adduct.charge)
 ```
 
-These values are output annotations, not learned transition inputs. Training
-preparation computes the same annotations early solely to assign observed
-peak targets. Equivalent formulas are merged only for supervision and output,
+These values are output annotations, not learned transition inputs. Shared preparation computes the same annotations for training and prediction;
+training additionally assigns observed peak targets. Equivalent formulas are merged only for supervision and output,
 not to merge neural states before propagation. Invalid negative-element
 formulas and non-positive masses are omitted from exported peaks. The internal
 probability mass on such states remains visible and is not redistributed during
@@ -100,7 +102,8 @@ propagation. Display normalization uses valid formula peaks only.
 
 ## Loss
 
-Branch supervision is positive path MIL plus weighted weak-negative softplus.
+Branch supervision is weighted edge BCE with aligned positive/weak-negative/ignored
+labels (1/0/-1). `negative_weight` controls weak-negative weight.
 The spectrum objective sums probabilities by sample/formula, compares them with
 sum-normalized observed intensities by cross entropy, and adds a weighted cosine
 loss. The spectrum objective sums equally weighted precursor-inclusive and

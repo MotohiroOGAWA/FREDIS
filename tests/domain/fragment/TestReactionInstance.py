@@ -16,11 +16,11 @@ class TestReactionInstance(unittest.TestCase):
         a = self.reaction(retained=(1,2,3))
         b = self.reaction(retained=(1,2), pattern_id=1)
         seq = ReactionSequence((a, b, a))
-        self.assertEqual(seq.reactions, (b,))
+        self.assertEqual(set(seq.reactions), {a, b})
         self.assertEqual(seq, ReactionSequence((b, a)))
-        self.assertEqual(hash(seq), hash(ReactionSequence((b,))))
+        self.assertEqual(hash(seq), hash(ReactionSequence((b, a))))
 
-    def test_shared_bond_rejected_before_redundancy(self):
+    def test_shared_bond_rejected(self):
         a = self.reaction(cuts=((1, 2),))
         b = self.reaction(roles=(2, 1), retained=(1,), pattern_id=1)
         for reactions in ((a, b), (b, a), (a, a, b)):
@@ -62,10 +62,10 @@ class TestReactionInstance(unittest.TestCase):
             Chem.MolFromSmiles('[CH3:1][CH2:2][CH3:3]'))[0]
         self.assertEqual(result.GetNumBonds(), 0)
 
-    def test_equal_retention_does_not_remove_all_reactions(self):
+    def test_equal_retention_preserves_distinct_reactions(self):
         a = self.reaction()
         b = self.reaction(roles=(2, 1), pattern_id=1)
-        self.assertEqual(ReactionSequence((b, a)).reactions, (a,))
+        self.assertEqual(set(ReactionSequence((b, a)).reactions), {a, b})
 
     def test_existing_rules_manual_match_with_compound(self):
         source = Compound.from_smiles('CC(O)N')

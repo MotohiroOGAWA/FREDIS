@@ -4,13 +4,16 @@ from __future__ import annotations
 from dataclasses import replace
 from collections.abc import Sequence
 from types import SimpleNamespace
+from fredis.ml.input.adduct_data import AdductData
 import torch
 from fredis.libs.mmkit.mmkit import Compound, Adduct
 from fredis.domain.fragment.reaction import FragmentTreeLimitExceeded
-from .source_reaction_structure import (
-    SourceReactionStructure,
+from .reaction_set import ReactionSet
+from ._reaction_preparation import (
+    ReactionPreparation as SourceReactionStructure,
     prepare_source_reactions,
     UnresolvedPrecursorError,
+    csr,
 )
 from ..specgen.source_anchored_spectrum_predictor import (
     SourceAnchoredFragmentSpectrumGenerator,
@@ -45,7 +48,7 @@ def _transitions_by_sequence(tree):
     return result
 
 
-class ReactionStructureBuilder:
+class _ChemistryPreparationBuilder:
     def __init__(
         self,
         generator: SourceAnchoredFragmentSpectrumGenerator,
@@ -74,6 +77,7 @@ class ReactionStructureBuilder:
         seed_compounds: dict | None = None,
         addable_pattern_ids: frozenset[int] | None = None,
         precomputed_reactions: Sequence | None = None,
+        precomputed_relations=None,
     ) -> tuple[SourceReactionStructure, tuple[int, ...]]:
         """Return the built structure plus which input sample indices it kept.
 
@@ -131,6 +135,13 @@ class ReactionStructureBuilder:
                     key=lambda reaction: reaction.key,
                 )
             )
+        from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
+
+        relations = (
+            precomputed_relations
+            if precomputed_relations is not None
+            else ReactionRelations.from_reactions(tuple(reactions))
+        )
         self.last_reactions = tuple(reactions)
         # Full chemistry is permitted here, never inside neural forward.
         requested_count = fragmenter.tree_max_reaction_count
@@ -147,7 +158,8 @@ class ReactionStructureBuilder:
                     seed_reaction_sequences=tuple(seed_compounds or ()),
                     seed_compounds=seed_compounds,
                     addable_pattern_ids=addable_pattern_ids,
-                    precomputed_reactions=precomputed_reactions,
+                    precomputed_reactions=reactions,
+                    precomputed_relations=relations,
                 )
                 break
             except FragmentTreeLimitExceeded as error:
@@ -220,13 +232,7 @@ class ReactionStructureBuilder:
         mains = [
             fragmenter._resolve_main_adduct_type(adduct) for adduct in precursor_types
         ]
-        conditions = torch.tensor(
-            [
-                [generator.adduct_type_strs.index(str(main)), ce]
-                for main, ce in zip(mains, collision_energy)
-            ],
-            dtype=torch.float32,
-        )
+        energies = torch.tensor(collision_energy, dtype=torch.float32)
         group_keys = {}
         sample_groups = []
         for main in mains:
@@ -239,22 +245,23 @@ class ReactionStructureBuilder:
             source=source,
             reactions=reactions,
             graph_builder=generator.mol_encoder.graph_builder,
-            condition_features=conditions,
+            relations=relations,
+            collision_energy_eV=energies,
             max_reaction_count=fragmenter.tree_max_reaction_count,
             teacher_paths=teacher_paths,
             sample_branch_group_index=torch.tensor(sample_groups),
-            branch_group_adduct_index=group_adduct,
+            main_adduct_index=group_adduct,
+            adducts=AdductData.from_fragmenter(fragmenter),
             valid_reaction_sequences=frozenset(self.last_reaction_sequence_compounds),
         )
         # Materialization adds its own Source bookkeeping root. Teacher depth
         # zero is the shared empty reaction state for each branch group.
+        active_ptr, active_reactions = data.active_reactions()
         rows = [
-            tuple(data.teacher_node_reaction_index[a:b].tolist())
-            for a, b in zip(
-                data.teacher_node_reaction_ptr[:-1], data.teacher_node_reaction_ptr[1:]
-            )
+            tuple(active_reactions[a:b].tolist())
+            for a, b in zip(active_ptr[:-1], active_ptr[1:])
         ]
-        samples = data.teacher_node_branch_group_index.tolist()
+        samples = data.states.branch_group_index.tolist()
         dense_rows = []
         dense_sample = []
         parents = []
@@ -272,12 +279,12 @@ class ReactionStructureBuilder:
             for node, (owner, ids) in enumerate(zip(samples, rows)):
                 if owner != sample:
                     continue
-                parent = int(data.teacher_node_parent_index[node])
+                parent = int(data.states.parent_index[node])
                 teacher_dense[node] = len(dense_rows)
                 dense_rows.append((*ids, *([-1] * (width - len(ids)))))
                 dense_sample.append(sample)
                 parents.append(teacher_dense[parent] if parent >= 0 else source_row)
-                added.append(int(data.teacher_node_added_reaction_index[node]))
+                added.append(int(data.states.added_reaction_index[node]))
                 terminal.append(True)
         # Competition must include unobserved alternatives as well as the
         # positive teacher paths. Use every exhaustively enumerated state.
@@ -335,7 +342,7 @@ class ReactionStructureBuilder:
             synthetic,
             (source,),
             (reactions,),
-            data.branch_group_tree_index,
+            data.branch_groups.source_compound_index,
             generator.mol_encoder.graph_builder,
         )
         node_by_state = {
@@ -462,9 +469,7 @@ class ReactionStructureBuilder:
         )
         target = []
         valid_formulas = (
-            (spectrum_batch.state_formula_tensor[:, :-1] >= 0)
-            .all(1)
-            .tolist()
+            (spectrum_batch.state_formula_tensor[:, :-1] >= 0).all(1).tolist()
         )
         for sample, mz, valid_formula in zip(
             spectrum_batch.state_sample_index.tolist(),
@@ -481,14 +486,68 @@ class ReactionStructureBuilder:
                 and fragmenter.mass_tolerance.within(observed, mz)
             ]
             target.append(max(matches, default=0.0))
+        # The base state universe includes all materialized chemistry, not only
+        # paths selected by the teacher or its one-step negative continuations.
+        set_rows = data.reaction_sets.rows()
+        candidate_rows = [
+            set_rows[i] for i in data.states.candidate_reaction_set_index.tolist()
+        ]
+        candidate_rows = [tuple(row) for row in candidate_rows]
+        candidate_groups = data.states.candidate_branch_group_index.tolist()
+        known = set(zip(candidate_groups, candidate_rows))
+        for group, row in zip(dense_sample, dense_rows):
+            key = (group, tuple(i for i in row if i >= 0))
+            if key not in known and key in node_by_state:
+                known.add(key)
+                candidate_groups.append(group)
+                candidate_rows.append(key[1])
+        reaction_sets, context_set_ids = ReactionSet.from_rows(candidate_rows)
+        candidate_nodes = torch.tensor(
+            [
+                node_by_state.get((group, row), -1)
+                for group, row in zip(candidate_groups, candidate_rows)
+            ],
+            dtype=torch.long,
+        )
         return (
             replace(
                 data,
-                state_fragment_node_index=state_nodes,
-                sample_annotations=tuple(annotations),
+                reaction_sets=reaction_sets,
+                formula_elements=tuple(generator.tensorizer.element_order),
+                observations=tuple(annotations),
                 spectrum_batch=replace(
                     spectrum_batch, target_intensity=torch.tensor(target)
+                ),
+                states=replace(
+                    data.states,
+                    fragment_node_index=state_nodes,
+                    candidate_fragment_index=candidate_nodes,
+                    candidate_branch_group_index=torch.tensor(candidate_groups),
+                    candidate_reaction_set_index=context_set_ids,
                 ),
             ),
             kept,
         )
+
+
+class ReactionStructureBuilder(_ChemistryPreparationBuilder):
+    """Prepare chemistry, then normalize the shared training/prediction components."""
+
+    def build(self, *args, **kwargs):
+        from .source_reaction_structure import SourceReactionStructure
+
+        prepared, kept = super().build(*args, **kwargs)
+        return SourceReactionStructure.from_preparation(prepared), kept
+
+    def build_prediction(self, source, precursor_types, collision_energy, **kwargs):
+        from .source_reaction_structure import SourceReactionStructure
+
+        prepared, kept = super().build(
+            source,
+            precursor_types,
+            collision_energy,
+            [[] for _ in precursor_types],
+            [[] for _ in precursor_types],
+            **kwargs,
+        )
+        return SourceReactionStructure.from_preparation(prepared).for_prediction(), kept

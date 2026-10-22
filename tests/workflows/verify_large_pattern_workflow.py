@@ -205,7 +205,7 @@ for split in ['train','validation']:
         with torch.no_grad():before=reference.feature_model.encode_static(data)[0];after=updated.feature_model.encode_static(data)[0]
         torch.testing.assert_close(before,after,rtol=0,atol=0)
         if before.numel():maximum=max(maximum,float((before-after).abs().max()))
-        present=set(data.reaction_type[:,0].tolist());routing.append(dict(file=str(path),split=split,pattern_ids=sorted(present)))
+        present=set(data.reactions.reaction_type[:,0].tolist());routing.append(dict(file=str(path),split=split,pattern_ids=sorted(present)))
 assert sum(pattern_ids[flav_pattern['name']] in r['pattern_ids'] for r in routing)>=10
 assert sum(pattern_ids[lipid_pattern['name']] in r['pattern_ids'] for r in routing)>=10
 models=out/'models';models.mkdir(exist_ok=True)

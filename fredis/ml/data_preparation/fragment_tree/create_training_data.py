@@ -200,7 +200,6 @@ def _prepare_group(task, builder, options):
             smiles=smiles,
             **provenance,
             record_indexes=kept_rows,
-            sample_annotations=structure.sample_annotations,
             search_stats=builder.last_search_stats,
             reaction_sequence_compounds=reaction_sequence_compounds,
             reaction_registry=_saved_reaction_registry(

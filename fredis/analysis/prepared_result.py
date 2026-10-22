@@ -21,9 +21,9 @@ def load_prepared_structure(file_path: str | Path):
         raise TypeError("This .preft.pt file has no saved structure.")
     structure = payload["structure"]
     required = (
-        "teacher_node_reaction_ptr",
+        "reaction_contexts",
         "sample_branch_group_index",
-        "reaction_type",
+        "reactions",
     )
     if not all(hasattr(structure, name) for name in required):
         raise TypeError("This is not a prepared fragment-tree training structure.")
@@ -57,7 +57,7 @@ def restore_reaction_registry(
     originals = list(
         fragmenter.fragment_ion_tree_builder.create_reaction_instances(source)
     )
-    if len(originals) != len(structure.reaction_type):
+    if len(originals) != len(structure.reactions.reaction_type):
         originals = []
     patterns = {
         pattern.pattern_id: pattern
@@ -66,10 +66,10 @@ def restore_reaction_registry(
     atoms = list(source.mapped_mol.GetAtoms())
     if len(atoms) != structure.source_graph.num_nodes:
         atoms = [atom for atom in atoms if atom.GetAtomicNum() != 1]
-    pointers = structure.reaction_source_atom_ptr.tolist()
-    atom_indexes = structure.reaction_source_atom_index.tolist()
+    pointers = structure.reactions.reaction_source_atom_ptr.tolist()
+    atom_indexes = structure.reactions.reaction_source_atom_index.tolist()
     rows = []
-    for index, category in enumerate(structure.reaction_type.tolist()):
+    for index, category in enumerate(structure.reactions.reaction_type.tolist()):
         reaction = originals[index] if originals else None
         pattern = patterns.get(category[0])
         rule = (
@@ -117,17 +117,18 @@ def state_reaction_combinations(
     structure,
 ) -> dict[tuple[int, int], list[tuple[int, ...]]]:
     """Map ``(branch group, fragment node)`` to every saved reaction combination."""
-    pointers = structure.teacher_node_reaction_ptr.tolist()
-    indexes = structure.teacher_node_reaction_index.tolist()
-    groups = structure.teacher_node_branch_group_index.tolist()
-    nodes = structure.state_fragment_node_index.tolist()
+    execution = structure.execution_graph
+    memberships = structure.reaction_sets.rows()
     result: dict[tuple[int, int], list[tuple[int, ...]]] = defaultdict(list)
-    for row, (group, node) in enumerate(zip(groups, nodes)):
-        if node < 0:
-            continue
-        combination = tuple(sorted(indexes[pointers[row] : pointers[row + 1]]))
-        if combination not in result[(group, node)]:
-            result[(group, node)].append(combination)
+    for group, compound, set_id in zip(
+        execution.branch_group_index.tolist(),
+        execution.compound_index.tolist(),
+        execution.reaction_set_index.tolist(),
+    ):
+        combination = tuple(memberships[set_id])
+        if combination not in result[(group, compound)]:
+            result[(group, compound)].append(combination)
+
     return dict(result)
 
 
@@ -144,10 +145,7 @@ def iter_prepared_samples(
     if not reactions:
         reactions = restore_reaction_registry(structure, source_smiles, params)
     combinations = state_reaction_combinations(structure)
-    annotations = tuple(
-        getattr(structure, "sample_annotations", ())
-        or metadata.get("sample_annotations", ())
-    )
+    annotations = structure.sample_annotations
     record_indexes = list(metadata.get("record_indexes", range(len(annotations))))
     groups = structure.sample_branch_group_index.tolist()
     for sample_index, annotation in enumerate(annotations):
@@ -156,7 +154,7 @@ def iter_prepared_samples(
         for peak in annotation.get("peaks", ()):
             matches = []
             for match in peak.get("matches", ()):
-                for node in match.get("nodeIndices", ()):
+                for node in match.get("nodeIds", ()):
                     for combination in combinations.get((group, node), ()):
                         reaction_rows = [
                             reactions[reaction] for reaction in combination

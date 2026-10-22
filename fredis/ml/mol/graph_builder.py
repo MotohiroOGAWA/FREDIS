@@ -2,10 +2,6 @@ from typing import Optional, Tuple
 import torch
 from torch_geometric.data import Data
 
-from ...domain.molecule.descriptors import (
-    SUPPORTED_DESCRIPTOR_NAMES,
-    compute_descriptor_values,
-)
 from ...libs.mmkit.mmkit import Compound
 from .atom_feature import AtomFeatureLayer
 from .bond_feature import BondFeatureLayer
@@ -55,8 +51,6 @@ class MolGraphBuilder:
               x         [num_atoms, atom_dim]
               edge_index[2, E]
               edge_attr [E, bond_dim]
-              descriptors [1, len(SUPPORTED_DESCRIPTOR_NAMES)] molecular descriptors;
-                available to callers such as the spectrum predictor.
         """
         mol = compound.mol
 
@@ -103,15 +97,8 @@ class MolGraphBuilder:
                 (0, self.bond_dim), dtype=torch.float32, device=device
             )
 
-        descriptors = torch.tensor(
-            [compute_descriptor_values(mol, SUPPORTED_DESCRIPTOR_NAMES)],
-            dtype=torch.float32,
-            device=device,
-        )
-
         return Data(
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            descriptors=descriptors,
         )

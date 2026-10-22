@@ -317,5 +317,5 @@ def test_prediction_prepare_reuses_worker_relations(monkeypatch):
     monkeypatch.setattr(ReactionRelations, 'from_reactions', unexpected)
     actual = generator.prepare([source], [Adduct.parse('[M+H]+')], [20.],
                                precomputed={source.smiles: cached})[0]
-    for name in ('reaction_conflict_index', 'reaction_invalidation_index', 'reaction_dominance_index'):
-        torch.testing.assert_close(getattr(actual, name), getattr(expected, name))
+    for name in ('reaction_conflict_index', 'reaction_invalidation_index'):
+        torch.testing.assert_close(getattr(actual.reactions, name), getattr(expected.reactions, name))

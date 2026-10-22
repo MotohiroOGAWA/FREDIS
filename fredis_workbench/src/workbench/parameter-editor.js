@@ -37,7 +37,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     descriptors:'Descriptors of materialized fragments used by the spectrum predictor after branch selection (transition scores in competitive mode).',
     num_layers:'Number of transformer layers.',num_heads:'Number of attention heads. Must divide the corresponding hidden dimension.',
     max_degree:'Maximum degree represented in graph structural embeddings.',max_spatial_dist:'Maximum atom graph distance encoded by the molecular encoder.',max_edge_dist:'Maximum bond distance encoded by the molecular encoder.',
-    state_num_layers:'Number of Set Transformer layers encoding the current reaction set.',state_dropout:'Dropout in the reaction state Set Transformer.',
+    edge_num_layers:'Number of hidden layers scoring a compound/reaction edge.',edge_dropout:'Dropout in the branch edge MLP.',
     branch_path_threshold:'Minimum cumulative path probability retained by fragment tree search. Zero disables threshold pruning. Saved with the model; prediction can override it.',
     max_fragment_nodes:'Maximum fragment nodes shared by the complete (compound, main adduct) branch group. Saved with the model; prediction can override it.',
     peak_intensity_threshold:'Minimum max-normalized intensity retained in generated spectra. Does not affect training loss.',
@@ -47,7 +47,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     freeze_mol_encoder:'Freeze the molecular encoder during training.',
   };
   const templates={patterns:{name:'new_pattern',reactant_smarts:'[!#1:1]-[!#1:2]',products:[{name:'product',smarts:'[!#1:1]'}]},products:{name:'product',smarts:'[!#1:1]'},adduct_rules:{name:'new_rule',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']},fragment_ion_adducts:'[M+H]+',symbols:'C'};
-  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,state_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,fragment_fc_dims:[128,64],fragment_dropout:0,state_fc_dims:[128,64],state_dropout:0},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
+  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,edge_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,fragment_fc_dims:[128,64],fragment_dropout:0,state_fc_dims:[128,64],state_dropout:0},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
   // Purely cosmetic sub-headings for the sections with the most fields; any
   // field not listed here (e.g. a newer option) still renders, just ungrouped.
   const fieldGroups={
@@ -55,7 +55,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     reaction_model_params:{
       'Architecture':['hidden_dim','num_heads'],
       'Adduct Embedding':['branch_main_adduct_dim'],
-      'Branch Scorer · Architecture':['state_num_layers'],
+      'Branch Scorer · Architecture':['edge_num_layers'],
     },
     spectrum_model_params:{
       'Fragment Head':['fragment_fc_dims','fragment_dropout'],
@@ -72,7 +72,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   // A resumed/saved model_config always has these (training_model_config writes
   // them from the single shared --dropout), but they must never be editable
   // here independently of it -- only one dropout value can ever be specified.
-  const linkedToSharedDropout=new Set(['reaction_model_params.state_dropout']);
+  const linkedToSharedDropout=new Set(['reaction_model_params.edge_dropout']);
   // max_roles is sized automatically and Mol Encoder symbols are owned by the
   // prepared dataset. A loaded config may carry both, but neither is edited
   // in the training architecture form.
@@ -80,7 +80,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   // Closed-choice architecture settings are selects, not free-form text inputs.
 
   const basic=new Set(['fragmenter_params.fragment_ion_tree_builder.max_reaction_count','fragmenter_params.precursor_candidate_max_reaction_count','fragmenter_params.mass_tolerance']);
-  const badge=full=>full.endsWith('.max_reaction_count')?'Dataset inherited':full.startsWith('generation_params.')?'Generation':/(hidden_dim|embedding_dim|main_adduct_dim|collision_energy_dim|branch_main_adduct_dim|num_layers|num_heads|state_num_layers|equivalent_state_aggregation)$/.test(full)?'Architecture':'';
+  const badge=full=>full.endsWith('.max_reaction_count')?'Dataset inherited':full.startsWith('generation_params.')?'Generation':/(hidden_dim|embedding_dim|main_adduct_dim|collision_energy_dim|branch_main_adduct_dim|num_layers|num_heads|edge_num_layers|equivalent_state_aggregation)$/.test(full)?'Architecture':'';
   const node=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
   const button=(text,fn)=>{const b=node('button',text);b.type='button';b.onclick=fn;return b;};
   const title=key=>String(key).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()).replace('Smarts','SMARTS');

@@ -1,4 +1,5 @@
 """Backend for predicting a single MS/MS spectrum from SMILES + CE + adduct."""
+
 from __future__ import annotations
 
 
@@ -28,7 +29,9 @@ def _reaction_id(reactions, reaction) -> int | None:
     try:
         return reactions.index(reaction)
     except ValueError as exc:
-        raise ValueError("Predicted tree transition references an unknown reaction.") from exc
+        raise ValueError(
+            "Predicted tree transition references an unknown reaction."
+        ) from exc
 
 
 def _reaction_registry(generator, reactions) -> list[dict[str, Any]]:
@@ -40,14 +43,18 @@ def _reaction_registry(generator, reactions) -> list[dict[str, Any]]:
     registry = []
     for number, reaction in enumerate(reactions):
         pattern = patterns.get(reaction.reaction_pattern_id)
-        rule = next(
-            (
-                item
-                for item in pattern.reaction_rules
-                if item.id == reaction.reaction_rule_id
-            ),
-            None,
-        ) if pattern else None
+        rule = (
+            next(
+                (
+                    item
+                    for item in pattern.reaction_rules
+                    if item.id == reaction.reaction_rule_id
+                ),
+                None,
+            )
+            if pattern
+            else None
+        )
         registry.append(
             {
                 "id": number,
@@ -68,63 +75,60 @@ def _reaction_registry(generator, reactions) -> list[dict[str, Any]]:
     return registry
 
 
-def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=()) -> dict[str, Any]:
+def _build_tree(
+    result, sample: int, tensorizer, threshold: float, reactions=()
+) -> dict[str, Any]:
     """Fragment-tree nodes/edges explored for this prediction, annotated with
     per-node neutral formula/exact mass plus any predicted-peak ion states."""
     fragments = result.fragments
-    node_offsets = [i for i, s in enumerate(fragments.node_sample_index.tolist()) if s == sample]
-    local_index = {global_index: local for local, global_index in enumerate(node_offsets)}
-    num_nodes = len(node_offsets)
-
-    tree = fragments.trees[sample]
-    reaction_sets_by_node: dict[int, list[list[int]]] = {0: [[]]}
+    core = result.spectrum_batch.canonical_data
+    group = int(core.sample_branch_group_index[sample])
+    execution = core.execution_graph
+    root = int(
+        core.source_compounds.compound_index[
+            core.reaction_contexts.root_source_compound_index[group]
+        ]
+    )
+    reaction_sets_by_node = {}
+    for cid, sid in zip(
+        execution.compound_index[execution.branch_group_index == group].tolist(),
+        execution.reaction_set_index[execution.branch_group_index == group].tolist(),
+    ):
+        reaction_sets_by_node.setdefault(cid, []).append(core.reaction_sets.rows()[sid])
+    node_offsets = [root] + sorted(set(reaction_sets_by_node) - {root})
+    local_index = {cid: cid for cid in node_offsets}
+    depth = {cid: min(map(len, sets)) for cid, sets in reaction_sets_by_node.items()}
     edges = []
-    for index in range(tree.num_edges):
-        edge = tree.get_edge(index)
-        transitions = []
-        for transition in edge.transitions:
-            parent_reactions = (
-                [_reaction_id(reactions, reaction) for reaction in transition.parent_reaction_sequence.reactions]
-                if transition.parent_reaction_sequence else []
-            )
-            target_reactions = [
-                _reaction_id(reactions, reaction) for reaction in transition.reaction_sequence.reactions
-            ]
-            transitions.append(
-                {
-                    "addedReaction": _reaction_id(reactions, transition.added_reaction),
-                    "parentReactions": parent_reactions,
-                    "targetReactions": target_reactions,
-                    "seed": bool(transition.is_seed),
-                }
-            )
-            histories = reaction_sets_by_node.setdefault(edge.target_index, [])
-            if target_reactions not in histories:
-                histories.append(target_reactions)
-        edges.append(
-            {
-                "id": edge.index,
-                "source": edge.source_index,
-                "target": edge.target_index,
-                "transitions": transitions,
-            }
+    first, last = core.reaction_contexts.edge_ptr[group : group + 2]
+    graph = core.compound_graph
+    for eid in core.reaction_contexts.edge_index[first:last].tolist():
+        src, dst, reaction = (
+            int(graph.source_compound_index[eid]),
+            int(graph.target_compound_index[eid]),
+            int(graph.reaction_index[eid]),
         )
-
-    indegree = [0] * num_nodes
-    for edge in edges:
-        indegree[edge["target"]] += 1
-    depth = [0 if indegree[i] == 0 else -1 for i in range(num_nodes)]
-    for _ in range(num_nodes):
-        changed = False
-        for edge in edges:
-            if depth[edge["source"]] < 0:
-                continue
-            candidate = depth[edge["source"]] + 1
-            if depth[edge["target"]] < 0 or candidate < depth[edge["target"]]:
-                depth[edge["target"]] = candidate
-                changed = True
-        if not changed:
-            break
+        transitions = []
+        for before in reaction_sets_by_node.get(src, []):
+            after = sorted(before + [reaction])
+            if reaction not in before and after in reaction_sets_by_node.get(dst, []):
+                transitions.append(
+                    dict(
+                        addedReaction=reaction,
+                        parentReactions=before,
+                        targetReactions=after,
+                        seed=False,
+                    )
+                )
+        if transitions:
+            edges.append(
+                dict(
+                    id=eid,
+                    source=src,
+                    target=dst,
+                    reactionIndex=reaction,
+                    transitions=transitions,
+                )
+            )
 
     spectrum_batch = result.spectrum_batch
     spectra = result.spectra
@@ -145,14 +149,22 @@ def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=())
         if node not in local_index or candidate_sample_index[entry] != sample:
             continue
         probability = float(ion_probability[entry])
-        if probability < threshold or not bool((candidate_formula_tensor[entry, :-1] >= 0).all()) or candidate_mz[entry] <= 0:
+        if (
+            intensity[entry] < threshold
+            or not bool((candidate_formula_tensor[entry, :-1] >= 0).all())
+            or candidate_mz[entry] <= 0
+        ):
             continue
         annotations_by_node.setdefault(local_index[node], []).append(
             {
                 "peakMz": float(candidate_mz[entry]),
                 "peakIntensity": float(intensity[entry]),
-                "adduct": candidate_adduct[entry] if entry < len(candidate_adduct) else "",
-                "ionFormula": str(tensorizer.tensor_to_formula(candidate_formula_tensor[entry])),
+                "adduct": (
+                    candidate_adduct[entry] if entry < len(candidate_adduct) else ""
+                ),
+                "ionFormula": str(
+                    tensorizer.tensor_to_formula(candidate_formula_tensor[entry])
+                ),
                 "probability": probability,
             }
         )
@@ -167,7 +179,8 @@ def _build_tree(result, sample: int, tensorizer, threshold: float, reactions=())
                 "id": local,
                 "smiles": compound.smiles,
                 "depth": depth[local],
-                "precursor": depth[local] == 0,
+                "precursor": global_index == root,
+                "compoundIndex": global_index,
                 "formula": str(neutral_formula),
                 "exactMass": neutral_formula.exact_mass,
                 "annotations": annotations_by_node.get(local, []),
@@ -234,11 +247,15 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
     )
     with torch.no_grad():
         result = generator.predict(
-            [source], [adduct], [ce_ev],
-            precomputed={source.smiles: {
-                "reactions": reactions,
-                "relations": ReactionRelations.from_reactions(reactions),
-            }},
+            [source],
+            [adduct],
+            [ce_ev],
+            precomputed={
+                source.smiles: {
+                    "reactions": reactions,
+                    "relations": ReactionRelations.from_reactions(reactions),
+                }
+            },
         )
 
     if not result.spectra.mz.numel():
@@ -246,6 +263,14 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
     intensity_threshold = generator.generation.peak_intensity_threshold
     node_indices = result.spectrum_batch.state_node_index.detach().cpu().tolist()
     node_smiles = result.spectrum_batch.node_smiles
+    core = result.spectrum_batch.canonical_data
+    root = int(
+        core.source_compounds.compound_index[
+            core.reaction_contexts.root_source_compound_index[
+                core.sample_branch_group_index[0]
+            ]
+        ]
+    )
     ion_adducts = result.spectrum_batch.state_adducts
     peaks = sorted(
         (
@@ -257,26 +282,35 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
                 "nodeId": int(node_indices[index]),
                 "smiles": node_smiles[node_indices[index]],
                 "adduct": ion_adducts[index] if index < len(ion_adducts) else "",
-                "precursor": int(node_indices[index]) == 0,
+                "precursor": int(node_indices[index]) == root,
             }
-            for index, (mz, intensity, formula_row, confidence) in enumerate(zip(
-                result.spectra.mz.detach().cpu().tolist(),
-                result.spectra.intensity.detach().cpu().tolist(),
-                result.spectra.formula_tensor,
-                result.spectra.confidence.detach().cpu().tolist(),
-            ))
+            for index, (mz, intensity, formula_row, confidence) in enumerate(
+                zip(
+                    result.spectra.mz.detach().cpu().tolist(),
+                    result.spectra.intensity.detach().cpu().tolist(),
+                    result.spectra.formula_tensor,
+                    result.spectra.confidence.detach().cpu().tolist(),
+                )
+            )
             # Below the trained ion confidence threshold: the same unrelated
             # adduct/hydrogen-shift candidate this model now learns to push
             # toward zero, kept out of the predicted spectrum shown here.
-            if intensity >= intensity_threshold and bool((formula_row[:-1] >= 0).all()) and mz > 0
+            if intensity >= intensity_threshold
+            and bool((formula_row[:-1] >= 0).all())
+            and mz > 0
         ),
         key=lambda peak: peak["mz"],
     )
     if not peaks:
-        raise ValueError("Every candidate peak was below the model's inference thresholds.")
+        raise ValueError(
+            "Every candidate peak was below the model's inference thresholds."
+        )
     tree = _build_tree(
-        result, sample=0, tensorizer=generator.tensorizer,
-        threshold=threshold, reactions=reactions,
+        result,
+        sample=0,
+        tensorizer=generator.tensorizer,
+        threshold=intensity_threshold,
+        reactions=reactions,
     )
 
     rdDepictor.Compute2DCoords(mol)
@@ -302,8 +336,7 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
         "tree": tree,
         "reactions": _reaction_registry(generator, reactions),
         "reactionPatternSet": (
-            generator.fragmenter.fragment_ion_tree_builder
-            .reaction_pattern_set.to_dict()
+            generator.fragmenter.fragment_ion_tree_builder.reaction_pattern_set.to_dict()
         ),
     }
 
@@ -323,4 +356,9 @@ if __name__ == "__main__":
             result = COMMANDS[command](request.get("payload", {}))
         print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                ensure_ascii=False,
+            )
+        )

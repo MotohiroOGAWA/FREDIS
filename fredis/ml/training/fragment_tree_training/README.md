@@ -12,7 +12,6 @@ python -m fredis.cli train fragment-tree \
   --node-dim 32 --graph-dim 128 \
   --epochs 20 --device cuda \
   --branch-weight 1 --negative-weight 0.5 \
-  --branch-mil-temperature 0.1 \
   --intensity-loss-weight 1 --cosine-loss-weight 1 \
   --branch-path-threshold 0 --max-fragment-nodes 100
 ```
@@ -31,18 +30,22 @@ settings stored in the checkpoint, not in `model_config`.
 
 ## Branch objective
 
-Every transition log probability is `logsigmoid(logit)`. A path score is the
-sum of its transition log probabilities. Alternative explanations for one peak
-use a normalized smooth maximum:
+Preparation shares one CompoundReactionGraph across groups. Each BranchGroup
+selects edge IDs by CSR and supplies aligned labels: 1 positive, 0 weak negative,
+-1 ignored. Positive evidence is unioned across the group's CE observations.
+The branch MLP scores parent Compound, child Compound, concrete reaction and main
+adduct, without CE. The weighted binary cross entropy is
 
 ```text
-T * (logsumexp(path_score / T) - log(number_of_paths))
+L_branch = (sum_positive softplus(-logit)
+            + negative_weight * sum_weak_negative softplus(logit))
+           / (N_positive + negative_weight * N_weak_negative)
 ```
 
-Preparation unions positive paths over every collision energy in the branch
-group. At each teacher-supported depth, a chemically valid continuation absent
-from that union is stored as a weak negative. The branch loss combines positive
-MIL with `negative_weight * mean(softplus(negative_logit))`.
+A zero denominator contributes zero loss. Labels excluded with -1 contribute
+no loss or gradient. `--reaction-edge-layers` controls this MLP's hidden layers.
+Prediction uses the same tables through `SpectrumPredictionData`, without
+observations, targets or edge labels. See [input components](../../input/README.md).
 
 ## Competitive spectrum objective
 

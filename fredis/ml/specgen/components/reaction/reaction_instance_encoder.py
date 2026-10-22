@@ -158,7 +158,7 @@ class ReactionInstanceEncoder(nn.Module):
         *,
         source_mol_h: Tensor,
         reaction_type: Tensor,
-        reaction_tree_index: Tensor,
+        reaction_source_compound_index: Tensor,
         reaction_source_atom_ptr: Tensor,
         reaction_source_atom_index: Tensor,
         source_atom_features: Tensor | None = None,
@@ -195,7 +195,7 @@ class ReactionInstanceEncoder(nn.Module):
             _, graph_h = encoder.encode_matches(inputs)
             result[rows] = self.pattern_heads[pattern_id](
                 graph_h,
-                source_mol_h[reaction_tree_index[rows]],
+                source_mol_h[reaction_source_compound_index[rows]],
                 reaction_type[rows],
             )
             known[rows] = True

@@ -23,7 +23,7 @@ def test_native_backward_metadata_failure_and_resume(tmp_path,compact):
     if compact:
         assert architecture['model_config']['mol_encoder_params']['node_dim']==16
         assert architecture['model_config']['mol_encoder_params']['num_layers']==1
-        assert architecture['model_config']['spectrum_model_params']['transition_fc_dims']==[16]
+        assert architecture['model_config']['spectrum_model_params']['fragment_fc_dims']==[16]
     assert set(architecture)=={'model_config'}
     assert set(architecture['model_config'])=={'mol_encoder_params','reaction_model_params','spectrum_model_params'}
     assert architecture['model_config']=={key:stats['native_config']['model_config'][key] for key in architecture['model_config']}

@@ -9,6 +9,7 @@ from .components.condition.condition_linear import ConditionHead
 from ..common.torch_utils.segment_ops import segment_softmax
 from .fragment_spectrum_model import SpectrumModelOutput, SpectrumLossSettings
 from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
+from ..mol.selected_descriptors import selected_descriptor_values
 from fredis.libs.mmkit.mmkit import Adduct
 
 
@@ -77,9 +78,7 @@ def propagate_probability(initial, source, target, probability):
         break_event = ~(self_event | sink_event)
         final = final.index_add(0, parents[self_event], mass[self_event])
         sink = sink.index_add(0, parents[sink_event], mass[sink_event])
-        incoming = incoming.index_add(
-            0, children_index[break_event], mass[break_event]
-        )
+        incoming = incoming.index_add(0, children_index[break_event], mass[break_event])
     return final, sink
 
 
@@ -128,6 +127,7 @@ def merge_candidate_peaks(output):
         ion_probability=probability,
         state_probability=None,
         state_fragment_index=None,
+        formula_explanation_index=None,
     )
 
 
@@ -169,27 +169,34 @@ class CompetitiveSpectrumModel(nn.Module):
             SUPPORTED_DESCRIPTOR_NAMES
         ):
             raise ValueError("Invalid transition descriptor selection")
-        self.descriptor_indices = tuple(
-            SUPPORTED_DESCRIPTOR_NAMES.index(name) for name in descriptors
-        )
+        self.descriptor_names = tuple(descriptors)
         input_dim = (
             2 * (mol_encoder.graph_dim + len(descriptors))
             + reaction_dim
             + collision_energy_dim
         )
-        self.fragment_heads = nn.ModuleDict({
-            self.head_index[main]: ConditionHead(
-                3, input_dim, tuple(fragment_fc_dims), fragment_dropout
-            )
-            for main in self.main_adduct_conditions
-        })
-        state_input_dim = 2 * (mol_encoder.graph_dim + len(descriptors)) + collision_energy_dim
-        self.state_heads = nn.ModuleDict({
-            self.head_index[main]: ConditionHead(
-                len(conditions), state_input_dim, tuple(state_fc_dims), state_dropout
-            )
-            for main, conditions in self.main_adduct_conditions.items()
-        })
+        self.fragment_heads = nn.ModuleDict(
+            {
+                self.head_index[main]: ConditionHead(
+                    3, input_dim, tuple(fragment_fc_dims), fragment_dropout
+                )
+                for main in self.main_adduct_conditions
+            }
+        )
+        state_input_dim = (
+            2 * (mol_encoder.graph_dim + len(descriptors)) + collision_energy_dim
+        )
+        self.state_heads = nn.ModuleDict(
+            {
+                self.head_index[main]: ConditionHead(
+                    len(conditions),
+                    state_input_dim,
+                    tuple(state_fc_dims),
+                    state_dropout,
+                )
+                for main, conditions in self.main_adduct_conditions.items()
+            }
+        )
         self.reaction_dim = reaction_dim
 
     def forward(
@@ -203,6 +210,15 @@ class CompetitiveSpectrumModel(nn.Module):
         loss_settings=None,
     ):
         """Propagate fragment mass, distribute into ion states, then supervise peaks."""
+        if getattr(data, "canonical_data", None) is not None:
+            return self._forward_canonical(
+                data,
+                reaction_h,
+                collision_energy_h,
+                source_embeddings,
+                molecular_embeddings,
+                loss_settings,
+            )
         if not getattr(data.decoded, "reaction_state_graph", False):
             raise ValueError(
                 "Competitive prediction requires all reaction-state transitions; regenerate prepared data"
@@ -222,15 +238,24 @@ class CompetitiveSpectrumModel(nn.Module):
         # A fragment row is (sample, structural node), independent of ion states.
         fragments, state_fragment_index = torch.unique(
             torch.stack((state_sample_index, state_node_index), dim=1),
-            dim=0, return_inverse=True,
+            dim=0,
+            return_inverse=True,
         )
         fragment_samples, fragment_nodes = fragments.unbind(1)
-        initial, source, target, event_reactions, event_type, root_index = self._fragment_events(
-            data, molecular, fragments, sample_count
+        initial, source, target, event_reactions, event_type, root_index = (
+            self._fragment_events(data, molecular, fragments, sample_count)
         )
         probabilities = self._score_fragment_events(
-            data, molecular, collision_energy_h, reaction_h,
-            fragment_nodes, fragment_samples, source, target, event_reactions, event_type,
+            data,
+            molecular,
+            collision_energy_h,
+            reaction_h,
+            fragment_nodes,
+            fragment_samples,
+            source,
+            target,
+            event_reactions,
+            event_type,
         )
         fragment_probability, fragment_sink = propagate_probability(
             initial, source, target, probabilities
@@ -238,16 +263,25 @@ class CompetitiveSpectrumModel(nn.Module):
         # State Head is evaluated after fragment propagation. It has no path
         # back into Fragment Head logits or DAG event probabilities.
         state_probability = self._score_states(
-            data, molecular, collision_energy_h, fragments, state_fragment_index, root_index
+            data,
+            molecular,
+            collision_energy_h,
+            fragments,
+            state_fragment_index,
+            root_index,
         )
-        final_probability = fragment_probability[state_fragment_index] * state_probability
+        final_probability = (
+            fragment_probability[state_fragment_index] * state_probability
+        )
         sink_probability = molecular.new_zeros(sample_count).scatter_add_(
             0, fragment_samples, fragment_sink
         )
         retained_probability = molecular.new_zeros(sample_count).scatter_add_(
             0, fragment_samples, fragment_probability
         )
-        initial_mass = molecular.new_zeros(sample_count).scatter_add_(0, fragment_samples, initial)
+        initial_mass = molecular.new_zeros(sample_count).scatter_add_(
+            0, fragment_samples, initial
+        )
         if data.target_intensity is None:
             from .fragment_spectrum_model import annotate_ion_conditions
 
@@ -267,14 +301,14 @@ class CompetitiveSpectrumModel(nn.Module):
             "num_fragment_transitions": final_probability.new_tensor(
                 float((event_type == 0).sum())
             ),
-            "num_ion_states": final_probability.new_tensor(
-                float(state_count)
-            ),
+            "num_ion_states": final_probability.new_tensor(float(state_count)),
             "sink_probability": sink_probability.mean(),
             "retained_probability": retained_probability.mean(),
             "probability_mass_error": (
                 retained_probability + sink_probability - initial_mass
-            ).abs().max(),
+            )
+            .abs()
+            .max(),
         }
         # No independent presence classifier: confidence gating is inapplicable.
         return SpectrumModelOutput(
@@ -298,6 +332,179 @@ class CompetitiveSpectrumModel(nn.Module):
             state_probability=state_probability,
         )
 
+    def _forward_canonical(
+        self,
+        data,
+        reaction_h,
+        collision_energy_h,
+        source_embeddings,
+        molecular_embeddings,
+        loss_settings,
+    ):
+        """Propagate finite reaction histories, then merge by canonical Compound IDs."""
+        core = data.canonical_data
+        execution = core.execution_graph
+        molecular = self._encode_molecules(
+            data, source_embeddings, molecular_embeddings
+        )
+        device = molecular.device
+        execution_compounds = []
+        execution_samples = []
+        root_rows = []
+        source = []
+        target = []
+        reactions = []
+        event_type = []
+        physical = []
+        physical_lookup = {}
+        execution_to_physical = []
+        physical_roots = []
+        for sample, group in enumerate(core.sample_branch_group_index.tolist()):
+            ids = (execution.branch_group_index == group).nonzero().flatten().tolist()
+            mapping = {old: len(execution_compounds) + i for i, old in enumerate(ids)}
+            root_compound = int(execution.compound_index[execution.root_index[group]])
+            compounds = sorted(set(execution.compound_index[ids].tolist()))
+            for compound in compounds:
+                physical_lookup[(sample, compound)] = len(physical)
+                physical.append((sample, compound))
+            root_physical = physical_lookup[(sample, root_compound)]
+            physical_roots.extend([root_physical] * len(compounds))
+            root_rows.append(mapping[int(execution.root_index[group])])
+            for old in ids:
+                compound = int(execution.compound_index[old])
+                execution_compounds.append(compound)
+                execution_samples.append(sample)
+                execution_to_physical.append(physical_lookup[(sample, compound)])
+            for parent, child, reaction in zip(
+                execution.source_index.tolist(),
+                execution.target_index.tolist(),
+                execution.reaction_index.tolist(),
+            ):
+                if parent in mapping:
+                    source.append(mapping[parent])
+                    target.append(mapping[child])
+                    reactions.append(reaction)
+                    event_type.append(0)
+        for i in range(len(execution_compounds)):
+            source.extend((i, i))
+            target.extend((i, -1))
+            reactions.extend((-1, -2))
+            event_type.extend((1, 2))
+
+        def ids(values):
+            return torch.tensor(values, dtype=torch.long, device=device)
+
+        source, target, reactions, event_type = map(
+            ids, (source, target, reactions, event_type)
+        )
+        execution_compounds = ids(execution_compounds)
+        execution_samples = ids(execution_samples)
+        probability = self._score_fragment_events(
+            data,
+            molecular,
+            collision_energy_h,
+            reaction_h,
+            execution_compounds,
+            execution_samples,
+            source,
+            target,
+            reactions,
+            event_type,
+        )
+        initial = molecular.new_zeros(execution_compounds.numel())
+        initial[ids(root_rows)] = 1
+        retained, sink = propagate_probability(initial, source, target, probability)
+        execution_to_physical = ids(execution_to_physical)
+        fragment_probability = molecular.new_zeros(len(physical)).scatter_add_(
+            0, execution_to_physical, retained
+        )
+        fragments = ids(physical).reshape(-1, 2)
+        state_fragment = ids(
+            [
+                physical_lookup[(sample, node)]
+                for sample, node in zip(
+                    data.state_sample_index.tolist(), data.state_node_index.tolist()
+                )
+            ]
+        )
+        conditional = self._score_states(
+            data,
+            molecular,
+            collision_energy_h,
+            fragments,
+            state_fragment,
+            ids(physical_roots),
+        )
+        final = fragment_probability[state_fragment] * conditional
+        normalized, loss, metrics = self._spectrum_loss(
+            data,
+            final,
+            data.state_sample_index,
+            data.state_formula_tensor,
+            core.num_samples,
+            loss_settings or SpectrumLossSettings(),
+        )
+        sink_probability = molecular.new_zeros(core.num_samples).scatter_add_(
+            0, execution_samples, sink
+        )
+        retained_probability = molecular.new_zeros(core.num_samples).scatter_add_(
+            0, fragments[:, 0], fragment_probability
+        )
+        metrics.update(
+            intensity_loss=loss,
+            num_fragment_transitions=final.new_tensor(float((event_type == 0).sum())),
+            num_ion_states=final.new_tensor(float(final.numel())),
+            sink_probability=sink_probability.mean(),
+            retained_probability=retained_probability.mean(),
+            probability_mass_error=(sink_probability + retained_probability - 1)
+            .abs()
+            .max(),
+        )
+        child_physical = torch.where(
+            target >= 0, execution_to_physical[target.clamp_min(0)], target
+        )
+        # Report one effective event per physical Compound/reaction, while the
+        # actual propagation above remains history constrained and acyclic.
+        self_rates = probability[event_type == 1]
+        incoming = retained / self_rates.clamp_min(torch.finfo(retained.dtype).tiny)
+        event_mass = incoming[source] * probability
+        diagnostic_keys = torch.stack(
+            (execution_to_physical[source], child_physical, reactions), 1
+        )
+        diagnostic_rows, diagnostic_inverse = torch.unique(
+            diagnostic_keys, dim=0, return_inverse=True
+        )
+        aggregate_mass = event_mass.new_zeros(len(diagnostic_rows)).scatter_add_(
+            0, diagnostic_inverse, event_mass
+        )
+        totals = event_mass.new_zeros(len(physical)).scatter_add_(
+            0, execution_to_physical[source], event_mass
+        )
+        diagnostic_probability = aggregate_mass / totals[
+            diagnostic_rows[:, 0]
+        ].clamp_min(1e-12)
+        return SpectrumModelOutput(
+            normalized,
+            data.state_sample_index,
+            data.state_formula_tensor,
+            data.state_mz,
+            loss,
+            torch.ones_like(final),
+            final,
+            metrics,
+            transition_source_index=diagnostic_rows[:, 0],
+            transition_target_index=diagnostic_rows[:, 1],
+            transition_probability=diagnostic_probability,
+            transition_reaction_index=diagnostic_rows[:, 2],
+            sink_probability=sink_probability,
+            fragment_probability=fragment_probability,
+            fragment_node_index=fragments[:, 1],
+            fragment_sample_index=fragments[:, 0],
+            state_fragment_index=state_fragment,
+            state_probability=conditional,
+            formula_explanation_index=core.spectrum_explanations.formula_explanation_index,
+        )
+
     def _encode_molecules(self, data, source_embeddings, molecular_embeddings):
         """Reuse source and duplicate graph embeddings before appending descriptors."""
         if molecular_embeddings is not None:
@@ -319,9 +526,14 @@ class CompetitiveSpectrumModel(nn.Module):
             molecular = unique[data.node_graph_inverse]
         else:
             molecular = self.mol_encoder(data.decoded.node_graph)
-        if self.descriptor_indices:
-            values = data.decoded.node_graph.descriptors[:, self.descriptor_indices].to(
-                molecular.dtype
+        if self.descriptor_names:
+            # Model-specific optional features are selected after preparation.
+            # Nothing is precomputed or persisted on canonical graph tables.
+            values = molecular.new_tensor(
+                [
+                    selected_descriptor_values(compound.smiles, self.descriptor_names)
+                    for compound in data.decoded.compounds
+                ]
             )
             molecular = torch.cat(
                 (molecular, values.sign() * torch.log1p(values.abs())), 1
@@ -329,6 +541,14 @@ class CompetitiveSpectrumModel(nn.Module):
         return molecular
 
     def _sample_main_adducts(self, data):
+        if getattr(data, "canonical_data", None) is not None:
+            core = data.canonical_data
+            return [
+                core.adducts.main_adducts[
+                    int(core.branch_groups.main_adduct_index[group])
+                ]
+                for group in core.sample_branch_group_index.tolist()
+            ]
         return [self.precursor_main_adducts[value] for value in data.precursor_adducts]
 
     def _fragment_events(self, data, molecular, fragments, sample_count):
@@ -350,7 +570,9 @@ class CompetitiveSpectrumModel(nn.Module):
         events = set()
         for sample in range(sample_count):
             for (parent, child), reaction in zip(edges, reactions):
-                parent_row, child_row = lookup.get((sample, parent)), lookup.get((sample, child))
+                parent_row, child_row = lookup.get((sample, parent)), lookup.get(
+                    (sample, child)
+                )
                 if parent_row is not None and child_row is not None:
                     if parent_row == child_row:
                         raise ValueError("Break events must connect distinct fragments")
@@ -362,8 +584,17 @@ class CompetitiveSpectrumModel(nn.Module):
         return initial, *tensors.unbind(1), root_index
 
     def _score_fragment_events(
-        self, data, molecular, collision_energy_h, reaction_h,
-        fragment_nodes, fragment_samples, source, target, reactions, event_type,
+        self,
+        data,
+        molecular,
+        collision_energy_h,
+        reaction_h,
+        fragment_nodes,
+        fragment_samples,
+        source,
+        target,
+        reactions,
+        event_type,
     ):
         reaction_features = molecular.new_zeros((source.numel(), self.reaction_dim))
         breaks = reactions >= 0
@@ -371,43 +602,62 @@ class CompetitiveSpectrumModel(nn.Module):
         # Self/Sink use the parent's structure twice and zero reaction features.
         child = torch.where(target >= 0, target, source)
         samples = fragment_samples[source]
-        inputs = torch.cat((
-            molecular[fragment_nodes[source]], molecular[fragment_nodes[child]],
-            reaction_features, collision_energy_h[samples],
-        ), dim=1)
+        inputs = torch.cat(
+            (
+                molecular[fragment_nodes[source]],
+                molecular[fragment_nodes[child]],
+                reaction_features,
+                collision_energy_h[samples],
+            ),
+            dim=1,
+        )
         mains = self._sample_main_adducts(data)
         sample_values = samples.tolist()
         logits = molecular.new_zeros(source.numel())
         for main in self.main_adduct_conditions:
             rows = torch.tensor(
                 [i for i, sample in enumerate(sample_values) if mains[sample] == main],
-                dtype=torch.long, device=molecular.device,
+                dtype=torch.long,
+                device=molecular.device,
             )
             if rows.numel():
-                logits[rows] = self.fragment_heads[self.head_index[main]](inputs[rows], event_type[rows])
+                logits[rows] = self.fragment_heads[self.head_index[main]](
+                    inputs[rows], event_type[rows]
+                )
         return segment_softmax(logits, source, fragment_nodes.numel())
 
-    def _score_states(self, data, molecular, collision_energy_h, fragments, inverse, roots):
+    def _score_states(
+        self, data, molecular, collision_energy_h, fragments, inverse, roots
+    ):
         """Shared across fragments; normalize ion/shift states within each fragment."""
         samples = data.state_sample_index
         nodes = data.state_node_index
         root_nodes = fragments[roots[inverse], 1]
-        inputs = torch.cat((molecular[nodes], molecular[root_nodes], collision_energy_h[samples]), dim=1)
+        inputs = torch.cat(
+            (molecular[nodes], molecular[root_nodes], collision_energy_h[samples]),
+            dim=1,
+        )
         mains = self._sample_main_adducts(data)
         sample_values = samples.tolist()
         adducts = data.state_adduct_index.tolist()
         shifts = data.state_hydrogen_shift.tolist()
         logits = molecular.new_zeros(nodes.numel())
         for main, conditions in self.main_adduct_conditions.items():
-            rows = [i for i, sample in enumerate(sample_values) if mains[sample] == main]
+            rows = [
+                i for i, sample in enumerate(sample_values) if mains[sample] == main
+            ]
             if not rows:
                 continue
             lookup = {value: i for i, value in enumerate(conditions)}
-            condition = torch.tensor([
-                lookup[(data.ion_type_strs[adducts[i]], shifts[i])] for i in rows
-            ], dtype=torch.long, device=molecular.device)
+            condition = torch.tensor(
+                [lookup[(data.ion_type_strs[adducts[i]], shifts[i])] for i in rows],
+                dtype=torch.long,
+                device=molecular.device,
+            )
             index = torch.tensor(rows, dtype=torch.long, device=molecular.device)
-            logits[index] = self.state_heads[self.head_index[main]](inputs[index], condition)
+            logits[index] = self.state_heads[self.head_index[main]](
+                inputs[index], condition
+            )
         return segment_softmax(logits, inverse, fragments.shape[0])
 
     def _spectrum_loss(
@@ -422,9 +672,7 @@ class CompetitiveSpectrumModel(nn.Module):
         """Merge formula-equivalent probabilities for normalization and supervision."""
         # Compare observed peaks only after summing all structures/paths that
         # yield the same formula in a sample. Keep state rows for viewers.
-        keys = torch.cat(
-            (state_sample_index[:, None].to(formulas.dtype), formulas), 1
-        )
+        keys = torch.cat((state_sample_index[:, None].to(formulas.dtype), formulas), 1)
         _, peak_group_index = torch.unique(keys, dim=0, return_inverse=True)
         peak_count = int(peak_group_index.max()) + 1
         peak_probability = final_probability.new_zeros(peak_count).scatter_add_(
@@ -437,13 +685,15 @@ class CompetitiveSpectrumModel(nn.Module):
             reduce="amax",
             include_self=True,
         )
-        valid_candidate = (formulas[:, :-1] >= 0).all(1) & (
-            data.state_mz > 0
-        )
+        valid_candidate = (formulas[:, :-1] >= 0).all(1) & (data.state_mz > 0)
         # Some supported PyTorch CUDA builds cannot reduce bool tensors.
         valid_peak = torch.zeros(peak_count, dtype=torch.long, device=formulas.device)
         valid_peak.scatter_reduce_(
-            0, peak_group_index, valid_candidate.long(), reduce="amax", include_self=True
+            0,
+            peak_group_index,
+            valid_candidate.long(),
+            reduce="amax",
+            include_self=True,
         )
         valid_peak = valid_peak.bool()
         maxima = final_probability.new_zeros(sample_count).scatter_reduce_(
@@ -466,9 +716,27 @@ class CompetitiveSpectrumModel(nn.Module):
         if data.target_intensity is None:
             return normalized, zero, metrics
         target_peak = final_probability.new_zeros(peak_count).scatter_reduce_(
-            0, peak_group_index, data.target_intensity.clamp_min(0),
-            reduce="amax", include_self=True,
+            0,
+            peak_group_index,
+            data.target_intensity.clamp_min(0),
+            reduce="amax",
+            include_self=True,
         )
+        supervision = getattr(data, "target_mask", None)
+        if supervision is not None:
+            available = torch.zeros_like(valid_peak, dtype=torch.long)
+            available.scatter_reduce_(
+                0,
+                peak_group_index,
+                supervision.long(),
+                reduce="amax",
+                include_self=True,
+            )
+            valid_peak = valid_peak & available.bool()
+        # Masked formulas participate in neural softmaxes, but are excluded from
+        # measured intensity objectives, including cosine normalization.
+        peak_probability = peak_probability.masked_fill(~valid_peak, 0)
+        target_peak = target_peak.masked_fill(~valid_peak, 0)
         precursor_peak = torch.zeros_like(valid_peak, dtype=torch.long)
         # Identify Source conditions differing from the declared precursor only
         # by hydrogen count, then exclude their entire formula groups.
@@ -483,7 +751,18 @@ class CompetitiveSpectrumModel(nn.Module):
         ]
         precursor_candidate = torch.tensor(
             [
-                node == roots[groups[node]]
+                node
+                == (
+                    int(
+                        data.canonical_data.source_compounds.compound_index[
+                            data.canonical_data.reaction_contexts.root_source_compound_index[
+                                data.canonical_data.sample_branch_group_index[sample]
+                            ]
+                        ]
+                    )
+                    if getattr(data, "canonical_data", None) is not None
+                    else roots[groups[node]]
+                )
                 and _adduct_without_hydrogen(data.ion_type_strs[adduct_index])
                 == precursor_signatures[sample]
                 for node, sample, adduct_index in zip(
@@ -494,7 +773,11 @@ class CompetitiveSpectrumModel(nn.Module):
             device=formulas.device,
         )
         precursor_peak.scatter_reduce_(
-            0, peak_group_index, precursor_candidate.long(), reduce="amax", include_self=True
+            0,
+            peak_group_index,
+            precursor_candidate.long(),
+            reduce="amax",
+            include_self=True,
         )
 
         precursor_peak = precursor_peak.bool()
@@ -518,9 +801,9 @@ class CompetitiveSpectrumModel(nn.Module):
             target_norm = probability.new_zeros(sample_count).scatter_add_(
                 0, peak_sample, target.square()
             )
-            cosine = (
-                dot / (pred_norm * target_norm).clamp_min(1e-24).sqrt()
-            )[observed].mean()
+            cosine = (dot / (pred_norm * target_norm).clamp_min(1e-24).sqrt())[
+                observed
+            ].mean()
             loss = settings.intensity_loss_weight * (
                 cross_entropy + settings.cosine_loss_weight * (1 - cosine)
             )
@@ -531,9 +814,9 @@ class CompetitiveSpectrumModel(nn.Module):
         fragment_total = fragment_probability.new_zeros(sample_count).scatter_add_(
             0, peak_sample, fragment_probability
         )
-        fragment_probability = (
-            fragment_probability / fragment_total[peak_sample].clamp_min(1e-12)
-        )
+        fragment_probability = fragment_probability / fragment_total[
+            peak_sample
+        ].clamp_min(1e-12)
         fragment_loss, fragment_cross_entropy, fragment_cosine = objective(
             fragment_probability, target_peak.masked_fill(precursor_peak, 0)
         )

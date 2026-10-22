@@ -125,11 +125,12 @@ def default_model(chemistry):
         hidden_dim=16,
         branch_main_adduct_dim=16,
         num_heads=1,
-        state_num_layers=1,
-        state_dropout=0.0,
+        edge_num_layers=1,
+        edge_dropout=0.0,
     )
     model["spectrum_model_params"].update(
-        transition_fc_dims=[16],
+        fragment_fc_dims=[16],
+        state_fc_dims=[16],
         ce_fc_dims=[16],
         collision_energy_dim=16,
     )
@@ -206,7 +207,9 @@ def extract(
     model_config.setdefault("reaction_model_params", {})[
         "pattern_model_params"
     ] = generator.feature_model.reaction_instance_encoder.pattern_model_params
-    model_config["mol_encoder_params"]["external_feature_dim"] = generator.mol_encoder.external_feature_dim
+    model_config["mol_encoder_params"][
+        "external_feature_dim"
+    ] = generator.mol_encoder.external_feature_dim
     del generator, model
     dependencies = {
         item["path"]: sha256(item["path"])

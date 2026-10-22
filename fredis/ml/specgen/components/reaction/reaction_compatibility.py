@@ -34,7 +34,6 @@ class ReactionCompatibilityEngine(nn.Module):
         pool_valid: Tensor,
         pool_conflict: Tensor,
         pool_invalidation: Tensor,
-        pool_dominance: Tensor,
         pool_retained: Tensor,
         source_atom_valid: Tensor,
     ) -> ReactionExpansion:
@@ -56,10 +55,7 @@ class ReactionCompatibilityEngine(nn.Module):
         invalidated = (
             pool_invalidation[sample[:, None, None], rows, cols] & pair_valid
         ).any(dim=(1, 2))
-        dominated = (
-            pool_dominance[sample[:, None, None], rows, cols] & pair_valid
-        ).any(dim=1)
-        normalized = present & ~dominated
+        normalized = present
         count = normalized.sum(dim=1)
         sorted_ids = raw.masked_fill(~normalized, k).sort(dim=1).values
         child = sorted_ids[:, :m].masked_fill(sorted_ids[:, :m] == k, -1)

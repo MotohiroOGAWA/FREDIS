@@ -338,7 +338,6 @@ def _build(
         record_indexes=[
             pick(compound.record_indexes)[value] for value in relative_kept
         ],
-        sample_annotations=annotations,
         # Seeds for children, including ones added by a later run.
         reaction_sequence_compounds=[
             (sequence, value.mapped_smiles)
