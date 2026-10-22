@@ -500,7 +500,118 @@ relation generating_reaction_sets (CSR). `smiles` is a derived read-only view of
 The saved format is `fredis.annotated-spectrum-training` without a version suffix. Implementation: [CompoundBatch](compound_batch.py),
 [normalization and reference tables](annotated_spectrum_data.py).
 
-## 2.5 BranchGroup: SourceCompound and main-adduct context
+## 2.5 AdductData: shared adduct rules and hydrogen shifts
+
+This shared schema centralizes main adducts, fragment ion adducts, and signed
+hydrogen shifts. All index values below refer to this table's ordering, which
+must be shared by preparation and model inputs. These are chemical rule
+vocabularies, not observed peaks or spectrum rows.
+
+```mermaid
+flowchart TB
+    subgraph AD["AdductData"]
+        MAIN["main_adducts<br/>tuple[str, ...]<br/>N_main_adduct rows"]
+        MEMBERS["fragment_ion_adduct (CSR)<br/>N_main_adduct rows<br/>int64 references"]
+        FRAGMENT["fragment_ion_adducts<br/>tuple[str, ...]<br/>N_fragment_ion_adduct rows"]
+        SHIFT["hydrogen_shifts<br/>int64 [N_hydrogen_shift]<br/>signed values"]
+        MAIN ~~~ MEMBERS
+        MEMBERS -->|"fragment ion adduct row IDs"| FRAGMENT
+        FRAGMENT ~~~ SHIFT
+    end
+```
+
+| Field / relation | Type / shape | Illustrative value | Meaning |
+|---|---|---|---|
+| `main_adducts` | tuple[str, ...], N_main_adduct | `("[M+H]+","[M+Na]+")` | Registered main-adduct labels; row IDs are implicit |
+| `fragment_ion_adducts` | tuple[str, ...], N_fragment_ion_adduct | `("[M+H]+","[M+H-H2O]+","[M+Na]+")` | Unique fragment-ion adduct labels |
+| `fragment_ion_adduct (CSR)` | int64, N_main_adduct variable-length rows | `[[0,1],[2]]` | Fragment ion adducts belonging to each main adduct; references `AdductData:fragment_ion_adducts` |
+| `hydrogen_shifts` | int64 [N_hydrogen_shift] | `[-1,0,1]` | Signed hydrogen-count adjustments; an index into this array differs from its value |
+
+The physical CSR arrays in this example are
+`fragment_ion_adduct_ptr = [0,2,3]` (length N_main_adduct+1) and
+`fragment_ion_adduct_index = [0,1,2]` (length N_main_fragment_adduct_link).
+The lists are configured by the preparation chemistry rules, not inferred from
+label spelling. A shared fragment-adduct row may be referenced by multiple main
+adducts when configured. Hydrogen shifts form a shared vocabulary; listing a
+shift does not assert that every adduct/shift combination is chemically valid.
+`BranchGroup:main_adduct_index` references `AdductData:main_adducts`.
+
+## 2.6 FormulaData: unique charged formulas
+
+A FormulaData row is one unique elemental-count vector including charge.
+Different Compounds and fragment-ion conditions can produce the same charged
+formula. They share its formula row while retaining separate explanation rows.
+Measured peak m/z is not the identity of a formula: different formulas may fall
+within the same peak tolerance.
+
+```mermaid
+flowchart TB
+    subgraph FD["FormulaData"]
+        COMPOSITION["composition<br/>int64 [N_formula, N_element + 1]<br/>element counts, then charge"]
+        MASS["mz<br/>float64 [N_formula]<br/>theoretical m/z"]
+        VALID["valid<br/>bool [N_formula]"]
+        COMPOSITION ~~~ MASS ~~~ VALID
+    end
+    ELEMENTS["AnnotatedSpectrumData:elements"]
+    COMPOSITION -->|"element-column ordering"| ELEMENTS
+```
+
+| Field / relation | Type / shape | Illustrative value | Meaning |
+|---|---|---|---|
+| `composition` | int64 [N_formula, N_element+1] | `[[2,7,1,1],[2,5,0,1]]` | With elements `("C","H","O")`: C2H7O+ and C2H5+; last column is charge |
+| `mz` | float64 [N_formula] | approximately `[47.04914,29.03858]` | Exact theoretical m/z calculated from charged composition |
+| `valid` | bool [N_formula] | `[True,True]` | Current criterion: element counts are nonnegative |
+
+FormulaData contains only formula identities and their properties. It does not
+own an explanation CSR. FormulaExplanationData references each formula directly.
+
+### FormulaExplanationData: Compound / fragment ion adduct / hydrogen shift
+
+Each row registers a Formula and its Compound / fragment ion adduct / hydrogen
+shift explanation. Its formula_index is a direct foreign key to FormulaData.
+PeakAssignmentData references only explanation rows, without storing formula IDs.
+
+```mermaid
+flowchart TB
+    subgraph FE["FormulaExplanationData"]
+        F["formula_index<br/>int64 [N_formula_explanation]"]
+        C["compound_index<br/>int64 [N_formula_explanation]"]
+        A["fragment_ion_adduct_index<br/>int64 [N_formula_explanation]"]
+        H["hydrogen_shift_index<br/>int64 [N_formula_explanation]"]
+        F ~~~ C ~~~ A ~~~ H
+    end
+    FR["FormulaData:composition"]
+    F --> FR
+    CR["CompoundBatch:compounds"]
+    AR["AdductData:fragment_ion_adducts"]
+    HR["AdductData:hydrogen_shifts"]
+    C --> CR
+    A --> AR
+    H --> HR
+```
+
+For an illustrative registry where Compound rows 0 and 1 are ethanol (`CCO`)
+and dimethyl ether (`COC`), the following rows explain the formulas above:
+
+| Explanation row (implicit) | formula_index | compound_index | fragment_ion_adduct_index | hydrogen_shift_index |
+|---|---|---|---|---|
+| 0 | 0 | 0 | 0 | 1 |
+| 1 | 0 | 1 | 0 | 1 |
+| 2 | 1 | 0 | 1 | 1 |
+
+Using section 2.5's vocabularies, rows 0 and 1 both use [M+H]+ and shift 0,
+producing C2H7O+. Row 2 uses [M+H-H2O]+ and shift 0, producing C2H5+.
+Thus a formula can retain distinct Compound explanations even at identical m/z.
+Each explanation stores one formula_index. The referenced composition must
+match that produced by its Compound/adduct/shift combination. Identical rows
+are shared across peak assignments; different structures explaining the same
+formula remain separate rows. All four columns are int64 [N_formula_explanation].
+
+This is the target schema. Existing Python names `IonCandidateData`,
+`FormulaData.ion_ptr/ion_index`, and the separate `ion_adducts` vocabulary still
+need to be replaced to implement this organization.
+
+## 2.7 BranchGroup: SourceCompound and main-adduct context
 
 A BranchGroup row identifies one `(SourceCompound, main adduct)` pair.
 It supplies the context in which branch predictions/topology are shared.
@@ -523,7 +634,7 @@ flowchart TB
         SOURCE ~~~ ADDUCT
     end
     SOURCEROW["SourceCompound:source_smiles"]
-    ADDUCTROW["PreparationContext:adduct_type_strs"]
+    ADDUCTROW["AdductData:main_adducts"]
     SOURCE -->|"SourceCompound row ID"| SOURCEROW
     ADDUCT -->|"registered main-adduct vocabulary index"| ADDUCTROW
 ```
@@ -531,12 +642,10 @@ flowchart TB
 | Logical field | Type / shape | Concrete example | Reference |
 |---|---|---|---|
 | `source_compound_index` | int64 [N_branch_group] | [0,0,1] | → `SourceCompound:source_smiles` |
-| `main_adduct_index` | int64 [N_branch_group] | [0,1,0] | → `PreparationContext:adduct_type_strs` |
+| `main_adduct_index` | int64 [N_branch_group] | [0,1,0] | → `AdductData:main_adducts` |
 
-`adduct_type_strs` is the registered main-adduct vocabulary created from the
-preparation Fragmenter's adduct rule set. It is a shared tuple, not an invented
-new table or a stored field on each group. Prediction uses the corresponding
-model vocabulary. IDs are meaningful only with that vocabulary and ordering.
+`main_adduct_index` references the shared AdductData main-adduct rows defined
+in section 2.5. It is not an independent PreparationContext vocabulary.
 
 ### Concrete group rows
 
@@ -575,7 +684,7 @@ rows. Its Source and main-adduct information are obtained through the group.
 Implementation: [group arrays](source_reaction_structure.py),
 [preparation vocabulary](../data_preparation/fragment_tree/context.py).
 
-## 2.6 SpectrumData: observed spectrum rows and peak lists
+## 2.8 SpectrumData: observed spectrum rows and peak lists
 
 This is the refined logical schema for `structure.annotations.spectra`.
 The Python class still stores `source_index` and `adducts`; this documentation
@@ -691,6 +800,50 @@ rather than introducing a new duplicated condition field.
 
 Compound/formula/ion assignments are not columns of SpectrumData: the current
 PeakAssignmentData table references these implicit observed peak rows. Its schema
-can be specified separately. This section only defines SpectrumData.
+is defined in section 2.9. This section only defines SpectrumData.
 
 Implementation: [SpectrumData and normalization](annotated_spectrum_data.py).
+
+## 2.9 PeakAssignmentData: structural explanations assigned to observed peaks
+
+This table is separate from TeacherData. Each implicit row corresponds to the
+same flattened peak row in `SpectrumData:mz`. A single CSR lists the
+FormulaExplanationData rows assigned to each peak.
+
+```mermaid
+flowchart TB
+    subgraph PA["PeakAssignmentData"]
+        ROW["implicit observed peak row<br/>N_peak rows"]
+        ASSIGNMENT["formula_explanation (CSR)<br/>N_peak rows<br/>int64 references"]
+        ROW ~~~ ASSIGNMENT
+    end
+    PEAK["SpectrumData:mz"]
+    EROW["FormulaExplanationData:formula_index"]
+    ROW -->|"same implicit row ID"| PEAK
+    ASSIGNMENT -->|"explanation row IDs"| EROW
+```
+
+| Field / relation | Type / shape | Concrete value | Reference |
+|---|---|---|---|
+| `formula_explanation (CSR)` | int64, N_peak variable-length rows | `[[0,1],[0,2],[]]` | → `FormulaExplanationData:formula_index` |
+
+```python
+formula_explanation_ptr = [0,2,4,4]       # int64 [N_peak + 1]
+formula_explanation_index = [0,1,0,2]     # int64 [N_peak_assignment]
+```
+
+Using section 2.6's explanation rows, peak 0 has two structural explanations
+of Formula 0. Peak 1 has explanations of Formula 0 and Formula 1. Peak 2 is
+unassigned. Thus each peak can still have multiple formulas: obtain them from
+the referenced explanation rows and deduplicate their formula_index values.
+PeakAssignmentData does not duplicate those formula IDs or store a second CSR.
+The diagram shows direct references only.
+
+Explanation IDs are sorted and unique within each peak. Distinct explanations
+of the same formula remain separate assignments. Preparation checks chemical
+consistency and admissibility for the spectrum's BranchGroup and available
+Compounds. Empty slices are not Teacher negative labels. SpectrumData:precursor
+remains an independent mass-tolerance annotation.
+
+This is the target schema. The current Python implementation still uses separate
+formula and ion CSR arrays; implementation has not yet been updated.
