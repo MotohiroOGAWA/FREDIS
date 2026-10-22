@@ -1,4 +1,4 @@
-"""Fragment DAG survival followed by conditional ion/shift state probabilities."""
+"""Fragment reaction-path survival followed by conditional ion/shift state probabilities."""
 
 from __future__ import annotations
 from dataclasses import replace
@@ -6,7 +6,6 @@ from functools import lru_cache
 import torch
 from torch import nn
 from .components.condition.condition_linear import ConditionHead
-from ..common.torch_utils.segment_ops import segment_softmax
 from .fragment_spectrum_model import SpectrumModelOutput, SpectrumLossSettings
 from fredis.domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
 from ..mol.selected_descriptors import selected_descriptor_values
@@ -30,12 +29,35 @@ def _adduct_without_hydrogen(adduct_type):
     )
 
 
-def propagate_probability(initial, source, target, probability):
-    """Process each DAG state once; self absorbs, target -1 denotes terminal sink.
+def segment_logsumexp(values, groups, size):
+    """Sum grouped probabilities in log space, including empty/unreachable groups."""
+    maximum = values.new_full((size,), -torch.inf)
+    maximum.scatter_reduce_(0, groups, values.detach(), reduce="amax", include_self=True)
+    shift = maximum.masked_fill(~torch.isfinite(maximum), 0)
+    weights = (values - shift[groups]).exp()
+    total = values.new_zeros(size).scatter_add_(0, groups, weights)
+    # Avoid undefined gradients from log(0) for unreachable groups.
+    return (shift + total.clamp_min(torch.finfo(values.dtype).tiny).log()).masked_fill(
+        total == 0, -torch.inf
+    )
+
+
+def segment_log_softmax(logits, groups, size):
+    return logits - segment_logsumexp(logits, groups, size)[groups]
+
+
+def probability_log(probability):
+    return probability.clamp_min(torch.finfo(probability.dtype).tiny).log().masked_fill(
+        probability == 0, -torch.inf
+    )
+
+
+def propagate_log_probability(initial, source, target, probability):
+    """Process each reaction state once; self absorbs, target -1 denotes terminal sink.
 
     Kahn frontiers ensure all parents contribute before a state is processed.
     Only topology is inspected on CPU; probability operations retain autograd.
-    Returns final retained mass and sink mass, both indexed by state.
+    Inputs and outputs are log probabilities; outputs are indexed by state.
     """
     count = initial.numel()
     sources = source.detach().cpu().tolist()
@@ -64,22 +86,35 @@ def propagate_probability(initial, source, target, probability):
                     following.append(child)
         frontier = following
     if visited != count:
-        raise ValueError("Fragment probability graph must be a DAG")
+        raise ValueError("Fragment reaction paths must not contain cycles")
 
     incoming = initial
-    final = initial * 0
-    sink = initial * 0
+    final = initial.new_full(initial.shape, -torch.inf)
+    sink = initial.new_full(initial.shape, -torch.inf)
+    states = torch.arange(count, device=source.device)
     for events in levels:
         index = torch.tensor(events, dtype=torch.long, device=source.device)
         parents, children_index = source[index], target[index]
-        mass = incoming[parents] * probability[index]
+        mass = incoming[parents] + probability[index]
         self_event = children_index == parents
         sink_event = children_index == -1
         break_event = ~(self_event | sink_event)
-        final = final.index_add(0, parents[self_event], mass[self_event])
-        sink = sink.index_add(0, parents[sink_event], mass[sink_event])
-        incoming = incoming.index_add(0, children_index[break_event], mass[break_event])
+        def accumulate(existing, destinations, values):
+            return segment_logsumexp(
+                torch.cat((existing, values)), torch.cat((states, destinations)), count
+            )
+        final = accumulate(final, parents[self_event], mass[self_event])
+        sink = accumulate(sink, parents[sink_event], mass[sink_event])
+        incoming = accumulate(incoming, children_index[break_event], mass[break_event])
     return final, sink
+
+
+def propagate_probability(initial, source, target, probability):
+    """Compatibility wrapper returning ordinary retained and sink probabilities."""
+    final, sink = propagate_log_probability(
+        probability_log(initial), source, target, probability_log(probability)
+    )
+    return final.exp(), sink.exp()
 
 
 def merge_candidate_peaks(output):
@@ -256,12 +291,15 @@ class CompetitiveSpectrumModel(nn.Module):
             target,
             event_reactions,
             event_type,
+            log=True,
         )
-        fragment_probability, fragment_sink = propagate_probability(
-            initial, source, target, probabilities
+        log_fragment, log_sink = propagate_log_probability(
+            probability_log(initial), source, target, probabilities
         )
+        fragment_probability, fragment_sink = log_fragment.exp(), log_sink.exp()
+        probabilities = probabilities.exp()
         # State Head is evaluated after fragment propagation. It has no path
-        # back into Fragment Head logits or DAG event probabilities.
+        # back into Fragment Head logits or reaction-event probabilities.
         state_probability = self._score_states(
             data,
             molecular,
@@ -269,10 +307,11 @@ class CompetitiveSpectrumModel(nn.Module):
             fragments,
             state_fragment_index,
             root_index,
+            log=True,
         )
-        final_probability = (
-            fragment_probability[state_fragment_index] * state_probability
-        )
+        final_log_probability = log_fragment[state_fragment_index] + state_probability
+        state_probability = state_probability.exp()
+        final_probability = final_log_probability.exp()
         sink_probability = molecular.new_zeros(sample_count).scatter_add_(
             0, fragment_samples, fragment_sink
         )
@@ -294,6 +333,7 @@ class CompetitiveSpectrumModel(nn.Module):
             formulas,
             sample_count,
             settings,
+            final_log_probability=final_log_probability,
         )
         metrics = {
             "intensity_loss": loss,
@@ -410,14 +450,19 @@ class CompetitiveSpectrumModel(nn.Module):
             target,
             reactions,
             event_type,
+            log=True,
         )
         initial = molecular.new_zeros(execution_compounds.numel())
         initial[ids(root_rows)] = 1
-        retained, sink = propagate_probability(initial, source, target, probability)
-        execution_to_physical = ids(execution_to_physical)
-        fragment_probability = molecular.new_zeros(len(physical)).scatter_add_(
-            0, execution_to_physical, retained
+        log_retained, log_sink = propagate_log_probability(
+            probability_log(initial), source, target, probability
         )
+        retained, sink = log_retained.exp(), log_sink.exp()
+        log_event_probability = probability
+        probability = probability.exp()
+        execution_to_physical = ids(execution_to_physical)
+        log_fragment = segment_logsumexp(log_retained, execution_to_physical, len(physical))
+        fragment_probability = log_fragment.exp()
         fragments = ids(physical).reshape(-1, 2)
         state_fragment = ids(
             [
@@ -434,8 +479,11 @@ class CompetitiveSpectrumModel(nn.Module):
             fragments,
             state_fragment,
             ids(physical_roots),
+            log=True,
         )
-        final = fragment_probability[state_fragment] * conditional
+        final_log_probability = log_fragment[state_fragment] + conditional
+        conditional = conditional.exp()
+        final = final_log_probability.exp()
         normalized, loss, metrics = self._spectrum_loss(
             data,
             final,
@@ -443,6 +491,7 @@ class CompetitiveSpectrumModel(nn.Module):
             data.state_formula_tensor,
             core.num_samples,
             loss_settings or SpectrumLossSettings(),
+            final_log_probability=final_log_probability,
         )
         sink_probability = molecular.new_zeros(core.num_samples).scatter_add_(
             0, execution_samples, sink
@@ -465,24 +514,24 @@ class CompetitiveSpectrumModel(nn.Module):
         )
         # Report one effective event per physical Compound/reaction, while the
         # actual propagation above remains history constrained and acyclic.
-        self_rates = probability[event_type == 1]
-        incoming = retained / self_rates.clamp_min(torch.finfo(retained.dtype).tiny)
-        event_mass = incoming[source] * probability
+        log_incoming = log_retained - log_event_probability[event_type == 1]
+        log_event_mass = log_incoming[source] + log_event_probability
         diagnostic_keys = torch.stack(
             (execution_to_physical[source], child_physical, reactions), 1
         )
         diagnostic_rows, diagnostic_inverse = torch.unique(
             diagnostic_keys, dim=0, return_inverse=True
         )
-        aggregate_mass = event_mass.new_zeros(len(diagnostic_rows)).scatter_add_(
-            0, diagnostic_inverse, event_mass
+        aggregate_mass = segment_logsumexp(
+            log_event_mass, diagnostic_inverse, len(diagnostic_rows)
         )
-        totals = event_mass.new_zeros(len(physical)).scatter_add_(
-            0, execution_to_physical[source], event_mass
+        totals = segment_logsumexp(
+            log_event_mass, execution_to_physical[source], len(physical)
         )
-        diagnostic_probability = aggregate_mass / totals[
-            diagnostic_rows[:, 0]
-        ].clamp_min(1e-12)
+        normalizer = totals[diagnostic_rows[:, 0]]
+        diagnostic_probability = (aggregate_mass - normalizer.masked_fill(
+            ~torch.isfinite(normalizer), 0
+        )).exp()
         return SpectrumModelOutput(
             normalized,
             data.state_sample_index,
@@ -552,7 +601,7 @@ class CompetitiveSpectrumModel(nn.Module):
         return [self.precursor_main_adducts[value] for value in data.precursor_adducts]
 
     def _fragment_events(self, data, molecular, fragments, sample_count):
-        """Build Child/Self/Sink events on sample-specific Fragment DAGs."""
+        """Build Child/Self/Sink events on sample-specific fragment reaction paths."""
         keys = fragments.detach().cpu().tolist()
         lookup = {(sample, node): i for i, (sample, node) in enumerate(keys)}
         groups = data.decoded.node_sample_index.detach().cpu().tolist()
@@ -595,6 +644,7 @@ class CompetitiveSpectrumModel(nn.Module):
         target,
         reactions,
         event_type,
+        *, log=False,
     ):
         reaction_features = molecular.new_zeros((source.numel(), self.reaction_dim))
         breaks = reactions >= 0
@@ -624,10 +674,11 @@ class CompetitiveSpectrumModel(nn.Module):
                 logits[rows] = self.fragment_heads[self.head_index[main]](
                     inputs[rows], event_type[rows]
                 )
-        return segment_softmax(logits, source, fragment_nodes.numel())
+        result = segment_log_softmax(logits, source, fragment_nodes.numel())
+        return result if log else result.exp()
 
     def _score_states(
-        self, data, molecular, collision_energy_h, fragments, inverse, roots
+        self, data, molecular, collision_energy_h, fragments, inverse, roots, *, log=False
     ):
         """Shared across fragments; normalize ion/shift states within each fragment."""
         samples = data.state_sample_index
@@ -658,7 +709,8 @@ class CompetitiveSpectrumModel(nn.Module):
             logits[index] = self.state_heads[self.head_index[main]](
                 inputs[index], condition
             )
-        return segment_softmax(logits, inverse, fragments.shape[0])
+        result = segment_log_softmax(logits, inverse, fragments.shape[0])
+        return result if log else result.exp()
 
     def _spectrum_loss(
         self,
@@ -668,6 +720,7 @@ class CompetitiveSpectrumModel(nn.Module):
         formulas,
         sample_count,
         settings,
+        *, final_log_probability=None,
     ):
         """Merge formula-equivalent probabilities for normalization and supervision."""
         # Compare observed peaks only after summing all structures/paths that
@@ -675,8 +728,10 @@ class CompetitiveSpectrumModel(nn.Module):
         keys = torch.cat((state_sample_index[:, None].to(formulas.dtype), formulas), 1)
         _, peak_group_index = torch.unique(keys, dim=0, return_inverse=True)
         peak_count = int(peak_group_index.max()) + 1
-        peak_probability = final_probability.new_zeros(peak_count).scatter_add_(
-            0, peak_group_index, final_probability
+        if final_log_probability is None:
+            final_log_probability = probability_log(final_probability)
+        peak_log_probability = segment_logsumexp(
+            final_log_probability, peak_group_index, peak_count
         )
         peak_sample = state_sample_index.new_zeros(peak_count).scatter_reduce_(
             0,
@@ -696,14 +751,15 @@ class CompetitiveSpectrumModel(nn.Module):
             include_self=True,
         )
         valid_peak = valid_peak.bool()
-        maxima = final_probability.new_zeros(sample_count).scatter_reduce_(
+        maxima = final_probability.new_full((sample_count,), -torch.inf).scatter_reduce_(
             0,
             peak_sample,
-            peak_probability * valid_peak,
+            peak_log_probability.masked_fill(~valid_peak, -torch.inf),
             reduce="amax",
             include_self=True,
         )
-        normalized = final_probability / maxima[state_sample_index].clamp_min(1e-12)
+        maxima = maxima.masked_fill(~torch.isfinite(maxima), 0)
+        normalized = (final_log_probability - maxima[state_sample_index]).exp()
         zero = final_probability.sum() * 0
         metrics = {
             "spectrum_loss_with_precursor": zero,
@@ -735,7 +791,7 @@ class CompetitiveSpectrumModel(nn.Module):
             valid_peak = valid_peak & available.bool()
         # Masked formulas participate in neural softmaxes, but are excluded from
         # measured intensity objectives, including cosine normalization.
-        peak_probability = peak_probability.masked_fill(~valid_peak, 0)
+        peak_log_probability = peak_log_probability.masked_fill(~valid_peak, -torch.inf)
         target_peak = target_peak.masked_fill(~valid_peak, 0)
         precursor_peak = torch.zeros_like(valid_peak, dtype=torch.long)
         # Identify Source conditions differing from the declared precursor only
@@ -782,23 +838,24 @@ class CompetitiveSpectrumModel(nn.Module):
 
         precursor_peak = precursor_peak.bool()
 
-        def objective(probability, target):
+        def objective(log_probability, target):
             target = target.pow(settings.intensity_exponent)
-            target_total = probability.new_zeros(sample_count).scatter_add_(
+            target_total = log_probability.new_zeros(sample_count).scatter_add_(
                 0, peak_sample, target
             )
             observed = target_total > 0
             if not bool(observed.any()):
                 return zero, zero, zero
             weights = target / target_total[peak_sample].clamp_min(1e-12)
-            cross_entropy = -(weights * probability.clamp_min(1e-12).log()).sum()
+            cross_entropy = -(weights * log_probability.masked_fill(weights == 0, 0)).sum()
             cross_entropy = cross_entropy / observed.sum()
-            # Keep zero predictions exactly zero with finite gradients for roots.
-            probability = torch.where(
-                probability > 0,
-                probability.clamp_min(1e-12).pow(settings.intensity_exponent),
-                torch.zeros_like(probability),
-            )
+            # Cosine is scale invariant: center in log space before exponentiation.
+            maximum = log_probability.new_full((sample_count,), -torch.inf)
+            maximum.scatter_reduce_(0, peak_sample, log_probability.detach(),
+                                    reduce="amax", include_self=True)
+            maximum = maximum.masked_fill(~torch.isfinite(maximum), 0)
+            probability = ((log_probability - maximum[peak_sample])
+                           * settings.intensity_exponent).exp()
             dot = probability.new_zeros(sample_count).scatter_add_(
                 0, peak_sample, probability * target
             )
@@ -816,16 +873,13 @@ class CompetitiveSpectrumModel(nn.Module):
             )
             return loss, cross_entropy, cosine
 
-        full_loss, cross_entropy, cosine = objective(peak_probability, target_peak)
-        fragment_probability = peak_probability.masked_fill(precursor_peak, 0)
-        fragment_total = fragment_probability.new_zeros(sample_count).scatter_add_(
-            0, peak_sample, fragment_probability
-        )
-        fragment_probability = fragment_probability / fragment_total[
-            peak_sample
-        ].clamp_min(1e-12)
+        full_loss, cross_entropy, cosine = objective(peak_log_probability, target_peak)
+        fragment_log_probability = peak_log_probability.masked_fill(precursor_peak, -torch.inf)
+        fragment_total = segment_logsumexp(fragment_log_probability, peak_sample, sample_count)
+        fragment_total = fragment_total.masked_fill(~torch.isfinite(fragment_total), 0)
+        fragment_log_probability = fragment_log_probability - fragment_total[peak_sample]
         fragment_loss, fragment_cross_entropy, fragment_cosine = objective(
-            fragment_probability, target_peak.masked_fill(precursor_peak, 0)
+            fragment_log_probability, target_peak.masked_fill(precursor_peak, 0)
         )
         metrics.update(
             spectrum_loss_with_precursor=full_loss,

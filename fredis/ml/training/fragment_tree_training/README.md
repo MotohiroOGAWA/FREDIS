@@ -130,3 +130,5 @@ change with graph retention; this option guarantees identical branch labels,
 not identical spectrum losses.
 
 Spectrum loss uses `--intensity-exponent` (default `0.5`, positive finite values only). Target intensities are raised to this power before normalization into cross-entropy weights; both predicted and target intensities are raised to this power for cosine similarity. Use `1` for the original objective. Prediction output intensities are unchanged. Resuming an older checkpoint without this setting retains exponent `1`.
+
+Reaction-path probabilities are propagated in log space. Transition and state probabilities use grouped log-softmax; incoming paths, execution histories, and formula-equivalent peaks are combined with logsumexp. Cross entropy consumes the merged log probability directly, without a probability floor. Precursor-excluded normalization also uses logsumexp. Cosine inputs are centered in log space before exponentiation; prediction outputs remain ordinary intensities.

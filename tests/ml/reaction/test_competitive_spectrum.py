@@ -661,7 +661,7 @@ def test_dag_flow_reaches_beyond_six_breaks_without_repropagating_self():
 
 
 def test_probability_flow_rejects_break_cycles():
-    with pytest.raises(ValueError, match="DAG"):
+    with pytest.raises(ValueError, match="cycles"):
         propagate_probability(
             torch.tensor([1.0, 0.0]),
             torch.tensor([0, 1]),
@@ -866,3 +866,57 @@ def test_invalid_intensity_exponent(exponent):
     from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
     with pytest.raises(ValueError, match="intensity_exponent"):
         SpectrumLossSettings(intensity_exponent=exponent)
+
+
+def test_log_path_probabilities_survive_underflow_and_merge_gradients():
+    from fredis.ml.specgen.competitive_spectrum_model import (
+        propagate_log_probability, segment_log_softmax,
+    )
+    # Two extremely unlikely branches join at the same fragment.
+    source = torch.tensor([0, 0, 0, 1, 1, 2, 2, 3, 3])
+    target = torch.tensor([1, 2, -1, 3, -1, 3, -1, 3, -1])
+    logits = torch.tensor([-1000., -1001., 0., -400., 0., -400., 0., 0., 0.], requires_grad=True)
+    log_rates = segment_log_softmax(logits, source, 4)
+    retained, sink = propagate_log_probability(
+        torch.tensor([0., -torch.inf, -torch.inf, -torch.inf]), source, target, log_rates
+    )
+    expected = torch.logsumexp(torch.stack((log_rates[0] + log_rates[3],
+                                           log_rates[1] + log_rates[5])), 0) + log_rates[7]
+    torch.testing.assert_close(retained[3], expected)
+    assert retained[3] < -1400 and retained[3].exp() == 0
+    (-retained[3]).backward()
+    assert torch.isfinite(logits.grad).all()
+    assert (logits.grad[[0, 1, 3, 5]] < 0).all()
+    torch.testing.assert_close(torch.cat((retained, sink)).exp().sum(), torch.tensor(1.))
+
+
+def test_log_formula_merge_loss_does_not_clamp_small_probabilities():
+    from types import SimpleNamespace
+    from fredis.ml.specgen.competitive_spectrum_model import segment_logsumexp
+    from fredis.ml.specgen.fragment_spectrum_model import SpectrumLossSettings
+    model = create_spectrum_generator(competitive_config()).spectrum_model
+    data = SimpleNamespace(
+        decoded=SimpleNamespace(node_sample_index=torch.tensor([0, 0, 0])),
+        state_node_index=torch.tensor([0, 1, 2]), state_mz=torch.tensor([100., 50., 50.]),
+        ion_type_strs=("[M+H]+",), state_adduct_index=torch.zeros(3, dtype=torch.long),
+        precursor_adducts=("[M+H]+",), target_intensity=torch.tensor([0., 1., 1.]),
+    )
+    log_probabilities = torch.tensor([0., -1400., -1401.], requires_grad=True)
+    _, loss, metrics = model._spectrum_loss(
+        data, log_probabilities.exp(), torch.zeros(3, dtype=torch.long),
+        torch.tensor([[10., 1.], [5., 1.], [5., 1.]]), 1,
+        SpectrumLossSettings(cosine_loss_weight=0),
+        final_log_probability=log_probabilities,
+    )
+    expected = -torch.logsumexp(log_probabilities[1:], 0)
+    torch.testing.assert_close(metrics['transition_cross_entropy'], expected)
+    torch.testing.assert_close(metrics['transition_cross_entropy_without_precursor'], torch.tensor(0.))
+    loss.backward()
+    assert torch.isfinite(log_probabilities.grad).all()
+    assert (log_probabilities.grad[1:] < 0).all()
+    # Empty groups and entirely unreachable inputs must have finite gradients.
+    values = torch.tensor([-torch.inf, -torch.inf, -1000.], requires_grad=True)
+    merged = segment_logsumexp(values, torch.tensor([0, 0, 1]), 3)
+    assert torch.isneginf(merged[[0, 2]]).all()
+    merged[1].backward()
+    assert torch.isfinite(values.grad).all()
