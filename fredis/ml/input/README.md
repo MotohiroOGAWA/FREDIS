@@ -1,8 +1,7 @@
 # Prepared input tables
 
 Schema and reference diagrams: [SCHEMA.md](SCHEMA.md).
-Current saved format: `fredis.annotated-spectrum-training.v5`.
-Prepared files from older formats must be regenerated.
+Current saved format: `fredis.annotated-spectrum-training`.
 
 ## Independent tables
 

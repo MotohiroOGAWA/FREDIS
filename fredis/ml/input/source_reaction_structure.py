@@ -24,7 +24,7 @@ from .source_compound import SourceCompound
 from .reaction_context_data import ReactionContextData, TeacherData
 from .annotated_spectrum_data import AnnotatedSpectrumData
 
-SCHEMA = "fredis.annotated-spectrum-training.v5"
+SCHEMA = "fredis.annotated-spectrum-training"
 
 
 class UnresolvedPrecursorError(ValueError):
@@ -68,7 +68,7 @@ class SourceReactionStructure:
     observations: InitVar[tuple[dict, ...] | None] = field(default=None, kw_only=True)
     formula_elements: tuple[str, ...] = field(default=(), kw_only=True)
     # Runtime view: expanded group-local graph topology and sample/ion rows.
-    # Redundant graphs/formulas/targets are omitted from serialized v5 data.
+    # Redundant graphs/formulas/targets are omitted from serialized data.
     spectrum_batch: object | None = None
 
     # Spectrum -> (compound, main adduct) branch group. Collision energy is
@@ -145,8 +145,8 @@ class SourceReactionStructure:
     def __getstate__(self):
         """Serialize normalized tables plus topology; omit expanded runtime caches.
 
-        This is the v5 representation only, not a migration path. Formula rows,
-        molecular graphs and targets are restored from annotations on unpickling.
+        Formula rows, molecular graphs and targets are restored from
+        annotations on unpickling.
         """
         state = dict(self.__dict__)
         if self.annotations is not None and self.spectrum_batch is not None:
@@ -167,9 +167,7 @@ class SourceReactionStructure:
         return state
 
     def __setstate__(self, state):
-        """Restore current-format runtime views without RDKit or old-format conversion."""
-        if any(name not in state for name in ("annotations", "teacher", "states", "collision_energy_eV", "reaction_sets", "source_compounds")):
-            raise ValueError("Unsupported prepared data; regenerate the dataset")
+        """Restore runtime views from the prepared annotation tables."""
         self.__dict__.update(state)
         if self.annotations is not None and self.spectrum_batch is not None:
             a = self.annotations
@@ -270,30 +268,13 @@ class SourceReactionStructure:
         cls,
         path: str | Path,
         device: str | torch.device = "cpu",
-        *,
-        max_reaction_count: int = 3,
     ) -> SourceReactionStructure:
-        try:
-            payload = torch.load(path, map_location="cpu", weights_only=False)
-        except ModuleNotFoundError as error:
-            if error.name == "fredis.ml.input.reaction_state_data":
-                raise ValueError("Unsupported prepared data; regenerate the dataset") from error
-            raise
-        except AttributeError as error:
-            if "CompoundData" in str(error):
-                raise ValueError("Unsupported prepared data; regenerate the dataset") from error
-            raise
+        payload = torch.load(path, map_location="cpu", weights_only=False)
         if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
-            raise ValueError("Unsupported prepared data; regenerate from the original MSDataset")
+            raise ValueError("Expected an annotated-spectrum-training payload")
         result = payload["structure"]
         if not isinstance(result, cls):
-            raise TypeError(
-                "Prepared structure must be SourceReactionStructure; regenerate the dataset"
-            )
-        if not isinstance(getattr(result, "reactions", None), ReactionTensorData) or any(
-            not hasattr(result.reactions, name) for name in ReactionTensorData.field_names()
-        ):
-            raise ValueError("Unsupported reaction tensors; regenerate the prepared dataset")
+            raise TypeError("Prepared structure must be SourceReactionStructure")
         result.validate()
         return result.to(device)
 

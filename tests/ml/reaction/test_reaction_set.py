@@ -125,12 +125,3 @@ def test_shared_empty_set_preserves_distinct_source_compounds():
     assert combined.states.candidate_reaction_set_index.tolist() == [0, 0]
     assert combined.branch_group_tree_index.tolist() == [0, 1]
     assert combined.source_compounds.source_smiles == ("CCO", "CC(=O)O")
-
-
-def test_old_prepared_module_has_an_explicit_regeneration_error():
-    from unittest.mock import patch
-
-    error = ModuleNotFoundError(name="fredis.ml.input.reaction_state_data")
-    with patch("torch.load", side_effect=error):
-        with pytest.raises(ValueError, match="regenerate the dataset"):
-            SourceReactionStructure.load("old.preft.pt")

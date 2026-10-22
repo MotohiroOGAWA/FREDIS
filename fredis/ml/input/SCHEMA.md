@@ -1,7 +1,7 @@
 # SourceReactionStructure schema
 
 SourceCompound, Reaction, ReactionSet, and CompoundBatch describe the implemented Batch
-tables in schema `fredis.annotated-spectrum-training.v5`. External references are shown by name,
+tables in schema `fredis.annotated-spectrum-training`. External references are shown by name,
 and CSR relations are shown as single logical fields. No SQL database is created.
 
 ## SourceCompound: independent Batch structure (step 1)
@@ -403,8 +403,8 @@ independent Source/reaction/set registries and slices the dependent contexts.
 FKs; those memberships are not stored twice. Training converts the global members
 to the decoder's local pool slots only for scoring.
 
-Files use `fredis.annotated-spectrum-training.v5`. Old prepared files must be
-regenerated. Loading/validation does not run chemistry. Further dependent schemas
+Files use `fredis.annotated-spectrum-training` without a version suffix.
+Loading/validation does not run chemistry. Further dependent schemas
 can be refined independently of canonical set identity.
 
 Implementation: [SourceCompound](source_compound.py),
@@ -497,6 +497,5 @@ Charged formula/m/z and ion-condition fields remain outside CompoundBatch.
 `generating_reaction_sets_ptr/index`. The pair represents the single logical
 relation generating_reaction_sets (CSR). `smiles` is a derived read-only view of
 `compounds[i].smiles`, not another stored field.
-The saved format is `fredis.annotated-spectrum-training.v5`; earlier prepared
-data must be regenerated. Implementation: [CompoundBatch](compound_batch.py),
+The saved format is `fredis.annotated-spectrum-training` without a version suffix. Implementation: [CompoundBatch](compound_batch.py),
 [normalization and reference tables](annotated_spectrum_data.py).

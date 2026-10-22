@@ -164,6 +164,6 @@ def test_prepared_payload_has_schema_without_version(tmp_path):
     _,data=prepared_two_ce();path=tmp_path/'data.preft.pt';data.save(path)
     payload=torch.load(path,weights_only=False)
     assert set(payload)=={'schema','structure'}
-    assert payload['schema']=='fredis.annotated-spectrum-training.v5'
+    assert payload['schema']=='fredis.annotated-spectrum-training'
     loaded=SourceReactionStructure.load(path)
     assert loaded.num_branch_groups==1
