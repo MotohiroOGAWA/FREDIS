@@ -1,61 +1,8 @@
-erDiagram
-    SOURCE_COMPOUND ||--o{ REACTION_INSTANCE : owns
-    SOURCE_COMPOUND ||--o{ BRANCH_GROUP : conditions
-    MAIN_ADDUCT ||--o{ BRANCH_GROUP : selects
-    BRANCH_GROUP ||--o{ GROUP_REACTION : vocabulary
-    REACTION_INSTANCE ||--o{ GROUP_REACTION : resolves_to
-    BRANCH_GROUP ||--o{ REACTION_STATE : contains
-    REACTION_STATE ||--o{ STATE_MEMBER : contains
-    GROUP_REACTION ||--o{ STATE_MEMBER : referenced_by
-    COMPOUND o|--o{ REACTION_STATE : produced_by
-    BRANCH_GROUP ||--o{ SPECTRUM : measured_at_CE
-
-    SOURCE_COMPOUND {
-        bigint source_id PK
-        string smiles
-        graph molecular_graph
-    }
-    MAIN_ADDUCT {
-        bigint main_adduct_id PK
-        string label UK
-    }
-    BRANCH_GROUP {
-        bigint group_id PK
-        bigint source_id FK
-        bigint main_adduct_id FK
-    }
-    REACTION_INSTANCE {
-        bigint reaction_id PK
-        bigint source_id FK
-        bigint pattern_id
-        bigint rule_id
-        bigint product_slot
-    }
-    GROUP_REACTION {
-        bigint group_id PK, FK
-        bigint local_reaction_index PK
-        bigint reaction_id FK
-    }
-    REACTION_STATE {
-        bigint state_id PK
-        bigint group_id FK
-        bigint compound_id FK "nullable until materialized"
-    }
-    STATE_MEMBER {
-        bigint state_id PK, FK
-        bigint group_id FK "part of composite FK"
-        bigint local_reaction_index PK, FK "part of composite FK"
-    }
-    COMPOUND {
-        bigint compound_id PK
-        string canonical_isomeric_smiles UK
-        graph molecular_graph
-    }
-    SPECTRUM {
-        bigint spectrum_id PK
-        bigint group_id FK
-        float32 collision_energy_eV
-        float64 precursor_mz
-        string observed_adduct
-        json metadata
-    }
+flowchart TB
+    subgraph RS["ReactionSet : REACTION_SET_BATCH"]
+        MEMBERS["reaction (CSR)<br/>unique sorted sets of Batch-global reaction IDs"]
+    end
+    REACTION["Reaction:reaction_type"]
+    COMPOUND["Compound:reaction_set (CSR)"]
+    MEMBERS -->|"reaction row IDs"| REACTION
+    COMPOUND -->|"set row IDs"| RS

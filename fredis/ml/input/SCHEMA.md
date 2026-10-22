@@ -1,14 +1,9 @@
-# Relational view of SourceReactionStructure
+# SourceReactionStructure schema
 
-This is a logical RDB-style schema of the current tensor data, not a SQL database
-implementation or a proposal to change prediction behavior. PK means primary key,
-FK foreign key, and UK unique key. An ID names one row. Nullable FKs correspond to
--1 in tensor tables. Crow's feet show cardinality, not preparation order.
-
-CSR lists are drawn as relationship tables. Their `ptr` arrays are storage
-boundaries, not foreign keys, so the logical ER tables do not store a `ptr` column.
-Names such as STATE_MEMBER and GROUP_REACTION describe logical tables/views;
-there is no separate Python dataclass for each of them.
+SourceCompound and Reaction below document the current Batch fields.
+ReactionSet defines the revised target design agreed during schema review;
+its implementation migration is pending. External references are shown by name,
+and CSR relations are shown as single logical fields. No SQL database is created.
 
 ## SourceCompound: independent Batch structure (step 1)
 
@@ -191,12 +186,12 @@ Implementation references:
 Actual storage is `SourceReactionStructure.reactions: ReactionTensorData`.
 R is the total number of concrete reactions in the current Batch. A reaction ID
 is an implicit row `r` of `reaction_type`; it is not a pattern ID. These IDs and
-atom IDs are Batch-global. The group-local IDs in State reaction sets are a
-separate index space resolved through the group's Source reaction vocabulary.
+atom IDs are Batch-global. The revised ReactionSet table below uses these registry row IDs directly.
+Current implementation differences are documented in that section.
 
 ### Notation and reference diagram
 
-External targets are named only, as `Component:Batch:field`. The SourceCompound
+External targets are named only, as `Component:field`. The SourceCompound
 Batch is not expanded again. A CSR relation is shown once as `(CSR)` with its
 logical list values; its index and ptr arrays are not drawn as separate fields.
 `reaction_source_atom` and `reaction_retained_atom` below are display names for
@@ -220,8 +215,8 @@ flowchart TB
         %% Invisible links keep fields in a vertical column; they are not references.
         OWNER ~~~ MATCH ~~~ KEEP ~~~ CONFLICT ~~~ INVALID ~~~ TYPE
     end
-    SOURCEROW["SourceCompound:<br/>SOURCE_COMPOUND_BATCH:<br/>source_smiles"]
-    SOURCEATOM["SourceCompound:<br/>SOURCE_COMPOUND_BATCH:<br/>source_graph.x"]
+    SOURCEROW["SourceCompound:source_smiles"]
+    SOURCEATOM["SourceCompound:source_graph.x"]
     OWNER -->|"Source row ID"| SOURCEROW
     MATCH -->|"Source atom row IDs"| SOURCEATOM
     KEEP -->|"Source atom row IDs"| SOURCEATOM
@@ -233,12 +228,12 @@ flowchart TB
 
 | Field / relation | Type and shape | Concrete logical value | Reference target |
 |---|---|---|---|
-| `reaction_source_compound_index` | int64 `[R]` | `[0,0,1]` | → `SourceCompound:SOURCE_COMPOUND_BATCH:source_smiles` (Source row m) |
+| `reaction_source_compound_index` | int64 `[R]` | `[0,0,1]` | → `SourceCompound:source_smiles` (Source row m) |
 | `reaction_type` | int64 `[R,3]` | `[[10,0,0],[11,0,0],[10,1,0]]` | Pattern/rule definitions; product slot is a value, not a Compound FK |
-| `reaction_source_atom (CSR)` | int64; R variable-length lists | `[[0,1],[0,1,2],[4,5,6]]` | → `SourceCompound:SOURCE_COMPOUND_BATCH:source_graph.x` |
-| `reaction_retained_atom (CSR)` | int64; R variable-length lists | `[[1,2],[0,1],[3,4,5]]` | → `SourceCompound:SOURCE_COMPOUND_BATCH:source_graph.x` |
-| `reaction_conflict_index (COO)` | int64 `[2,N_conflict]` | `[[0,1],[1,0]]` | Both endpoints → `Reaction:REACTION_BATCH:reaction_type` |
-| `reaction_invalidation_index (COO)` | int64 `[2,N_invalidation]` | `[[0],[1]]` | Both endpoints → `Reaction:REACTION_BATCH:reaction_type` |
+| `reaction_source_atom (CSR)` | int64; R variable-length lists | `[[0,1],[0,1,2],[4,5,6]]` | → `SourceCompound:source_graph.x` |
+| `reaction_retained_atom (CSR)` | int64; R variable-length lists | `[[1,2],[0,1],[3,4,5]]` | → `SourceCompound:source_graph.x` |
+| `reaction_conflict_index (COO)` | int64 `[2,N_conflict]` | `[[0,1],[1,0]]` | Both endpoints → `Reaction:reaction_type` |
+| `reaction_invalidation_index (COO)` | int64 `[2,N_invalidation]` | `[[0],[1]]` | Both endpoints → `Reaction:reaction_type` |
 
 `reaction_source_compound_index[r]=m` selects `source_smiles[m]`, descriptor row m, and
 atom rows `source_graph.ptr[m]:source_graph.ptr[m+1]`. The referenced ID is the
@@ -298,8 +293,8 @@ matched position.
 
 When collating Batches, Source IDs, Source atom IDs, and both endpoints of
 reaction pair relations are offset. Pattern/rule IDs and product slots remain
-unchanged. CSR boundaries are recomputed/offset as packing metadata. This is
-separate from State-set group-local reaction IDs, which remain group-local.
+unchanged. CSR boundaries are recomputed/offset as packing metadata. The revised set table uses global reaction IDs; its memberships therefore
+require the same registry remapping when Batches are combined.
 
 The packed table does not itself store complete reaction edit objects or all
 atom-map labels. Pattern/rule definitions and preparation chemistry supply
@@ -308,343 +303,123 @@ those semantics. Its tensors are the prepared model inputs and constraints.
 Implementation: [ReactionTensorData](reaction_tensor_data.py),
 [ReactionRelations](../../domain/fragment/reaction/ReactionRelations.py).
 
-## 1. Sources, reactions, unique reaction sets, and Compounds
+## ReactionSet: independent reaction-set CSR table (step 3)
 
-A State is one reaction set within one branch group. Two execution orders for the
-same set share a State. Multiple States may reference the same Compound; they do
-not require separate Compound nodes. Each materialized State currently produces
-one Compound; an unmaterialized State has no Compound FK yet.
+This section defines the revised target schema. It replaces the earlier design
+that placed branch-group, Compound, and fragment occurrence fields inside the
+reaction-set table. It is a schema revision, not an implemented Python migration.
+
+### Only reaction membership belongs to this table
+
+Each row is a unique set of concrete reaction IDs. Its identifier is the implicit
+row number `reaction_set_id`; it need not be stored as another vector.
+The only payload is `reaction (CSR)`. Its values directly reference Batch-global
+rows of REACTION_BATCH. There is no group-local vocabulary conversion here.
 
 ```mermaid
-erDiagram
-    SOURCE_COMPOUND ||--o{ REACTION_INSTANCE : owns
-    SOURCE_COMPOUND ||--o{ BRANCH_GROUP : conditions
-    MAIN_ADDUCT ||--o{ BRANCH_GROUP : selects
-    BRANCH_GROUP ||--o{ GROUP_REACTION : vocabulary
-    REACTION_INSTANCE ||--o{ GROUP_REACTION : resolves_to
-    BRANCH_GROUP ||--o{ REACTION_STATE : contains
-    REACTION_STATE ||--o{ STATE_MEMBER : contains
-    GROUP_REACTION ||--o{ STATE_MEMBER : referenced_by
-    COMPOUND o|--o{ REACTION_STATE : produced_by
-    BRANCH_GROUP ||--o{ SPECTRUM : measured_at_CE
-
-    SOURCE_COMPOUND {
-        bigint source_id PK
-        string smiles
-        graph molecular_graph
-    }
-    MAIN_ADDUCT {
-        bigint main_adduct_id PK
-        string label UK
-    }
-    BRANCH_GROUP {
-        bigint group_id PK
-        bigint source_id FK
-        bigint main_adduct_id FK
-    }
-    REACTION_INSTANCE {
-        bigint reaction_id PK
-        bigint source_id FK
-        bigint pattern_id
-        bigint rule_id
-        bigint product_slot
-    }
-    GROUP_REACTION {
-        bigint group_id PK, FK
-        bigint local_reaction_index PK
-        bigint reaction_id FK
-    }
-    REACTION_STATE {
-        bigint state_id PK
-        bigint group_id FK
-        bigint compound_id FK "nullable until materialized"
-    }
-    STATE_MEMBER {
-        bigint state_id PK, FK
-        bigint group_id FK "part of composite FK"
-        bigint local_reaction_index PK, FK "part of composite FK"
-    }
-    COMPOUND {
-        bigint compound_id PK
-        string canonical_isomeric_smiles UK
-        graph molecular_graph
-    }
-    SPECTRUM {
-        bigint spectrum_id PK
-        bigint group_id FK
-        float32 collision_energy_eV
-        float64 precursor_mz
-        string observed_adduct
-        json metadata
-    }
+flowchart TB
+    subgraph RS["ReactionSet : REACTION_SET_BATCH"]
+        MEMBERS["reaction (CSR)<br/>int64, N_reaction_set rows<br/>[[],[0],[1],[0,1],[2]]"]
+    end
+    REACTION["Reaction:reaction_type"]
+    MEMBERS -->|"Batch-global reaction row IDs"| REACTION
 ```
 
-Integrity rules accompanying the diagram:
-
-- `BRANCH_GROUP` is unique on `(source_id, main_adduct_id)`; CE belongs to SPECTRUM.
-- `GROUP_REACTION` has composite PK `(group_id, local_reaction_index)` and is
-  unique on `(group_id, reaction_id)`. Its reaction must belong to the group's
-  Source. Local indices follow ascending registry rows of that Source.
-- `STATE_MEMBER.(group_id, local_reaction_index)` is a composite FK to
-  GROUP_REACTION. Its group must equal the group's ID on REACTION_STATE.
-- State identity is unique on `(group_id, sorted reaction-member set)`.
-  A member-table PK alone does not enforce this whole-set constraint: an actual
-  RDB would also need a canonical set key or equivalent checked insertion logic.
-  The empty set is the Source/root State within each group.
-- REACTION_INSTANCE pattern/rule IDs refer to external reaction definitions;
-  `product_slot` is a product position, not a COMPOUND FK.
-- Molecular graphs are shown as graph values. At atom-row granularity they can
-  be expanded into SourceAtom, SourceBond, ReactionMatchedAtom, and
-  ReactionRetainedAtom tables. Conflict/invalidation arrays similarly become
-  relation tables with two REACTION_INSTANCE FKs (invalidation is directional).
-
-### Concrete rows and the two CSR levels
-
-For one group, consider four State rows:
-
-| state_id | group_id | reaction members (local IDs) | compound_id |
+| Field / relation | Type / logical shape | Example | Reference |
 |---|---|---|---|
-| 0 | 0 | {} | 0 |
-| 1 | 0 | {0} | 1 |
-| 2 | 0 | {1} | 1 |
-| 3 | 0 | {0,1} | 2 |
+| `reaction (CSR)` | int64; `N_reaction_set` variable-length rows | `[[],[0],[1],[0,1],[2]]` | → `Reaction:reaction_type` |
 
-STATE_MEMBER contains `(state_id, group_id, local_reaction_index)` rows
-`(1,0,0)`, `(2,0,1)`, `(3,0,0)`, `(3,0,1)`. State 0 has no member rows.
+`reaction` is a logical name for one CSR relation. The schema does not draw its
+physical index and ptr arrays as two fields. Its physical pointer length is
+`N_reaction_set + 1`; its value count is the sum of all member counts (5 here).
+The numerical example assumes reactions 0 and 1 are compatible, independently
+of the preceding illustrative conflict-pair values.
 
-```python
-# State -> sorted reaction members: V=4
-states.candidate_reaction_ptr   = [0, 0, 1, 2, 4]  # shape [V+1]
-states.candidate_reaction_index = [0, 1, 0, 1]
+### Concrete rows
 
-# State -> Compound FK
-annotations.compounds.state_index = [0, 1, 1, 2]
+| reaction_set_id (implicit row) | reaction (CSR) | Referenced REACTION_BATCH rows |
+|---|---|---|
+| 0 | [] | none: empty set |
+| 1 | [0] | reaction row 0 |
+| 2 | [1] | reaction row 1 |
+| 3 | [0,1] | reaction rows 0 and 1 |
+| 4 | [2] | reaction row 2 |
 
-# Inverse index of the same FK: Compound -> State IDs, C=3
-annotations.compounds.reaction_set_ptr   = [0, 1, 3, 4]  # shape [C+1]
-annotations.compounds.reaction_set_index = [0, 1, 2, 3]
-```
+All lists are strictly ascending, without duplicate reaction IDs. Identical lists
+are one row, regardless of reaction order, adduct, CE, or the consumer referring
+to them. `[0,1]` represents the same set whether a path adds 0 then 1 or 1 then 0.
+Different lists remain different rows even if they generate the same Compound.
 
-Compound 1 is one row/node and references States 1 and 2. In an RDB,
-`SELECT state_id FROM reaction_state WHERE compound_id = 1` returns those same
-rows. The inverse CSR is an index on this relation, not another set of Compounds.
-`A -> B` and `B -> A` both end at State 3; ordering is kept in paths, not in the
-State's member set.
+Concrete reaction IDs already identify their Source through
+`reaction_source_compound_index`. Reactions in a nonempty valid set must belong
+to one Source and satisfy the registry compatibility constraints.
+The empty set contains no Source information: its Source must be supplied by the
+referencing context. Do not infer a Source from empty membership.
 
-## 2. Compound/ion identity, observed spectra, and assignments
+### Compound references sets; sets do not reference Compound
 
-A fragment occurrence is topology-local: `(group_id, compound_id)` is unique.
-Different groups may have occurrences of the same unique Compound. Within one
-group, different States producing that Compound refer to the same occurrence.
-
-An ion candidate is shared across CE samples and is unique on
-`(compound_id, formula_id, ion_adduct_id, shift_id)`. Main-adduct and fragment-ion
-adduct vocabularies are separate ID spaces. Runtime rows carry sample/topology
-context; they do not create new Compound or ion identities.
+The inverse relationship requested for Compound belongs on the Compound side.
+Each Compound row has a list of reaction-set IDs that can generate it.
+It is not a list of concrete reaction IDs.
 
 ```mermaid
-erDiagram
-    BRANCH_GROUP ||--o{ FRAGMENT_OCCURRENCE : owns
-    COMPOUND ||--o{ FRAGMENT_OCCURRENCE : shared_structure
-    FRAGMENT_OCCURRENCE o|--o{ REACTION_STATE : materializes
-    COMPOUND ||--o{ ION_CANDIDATE : structure
-    CHARGED_FORMULA ||--o{ ION_CANDIDATE : composition
-    ION_ADDUCT ||--o{ ION_CANDIDATE : adduct
-    HYDROGEN_SHIFT ||--o{ ION_CANDIDATE : shift
-    SPECTRUM ||--o{ OBSERVED_PEAK : contains
-    OBSERVED_PEAK ||--o{ PEAK_FORMULA_ASSIGNMENT : alternatives
-    CHARGED_FORMULA ||--o{ PEAK_FORMULA_ASSIGNMENT : explains
-    OBSERVED_PEAK ||--o{ PEAK_ION_ASSIGNMENT : alternatives
-    ION_CANDIDATE ||--o{ PEAK_ION_ASSIGNMENT : explains
-    SPECTRUM ||--o{ RUNTIME_ION_ROW : evaluated_for
-    FRAGMENT_OCCURRENCE ||--o{ RUNTIME_ION_ROW : topology
-    ION_CANDIDATE ||--o{ RUNTIME_ION_ROW : shared_identity
-
-    FRAGMENT_OCCURRENCE {
-        bigint occurrence_id PK
-        bigint group_id FK
-        bigint compound_id FK
-    }
-    REACTION_STATE {
-        bigint state_id PK
-        bigint occurrence_id FK "nullable"
-    }
-    ION_CANDIDATE {
-        bigint ion_id PK
-        bigint compound_id FK
-        bigint formula_id FK
-        bigint ion_adduct_id FK
-        bigint shift_id FK
-    }
-    CHARGED_FORMULA {
-        bigint formula_id PK
-        vector element_counts
-        int charge
-        float64 mz
-        bool valid
-    }
-    ION_ADDUCT {
-        bigint ion_adduct_id PK
-        string label UK
-    }
-    HYDROGEN_SHIFT {
-        bigint shift_id PK
-        int signed_shift UK
-    }
-    OBSERVED_PEAK {
-        bigint peak_id PK
-        bigint spectrum_id FK
-        float64 mz
-        float32 intensity
-        bool precursor
-    }
-    PEAK_FORMULA_ASSIGNMENT {
-        bigint peak_id PK, FK
-        bigint formula_id PK, FK
-    }
-    PEAK_ION_ASSIGNMENT {
-        bigint peak_id PK, FK
-        bigint ion_id PK, FK
-    }
-    RUNTIME_ION_ROW {
-        bigint runtime_row_id PK
-        bigint spectrum_id FK
-        bigint occurrence_id FK
-        bigint ion_id FK
-    }
+flowchart TB
+    subgraph CB["Compound : COMPOUND_BATCH — reference side"]
+        SETS["reaction_set (CSR)<br/>one row per Compound<br/>[[0],[1,2],[3],[0],[4]]"]
+    end
+    SETROW["ReactionSet:reaction_set_id (implicit)"]
+    SETS -->|"reaction-set row IDs"| SETROW
 ```
 
-Additional relationships/constraints:
+| Compound row | reaction_set (CSR) | Meaning |
+|---|---|---|
+| 0 | [0] | Empty set in Source 0 context |
+| 1 | [1,2] | Different sets {0} and {1} generate this one Compound |
+| 2 | [3] | Set {0,1} generates this Compound |
+| 3 | [0] | Empty set in Source 1 context |
+| 4 | [4] | Set {2} generates this Compound |
 
-- SPECTRUM in this figure is the same table as in figure 1. Its group supplies
-  its Source and main adduct; the measured precursor adduct label may differ.
-- REACTION_STATE and its occurrence must belong to the same branch group and
-  reference the same Compound. Missing materialization is allowed.
-- A runtime row's spectrum and fragment occurrence belong to the same group;
-  its occurrence and ion candidate reference the same Compound.
-- Formula identity includes charge and a shared element-column vocabulary.
-- Formula assignment is a projection of ion assignments onto formula IDs.
-  Both CSR views are stored for convenient access. Multiple explanations and
-  unassigned peaks are supported.
-- `shift_id` refers to a vocabulary row: it is not the signed hydrogen count.
+This example illustrates sharing and references rather than calculated products.
+It has 5 Compounds, so the Compound-side CSR's physical pointer length is
+`N_compound + 1 = 6`. The set-membership CSR also has 5 rows in this example;
+that equality is incidental. The two row counts are independent.
+Compound 1 remains one node/structure with two generating sets. Empty-set row 0
+can be reused across Source contexts; the relationship's Source context must
+remain available on its reference side.
 
-## 3. State transitions and Teacher references
+### Fields that do not belong in REACTION_SET_BATCH
 
-ACTIVE_STATE is the Q-row view of the canonical V-row REACTION_STATE table.
-Q rows do not define additional chemical States. `candidate_index` is Q -> V.
-Representative parent fields are optional traversal metadata; the complete
-transition table keeps multiple incoming paths.
-
-```mermaid
-erDiagram
-    REACTION_STATE ||--o| ACTIVE_STATE : selected_as_Q
-    ACTIVE_STATE o|--o{ ACTIVE_STATE : representative_parent
-    REACTION_INSTANCE o|--o{ ACTIVE_STATE : representative_added
-    ACTIVE_STATE ||--o{ STATE_TRANSITION : parent
-    ACTIVE_STATE ||--o{ STATE_TRANSITION : child
-    REACTION_INSTANCE ||--o{ STATE_TRANSITION : added
-    ACTIVE_STATE ||--o{ VALID_CONTINUATION : parent
-    REACTION_STATE ||--o{ VALID_CONTINUATION : candidate_child_V
-    REACTION_INSTANCE ||--o{ VALID_CONTINUATION : added
-    ACTIVE_STATE ||--o| TEACHER_STATE : labelled
-    ACTIVE_STATE ||--o{ TEACHER_ADDITION : parent
-    REACTION_INSTANCE ||--o{ TEACHER_ADDITION : labelled_addition
-    OBSERVED_PEAK ||--o{ SUPERVISED_PEAK : supervised_as
-    BRANCH_GROUP ||--o{ SUPERVISED_PEAK : context
-    SUPERVISED_PEAK ||--|{ TEACHER_PATH : alternatives
-    TEACHER_PATH ||--|{ PATH_STEP : ordered_steps
-    ACTIVE_STATE ||--o{ PATH_STEP : parent_state
-    REACTION_INSTANCE ||--o{ PATH_STEP : added
-
-    ACTIVE_STATE {
-        bigint active_state_id PK "Q row"
-        bigint state_id FK, UK "V row"
-        bigint representative_parent_id FK "nullable Q row"
-        bigint representative_reaction_id FK "nullable reaction row"
-    }
-    STATE_TRANSITION {
-        bigint parent_active_state_id PK, FK
-        bigint child_active_state_id PK, FK
-        bigint reaction_id PK, FK
-    }
-    VALID_CONTINUATION {
-        bigint parent_active_state_id PK, FK
-        bigint reaction_id PK, FK
-        bigint child_state_id FK "V row"
-    }
-    TEACHER_STATE {
-        bigint active_state_id PK, FK
-        bool observed
-    }
-    TEACHER_ADDITION {
-        bigint active_state_id PK, FK
-        bigint reaction_id PK, FK
-        string label "positive or weak_negative"
-    }
-    SUPERVISED_PEAK {
-        bigint supervised_peak_id PK
-        bigint peak_id FK
-        bigint group_id FK
-    }
-    TEACHER_PATH {
-        bigint path_id PK
-        bigint supervised_peak_id FK
-    }
-    PATH_STEP {
-        bigint path_id PK, FK
-        int step_index PK
-        bigint parent_active_state_id FK
-        bigint reaction_id FK
-    }
-```
-
-STATE_TRANSITION endpoints are Q IDs. VALID_CONTINUATION points from Q to V,
-including candidate States outside Q. All reaction FKs here refer to the concrete
-registry, unlike the group-local IDs stored in STATE_MEMBER.
-
-A TEACHER_ADDITION label belongs to a State/reaction pair, not to a Compound:
-two States sharing a Compound may have different continuation labels. Teacher
-paths reference observed peak rows and preserve alternative reaction orders.
-Each path step identifies its parent Q row and the added reaction. Its order is
-`step_index`, corresponding to position within `path_step_ptr` slices.
-
-`TEACHER_STATE.observed` is supervision metadata and is separate from the
-chemical state definition. Teacher intensity targets are derived from observed
-peak intensities and formula assignments, not duplicated as chemical properties.
-
-## Mapping logical relations to implementation fields
-
-| Logical table/relation | Tensor/object representation |
+| Information | Where it belongs |
 |---|---|
-| SOURCE_COMPOUND | `source_graph`, `source_smiles` |
-| REACTION_INSTANCE | `reactions.reaction_source_compound_index`, `reaction_type` |
-| BRANCH_GROUP | `branch_group_tree_index`, `branch_group_adduct_index` |
-| GROUP_REACTION | Derived Source-reaction vocabulary; `reaction_registry_index()` resolves local to registry IDs |
-| REACTION_STATE | `states.candidate_branch_group_index`; V rows |
-| STATE_MEMBER | `states.candidate_reaction_ptr/index` |
-| State -> Compound | `states.compound_index`, synchronized with `annotations.compounds.state_index` |
-| Compound -> States | `annotations.compounds.reaction_set_ptr/index`; inverse CSR with C+1 pointers |
-| COMPOUND | `annotations.compounds.smiles`, `graph`, `compounds` |
-| FRAGMENT_OCCURRENCE | `annotations.compounds.occurrence_index`, `occurrence_group_index` |
-| State -> occurrence | `states.candidate_fragment_index` |
-| ION_CANDIDATE | `annotations.ions` identity columns |
-| CHARGED_FORMULA | `annotations.formulas` |
-| ION_ADDUCT / HYDROGEN_SHIFT | `annotations.ion_adducts`, `ions.hydrogen_shifts` |
-| SPECTRUM | Sample arrays and `annotations.spectra` |
-| OBSERVED_PEAK | `annotations.spectra.peak_ptr`, `mz`, `intensity`, `precursor` |
-| PEAK_FORMULA_ASSIGNMENT | `annotations.assignments.formula_ptr/index` |
-| PEAK_ION_ASSIGNMENT | `annotations.assignments.ion_ptr/index` |
-| RUNTIME_ION_ROW | `ions.runtime_index`, `runtime_sample_index`; `spectrum_batch.state_node_index` |
-| ACTIVE_STATE | `states.candidate_index`, Q-row fields |
-| STATE_TRANSITION | `states.transition_parent_index`, `transition_child_index`, `transition_reaction_index` |
-| VALID_CONTINUATION | `states.next_ptr`, `next_reaction_index`, `next_state_index` |
-| TEACHER_STATE | `teacher.observed` |
-| TEACHER_ADDITION | `teacher.positive_reaction_ptr/index`, `negative_reaction_ptr/index` |
-| SUPERVISED_PEAK | `teacher.peak_index`, `peak_branch_group_index` |
-| TEACHER_PATH | `teacher.peak_path_ptr` |
-| PATH_STEP | `teacher.path_step_ptr`, `path_step_state_index`, `path_step_reaction_index` |
+| Source/main-adduct context | A group/context table referencing a set row |
+| Which Compound a set generates | Compound's `reaction_set (CSR)` relationship |
+| Runtime graph occurrence | Runtime topology/context view referencing Compound and set as needed |
+| Parent, added reaction, transition | Transition/path tables referencing set IDs and context |
+| Positive/weak negative labels | Teacher tables referencing set IDs, reaction IDs, and context |
+| CE, observed peaks, assignments | Spectrum/assignment tables |
 
-An actual SQL implementation would enforce PK/FK/UK constraints. In the current
-code these are tensor row references; validation checks selected invariants,
-not every relational constraint listed above. `spectrum_batch` is an expanded
-runtime view, while `observations` is initialization input rather than a table.
+A context-bearing state/view can reference `(group_id, reaction_set_id)`; it must
+not duplicate the membership list into a new canonical set. A different group
+may reuse the same set row while retaining its own topology/labels. These
+consumer tables will be specified step by step, rather than being treated as
+fields of the set table.
+
+### Relationship to current implementation
+
+The current `ReactionStateData.candidate_reaction_*` CSR still stores group-local
+IDs and has group-owned V rows. It is not yet the independent table defined here.
+`compound_index`, `candidate_fragment_index`, and Q-row/transition fields also
+remain in the current class. They are not part of the revised set schema.
+
+An implementation migration would resolve local IDs to registry rows, canonicalize
+and deduplicate the resulting sets across groups, remap all referencing set IDs,
+and separate context/topology/teacher references. When combining Batches,
+registry reaction IDs would need offset/remapping before set deduplication;
+group-local IDs must not be compared as if they were global IDs.
+The existing Compound inverse CSR would then point to the new set IDs rather
+than the old group-owned V rows. No such code migration is performed by this
+schema edit.
+
+The preceding all-table ER diagrams are removed because their State-owned
+Compound/group model contradicted this revised design. Remaining table schemas
+will be added after their structure is agreed.
