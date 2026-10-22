@@ -71,7 +71,13 @@ def test_canonical_indices_labels_and_shared_prediction_components():
 def test_branch_weighting_and_ignored_gradient():
     logits = torch.tensor([0.2, -0.7, 1.2], requires_grad=True)
     labels = torch.tensor([1, 0, -1], dtype=torch.int8)
-    loss, _, _ = branch_edge_loss(logits, labels, 0.25)
+    loss, _, _ = branch_edge_loss(
+        logits,
+        labels,
+        0.25,
+        source_index=torch.zeros(3, dtype=torch.long),
+        branch_group_index=torch.zeros(3, dtype=torch.long),
+    )
     expected = (
         torch.nn.functional.softplus(-logits[0])
         + 0.25 * torch.nn.functional.softplus(logits[1])
@@ -80,7 +86,12 @@ def test_branch_weighting_and_ignored_gradient():
     loss.backward()
     assert logits.grad[2] == 0
     ignored = torch.tensor([1.0, -1.0], requires_grad=True)
-    loss, _, _ = branch_edge_loss(ignored, torch.full((2,), -1, dtype=torch.int8))
+    loss, _, _ = branch_edge_loss(
+        ignored,
+        torch.full((2,), -1, dtype=torch.int8),
+        source_index=torch.zeros(2, dtype=torch.long),
+        branch_group_index=torch.zeros(2, dtype=torch.long),
+    )
     loss.backward()
     assert loss == 0 and torch.equal(ignored.grad, torch.zeros(2))
 
@@ -516,8 +527,70 @@ def test_branch_frontier_storage_preserves_supervised_edges(tmp_path):
     compact_logits = torch.full((len(selected),), 0.3, requires_grad=True)
     full_labels = torch.tensor(list(all_entries.values()), dtype=torch.int8)
     compact_labels = torch.tensor(list(selected.values()), dtype=torch.int8)
-    full_loss = branch_edge_loss(full_logits, full_labels)[0]
-    compact_loss = branch_edge_loss(compact_logits, compact_labels)[0]
+    full_loss = branch_edge_loss(
+        full_logits,
+        full_labels,
+        source_index=torch.tensor(
+            [full.compounds.smiles.index(k[1]) for k in all_entries]
+        ),
+        branch_group_index=torch.tensor([k[0] for k in all_entries]),
+    )[0]
+    compact_loss = branch_edge_loss(
+        compact_logits,
+        compact_labels,
+        source_index=torch.tensor(
+            [compact.compounds.smiles.index(k[1]) for k in selected]
+        ),
+        branch_group_index=torch.tensor([k[0] for k in selected]),
+    )[0]
     torch.testing.assert_close(full_loss, compact_loss)
     full_loss.backward()
     assert (full_logits.grad[full_labels == -1] == 0).all()
+
+
+def test_branch_node_balancing_and_sum():
+    def loss(values, labels, sources, groups, weight=0.5):
+        z = torch.tensor(values, dtype=torch.float64, requires_grad=True)
+        output = branch_edge_loss(
+            z,
+            torch.tensor(labels, dtype=torch.int8),
+            weight,
+            source_index=torch.tensor(sources, dtype=torch.long),
+            branch_group_index=torch.tensor(groups, dtype=torch.long),
+        )
+        return z, output
+
+    z, (actual, positive, negative) = loss(
+        [0.2, -0.4] + [0.7] * 10, [1, 1] + [0] * 10, [0] * 12, [0] * 12
+    )
+    pl = torch.nn.functional.softplus(-z[:2]).mean()
+    nl = torch.nn.functional.softplus(z[2:]).mean()
+    torch.testing.assert_close(actual, (pl + 0.5 * nl) / 1.5)
+    torch.testing.assert_close(positive, pl)
+    torch.testing.assert_close(negative, nl)
+    # Replicating either class leaves this node's loss unchanged.
+    _, repeated = loss(
+        [0.2, -0.4] * 3 + [0.7] * 20, [1] * 6 + [0] * 20, [0] * 26, [0] * 26
+    )
+    torch.testing.assert_close(actual, repeated[0])
+    # A second group with the same Compound ID is an independent source node.
+    _, doubled = loss(
+        ([0.2, -0.4] + [0.7] * 10) * 2,
+        ([1, 1] + [0] * 10) * 2,
+        [0] * 24,
+        [0] * 12 + [1] * 12,
+    )
+    torch.testing.assert_close(doubled[0], 2 * actual)
+    # A positive-only node has no 1+w divisor; negative-only nodes are excluded.
+    z, output = loss([0.2, 0.7, 4.0], [1, 0, -1], [0, 1, 0], [0, 0, 0])
+    torch.testing.assert_close(output[0], torch.nn.functional.softplus(-z[0]))
+    output[0].backward()
+    assert z.grad[1] == 0 and z.grad[2] == 0
+    # Zero negative weight and empty batches remain differentiable.
+    z, output = loss([0.2, 0.7], [1, 0], [0, 0], [0, 0], weight=0)
+    torch.testing.assert_close(output[0], torch.nn.functional.softplus(-z[0]))
+    output[0].backward()
+    assert z.grad[1] == 0
+    z, output = loss([], [], [], [])
+    output[0].backward()
+    assert output[0] == 0 and z.grad.numel() == 0

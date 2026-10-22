@@ -37,13 +37,21 @@ The branch MLP scores parent Compound, child Compound, concrete reaction and mai
 adduct, without CE. The weighted binary cross entropy is
 
 ```text
-L_branch = (sum_positive softplus(-logit)
-            + negative_weight * sum_weak_negative softplus(logit))
-           / (N_positive + negative_weight * N_weak_negative)
+P_s = mean_positive_at_source_s softplus(-logit)
+N_s = mean_weak_negative_at_source_s softplus(logit)
+L_s = (P_s + negative_weight * N_s) / (1 + negative_weight)  # with negatives
+L_s = P_s                                                       # otherwise
+L_branch = sum_s L_s
 ```
 
-A zero denominator contributes zero loss. Labels excluded with -1 contribute
-no loss or gradient. `--reaction-edge-layers` controls this MLP's hidden layers.
+Each source is a (BranchGroup, source Compound) pair with at least one positive
+edge. Class counts are averaged separately within each source; source losses are
+summed, not averaged across sources or the batch. Thus batch source count affects
+branch loss scale relative to spectrum loss. Diagnostic `branch_positive_loss`
+and `branch_negative_loss` sum the respective source means before weighting.
+An empty objective gives differentiable zero. Labels excluded with -1 and nodes
+without positives contribute no loss or gradient. `--reaction-edge-layers`
+controls this MLP's hidden layers.
 Prediction uses the same tables through `SpectrumPredictionData`, without
 observations, targets or edge labels. See [input components](../../input/README.md).
 

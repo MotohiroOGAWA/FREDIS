@@ -10,23 +10,56 @@ from ...specgen.fragment_spectrum_model import (
 )
 
 
-def branch_edge_loss(logits, labels, negative_weight=0.5):
+def branch_edge_loss(
+    logits, labels, negative_weight=0.5, *, source_index, branch_group_index
+):
+    """Sum class-balanced losses over (branch group, source Compound) pairs.
+
+    Diagnostic positive/negative losses are sums of the corresponding node means.
+    Nodes without positive edges and ignored edges contribute no loss.
+    """
     if labels is None:
         raise ValueError("Branch training requires edge labels")
-    if labels.shape != logits.shape or labels.dtype != torch.int8:
+    if logits.ndim != 1 or labels.shape != logits.shape or labels.dtype != torch.int8:
         raise ValueError("Branch logits and int8 edge labels must align")
+    for index in (source_index, branch_group_index):
+        if index.shape != logits.shape or index.dtype != torch.long:
+            raise ValueError(
+                "Branch source/group indices must be aligned int64 vectors"
+            )
+        if index.device != logits.device or bool((index < 0).any()):
+            raise ValueError(
+                "Branch source/group indices must be nonnegative and share the logits device"
+            )
     if not bool(torch.isin(labels, labels.new_tensor([-1, 0, 1])).all()):
         raise ValueError("Unknown branch label")
     if negative_weight < 0 or not torch.isfinite(torch.tensor(negative_weight)):
         raise ValueError("Invalid negative weight")
+    zero = logits.sum() * 0
+    if not logits.numel():
+        return zero, zero, zero
+    pairs = torch.stack((branch_group_index, source_index), dim=1)
+    unique, inverse = torch.unique(pairs, dim=0, return_inverse=True)
     positive = labels == 1
     negative = labels == 0
-    zero = logits.sum() * 0
-    pl = F.softplus(-logits[positive])
-    nl = F.softplus(logits[negative])
-    weight = positive.sum() + negative_weight * negative.sum()
-    loss = (pl.sum() + negative_weight * nl.sum()) / weight.clamp_min(1e-12)
-    return loss, pl.mean() if pl.numel() else zero, nl.mean() if nl.numel() else zero
+
+    def node_means(mask, values):
+        count = logits.new_zeros(len(unique)).scatter_add_(
+            0, inverse[mask], torch.ones_like(values)
+        )
+        total = logits.new_zeros(len(unique)).scatter_add_(0, inverse[mask], values)
+        return total / count.clamp_min(1), count
+
+    positive_mean, positive_count = node_means(positive, F.softplus(-logits[positive]))
+    negative_mean, negative_count = node_means(negative, F.softplus(logits[negative]))
+    supervised = positive_count > 0
+    weight = 1 + negative_weight * (negative_count > 0).to(logits.dtype)
+    node_loss = (positive_mean + negative_weight * negative_mean) / weight
+    return (
+        node_loss[supervised].sum() + zero,
+        positive_mean[supervised].sum() + zero,
+        negative_mean[supervised].sum() + zero,
+    )
 
 
 @dataclass(frozen=True)
@@ -70,8 +103,19 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
         encoded = self.feature_model(data)
         logits, molecular = self.feature_model.score_edges(data, encoded)
         labels = data.reaction_contexts.edge_label
+        branch_group_index = torch.repeat_interleave(
+            torch.arange(data.num_branch_groups, device=data.device),
+            data.reaction_contexts.edge_ptr.diff(),
+        )
+        source_index = data.compound_graph.source_compound_index[
+            data.reaction_contexts.edge_index
+        ]
         branch, positive, negative = branch_edge_loss(
-            logits, labels, self.negative_weight
+            logits,
+            labels,
+            self.negative_weight,
+            source_index=source_index,
+            branch_group_index=branch_group_index,
         )
         metrics = dict(
             branch_loss=branch,
@@ -105,8 +149,5 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             metrics,
             spectrum,
             data.reaction_contexts.edge_index,
-            torch.repeat_interleave(
-                torch.arange(data.num_branch_groups, device=data.device),
-                data.reaction_contexts.edge_ptr.diff(),
-            ),
+            branch_group_index,
         )
