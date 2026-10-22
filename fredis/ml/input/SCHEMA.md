@@ -366,14 +366,14 @@ It is not a list of concrete reaction IDs.
 
 ```mermaid
 flowchart TB
-    subgraph CB["Compound : COMPOUND_BATCH — reference side"]
-        SETS["reaction_set (CSR)<br/>one row per Compound<br/>[[0],[1,2],[3],[0],[4]]"]
+    subgraph CB["CompoundBatch — reference side"]
+        SETS["generating_reaction_sets (CSR)<br/>one row per Compound<br/>[[0],[1,2],[3],[0],[4]]"]
     end
     SETROW["ReactionSet:reaction_set_id (implicit)"]
     SETS -->|"reaction-set row IDs"| SETROW
 ```
 
-| Compound row | reaction_set (CSR) | Meaning |
+| Compound row | generating_reaction_sets (CSR) | Meaning |
 |---|---|---|
 | 0 | [0] | Empty set in Source 0 context |
 | 1 | [1,2] | Different sets {0} and {1} generate this one Compound |
@@ -394,7 +394,7 @@ remain available on its reference side.
 | Information | Where it belongs |
 |---|---|
 | Source/main-adduct context | A group/context table referencing a set row |
-| Which Compound a set generates | Compound's `reaction_set (CSR)` relationship |
+| Which Compound a set generates | Compound's `generating_reaction_sets (CSR)` relationship |
 | Runtime graph occurrence | Runtime topology/context view referencing Compound and set as needed |
 | Parent, added reaction, transition | Transition/path tables referencing set IDs and context |
 | Positive/weak negative labels | Teacher tables referencing set IDs, reaction IDs, and context |
@@ -406,7 +406,7 @@ may reuse the same set row while retaining its own topology/labels. These
 consumer tables will be specified step by step, rather than being treated as
 fields of the set table.
 
-### Implemented classes and references
+### Implemented classes and references (steps 1–3)
 
 | Schema component | Class / stored fields |
 |---|---|
@@ -415,7 +415,7 @@ fields of the set table.
 | ReactionSet | `ReactionSet(reaction_ptr, reaction_index)` |
 | Context -> set | `ReactionContextData.candidate_reaction_set_index` |
 | Active teacher context -> set | `states.candidate_index` -> candidate context -> set |
-| Compound -> sets | `CompoundData.reaction_set_ptr/index`; unique set IDs per Compound |
+| Compound -> sets (current storage) | `CompoundData.reaction_set_ptr/index`; target name: generating_reaction_sets CSR |
 | Materialization context -> Compound | `CompoundData.context_compound_index` |
 | Annotation context -> set | `AnnotatedSpectrumData.context_reaction_set_index` |
 
@@ -439,3 +439,100 @@ can be refined independently of canonical set identity.
 
 Implementation: [SourceCompound](source_compound.py),
 [ReactionSet](reaction_set.py), [ReactionContextData](reaction_context_data.py).
+
+## CompoundBatch: unique product compounds and their generating sets (step 4)
+
+This is the revised target schema for step 4. The Python implementation is still
+`CompoundData` and has not yet been changed to this shape. Steps 1–3 remain
+implemented. Distinguish a single **mmkit.Compound** molecule object from the
+**CompoundBatch** container holding multiple unique molecules.
+
+### Three fields in CompoundBatch
+
+```mermaid
+flowchart TB
+    subgraph CB["CompoundBatch"]
+        OBJECTS["compounds<br/>tuple[mmkit.Compound, ...]<br/>N_compound=5: CCO, C, CO, CC, O"]
+        GRAPH["graph : PyG Batch<br/>one graph per unique Compound"]
+        SETS["generating_reaction_sets (CSR)<br/>int64, N_compound rows<br/>[[0],[1,5],[2],[3],[4]]"]
+        %% Invisible links control vertical placement only.
+        OBJECTS ~~~ GRAPH ~~~ SETS
+    end
+    SETROW["ReactionSet:reaction_set_id<br/>(implicit row ID)"]
+    SETS -->|"generating ReactionSet IDs"| SETROW
+```
+
+| Field / relation | Type / shape | Concrete example | Reference / meaning |
+|---|---|---|---|
+| `compounds` | tuple[mmkit.Compound, ...], length N_compound | Five objects whose SMILES are CCO, C, CO, CC, O | One object per unique structure |
+| `graph` | PyG Batch | 5 graphs, 9 atoms, 8 directed edges | One structural-feature graph per `compounds` row |
+| `generating_reaction_sets (CSR)` | int64; N_compound variable-length rows | `[[0],[1,5],[2],[3],[4]]` | → `ReactionSet:reaction_set_id` |
+
+The Compound ID is the implicit index into `compounds` and the graph rows.
+There is no separately stored `compound_id` vector. `compounds[i]` means one
+mmkit.Compound; CompoundBatch means the whole collection.
+
+`smiles` is not independently stored: obtain it as `compounds[i].smiles`.
+A convenience property may derive all SMILES without becoming another stored
+field. Uniqueness is based on canonical isomeric SMILES, including stereochemistry
+and charge, not Python object identity.
+
+### Generating sets are different from set membership
+
+`ReactionSet.reaction (CSR)` contains concrete Reaction IDs. In contrast,
+`CompoundBatch.generating_reaction_sets (CSR)` contains **ReactionSet IDs**.
+One Compound can have several generating sets.
+
+| Compound row | Derived SMILES | generating_reaction_sets (CSR) | Member reactions after following each set ID |
+|---|---|---|---|
+| 0 | CCO | [0] | {} |
+| 1 | C | [1,5] | {0}, {1,2} |
+| 2 | CO | [2] | {1} |
+| 3 | CC | [3] | {2} |
+| 4 | O | [4] | {3} |
+
+These relationships use the actual ethanol preparation example computed earlier.
+The empty set produces the unchanged root in its Source context. The table can
+therefore include an unchanged root as well as reaction products.
+Compound 1 has one molecular object and one graph even though two different sets
+produce it. The set rows remain separate. Repeated group/CE references do not
+create another Compound or duplicate a Compound/set pair.
+
+The generating-set CSR has N_compound logical rows; its physical pointer length
+is N_compound+1 (6 here). There are 6 generating-set entries in this example.
+Each Compound's set IDs are sorted and unique. The schema shows this as one
+logical relation rather than separate index/ptr fields.
+
+### graph: packed structural features
+
+N_atom and N_edge count atoms and directed edges of the unique Compound graphs,
+not Source atom rows. F_atom, F_bond and F_descriptor come from the preparation
+feature configuration. The actual example uses F_atom=35, F_bond=9,
+F_descriptor=15.
+
+| Graph field | Type / shape | Concrete example / reference |
+|---|---|---|
+| `graph.x` | float32 [N_atom,F_atom] | [9,35] |
+| `graph.edge_index` | int64 [2,N_edge] | [2,8]; -> `CompoundBatch:graph.x` |
+| `graph.edge_attr` | float32 [N_edge,F_bond] | [8,9] |
+| `graph.descriptors` | float32 [N_compound,F_descriptor] | [5,15] |
+| `graph.ptr` | int64 [N_compound+1] | [0,3,4,6,8,9] |
+| `graph.batch` | int64 [N_atom] | [0,0,0,1,2,2,3,3,4]; -> `CompoundBatch:compound_id` |
+
+`graph.ptr` delimits atom rows; generating_reaction_sets CSR delimits set-ID
+lists. Both have N_compound+1 boundaries, but they index different arrays.
+For Compound 2 (CO), atom features are `graph.x[4:6]`.
+Charged formula/m/z and ion-condition fields remain outside CompoundBatch.
+
+### Difference from the current implementation
+
+| Current CompoundData | Revised CompoundBatch |
+|---|---|
+| `compounds: tuple` | `compounds: tuple[mmkit.Compound, ...]` |
+| Stored `smiles` tuple | Derived from molecular objects, not stored twice |
+| `graph` | Retained |
+| `reaction_set_ptr/index` | Renamed generating_reaction_sets CSR |
+
+This step changes documentation only. The Python class, serialized fields, and
+data structures have not yet been migrated; existing data remains in the current v4
+layout. Current implementation: [CompoundData](annotated_spectrum_data.py).

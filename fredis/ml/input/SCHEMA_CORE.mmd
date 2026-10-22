@@ -3,6 +3,6 @@ flowchart TB
         MEMBERS["reaction (CSR)<br/>unique sorted sets of Batch-global reaction IDs"]
     end
     REACTION["Reaction:reaction_type"]
-    COMPOUND["Compound:reaction_set (CSR)"]
+    COMPOUND["CompoundBatch:generating_reaction_sets (CSR)"]
     MEMBERS -->|"reaction row IDs"| REACTION
     COMPOUND -->|"set row IDs"| RS
