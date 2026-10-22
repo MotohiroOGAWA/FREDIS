@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from .configuration import CONFIG_NAME
 
-REPORT_NAME = "training.pft"
+REPORT_NAME = "result.training.pft"
 
 
 def write_training_report(
@@ -41,6 +42,7 @@ def write_training_report(
         "settings": settings or {},
         "datasets": datasets or {},
         "artifacts": {
+            "trainingConfiguration": CONFIG_NAME,
             "metrics": "metrics.tsv",
             "distributions": "metric_distributions.tsv",
             "intermediateValidation": "intermediate_validation.tsv",

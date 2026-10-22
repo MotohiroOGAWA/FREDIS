@@ -224,6 +224,7 @@ def compound_graph_display(data):
 
     graph = data.compound_graph
     execution = data.execution_graph
+    compound_smiles = data.compounds.smiles
     trees = []
     for group, edges in enumerate(
         rows(data.reaction_contexts.edge_ptr, data.reaction_contexts.edge_index)
@@ -241,7 +242,7 @@ def compound_graph_display(data):
         )
         local = {cid: i for i, cid in enumerate(ids)}
         nodes = tuple(
-            FragmentNode(i, data.compounds.smiles[cid]) for i, cid in enumerate(ids)
+            FragmentNode(i, compound_smiles[cid]) for i, cid in enumerate(ids)
         )
         domain_edges = []
         for edge in edges:
@@ -254,7 +255,7 @@ def compound_graph_display(data):
                 )
         trees.append(
             FragmentTree.from_nodes_and_edges(
-                smiles=data.compounds.smiles[root],
+                smiles=compound_smiles[root],
                 nodes=nodes,
                 edges=tuple(domain_edges),
             )

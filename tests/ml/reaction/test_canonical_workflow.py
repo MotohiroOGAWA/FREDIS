@@ -2,7 +2,7 @@
 
 from dataclasses import fields, replace
 from importlib.util import spec_from_file_location, module_from_spec
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 import json
 import torch
 import pytest
@@ -446,7 +446,7 @@ def test_annotation_export_computes_compound_smiles_once_and_summary_reuses_it()
     )
 
     _, data = prepared()
-    original = CompoundBatch.smiles.fget
+    original = CompoundBatch.smiles.func
     calls = []
 
     def counted(batch):
@@ -624,3 +624,16 @@ def test_branch_node_balancing_and_sum():
     z, output = loss([], [], [], [])
     output[0].backward()
     assert output[0] == 0 and z.grad.numel() == 0
+
+
+def test_prepared_compound_smiles_reused_on_transfer_and_reload(tmp_path):
+    _, data = prepared()
+    expected = data.compounds.smiles
+    # Prepared identity metadata survives both device copies and serialization.
+    with patch.object(Compound, 'smiles', new_callable=PropertyMock, side_effect=AssertionError('Unexpected RDKit SMILES regeneration')):
+        copied = data.to('cpu')
+        assert copied.compounds.smiles == expected
+        file = tmp_path / 'prepared.preft.pt'
+        copied.save(file)
+        restored = SourceReactionStructure.load(file)
+        assert restored.compounds.smiles == expected

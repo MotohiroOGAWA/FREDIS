@@ -25,6 +25,7 @@
     "onCommand:fredis.openColumnEvaluation",
     "onCommand:fredis.openGroupedEvaluation",
     "onCustomEditor:fredis.trainingDataConfigEditor",
+    "onCustomEditor:fredis.trainingConfigEditor",
     "onCustomEditor:fredis.reactionPatternAnalysisConfigEditor",
     "onCustomEditor:fredis.reactionPatternAnalysisResultEditor",
     "onCustomEditor:fredis.resultViewer",
@@ -107,6 +108,16 @@
         "selector": [
           {
             "filenamePattern": "*.training-data-config.pft"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "fredis.trainingConfigEditor",
+        "displayName": "FREDIS Training Configuration",
+        "selector": [
+          {
+            "filenamePattern": "*.training-config.pft"
           }
         ],
         "priority": "default"
@@ -310,6 +321,7 @@
         "extensions": [
           ".pft",
           ".training-data-config.pft",
+          ".training-config.pft",
           ".reaction-pattern-analysis.pft",
           ".reactionpatternanalysis.pft",
           ".fredis-result",
@@ -365,7 +377,7 @@
     "check:training-sources": "python scripts/check-training-sources.py",
     "check:prediction-ui": "node scripts/check-spectrum-batch.js && python scripts/check-spectrum-prediction-backend.py && node scripts/check-prediction-ui.js",
     "check:spectrum-viewer": "node scripts/check-spectrum-viewer.js && python scripts/check-spectrum-viewer-backend.py",
-    "check:training-ui": "node scripts/check-training-ui.js && node scripts/check-reaction-parameters.js",
+    "check:training-ui": "node scripts/check-training-ui.js && node scripts/check-reaction-parameters.js && node scripts/check-training-config.js",
     "check:reaction-pattern-ui": "node scripts/check-reaction-pattern-file-editor.js && node scripts/check-reaction-pattern-ui.js",
     "check:reaction-preview": "node scripts/check-reaction-preview-ui.js && node scripts/check-reaction-viewer.js && python scripts/check-reaction-preview.py && node scripts/check-reaction-service.js",
     "check:reaction-pattern-analysis": "node --check src/features/reaction-pattern-analysis/editor.js && node --check src/features/reaction-pattern-analysis/results-view.js && node scripts/check-reaction-pattern-analysis.js",

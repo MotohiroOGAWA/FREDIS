@@ -510,6 +510,8 @@ def train_reactions(
     (output / "training_config.json").write_text(
         json.dumps({"model_config": model_config, "training": settings}, indent=2)
     )
+    from .configuration import write_training_configuration
+    write_training_configuration(output, model_config, settings)
     startup_progress.update(1)
     startup_progress.set_description_str("CUDA model", refresh=True)
     params = dict(model_config)

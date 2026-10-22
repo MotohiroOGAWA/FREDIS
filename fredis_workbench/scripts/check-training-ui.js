@@ -21,7 +21,7 @@ assert(!form.querySelector('section:nth-last-of-type(1) #loadTraining'));
 assert(!d.getElementById('trainingParameterDrop'),'Training uses the complete configuration loader instead of a second parameter importer');
 d.getElementById('loadTraining').click();assert.equal(messages.at(-1).type,'loadTrainingConfig');
 (async()=>{
-w.validateDroppedPaths=paths=>paths;const drop=new w.Event('drop',{bubbles:true,cancelable:true});Object.defineProperty(drop,'dataTransfer',{value:{files:[],getData:type=>type==='text/uri-list'?'file:///tmp/training.pfttrain.json':''}});d.getElementById('loadTraining').dispatchEvent(drop);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(messages.at(-1).type,'loadTrainingConfigFile');assert.equal(messages.at(-1).path,'/tmp/training.pfttrain.json');
+w.validateDroppedPaths=paths=>paths;const drop=new w.Event('drop',{bubbles:true,cancelable:true});Object.defineProperty(drop,'dataTransfer',{value:{files:[],getData:type=>type==='text/uri-list'?'file:///tmp/fragment-tree.training-config.pft':''}});d.getElementById('loadTraining').dispatchEvent(drop);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(messages.at(-1).type,'loadTrainingConfigFile');assert.equal(messages.at(-1).path,'/tmp/fragment-tree.training-config.pft');
 for(const button of form.querySelectorAll('[data-model-component]')){button.click();const section=d.querySelector('#trainingParameterEditor [data-model-block="'+button.dataset.modelComponent+'"]');assert(section);assert(!section.querySelector('[data-advanced]')?.hidden);}
 for(const key of ['fragmenter_params','adduct_type_strs'])assert(!form.querySelector('[data-model-block="'+key+'"]'));
 assert(form.querySelector('[data-model-block="mol_encoder_params"]'));
