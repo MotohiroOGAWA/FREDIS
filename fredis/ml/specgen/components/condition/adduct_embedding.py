@@ -29,7 +29,6 @@ class AdductEmbeddingLayer(nn.Module):
             embedding_dim=embedding_dim,
         )
 
-        self.dropout = nn.Dropout(0.0)
         self._init_weights()
 
     def _init_weights(self):
@@ -74,7 +73,7 @@ class AdductEmbeddingLayer(nn.Module):
         Tensor
             shape: [B, embedding_dim]
         """
-        return self.dropout(self.embedding(adduct_idx))
+        return self.embedding(adduct_idx)
 
     @property
     def feature_dim(self) -> int:

@@ -58,7 +58,7 @@ class MolEncoder(nn.Module):
         )
         self._node_dim = self.encoder.mol_node_dim
         self._graph_dim = self.encoder.mol_graph_dim
-        self.external_dropout = nn.Dropout(0.0)
+        self.external_dropout = nn.Dropout(dropout)
         if external_feature_dim:
             self.external_feature_projection = nn.Sequential(
                 nn.Linear(external_feature_dim, self._graph_dim),

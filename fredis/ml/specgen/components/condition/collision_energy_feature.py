@@ -3,9 +3,6 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-from ....common.torch_utils.nn_utils import build_fc_layers
-
-
 class CollisionEnergyFeatureLayer(nn.Module):
     def __init__(
         self,
@@ -23,18 +20,15 @@ class CollisionEnergyFeatureLayer(nn.Module):
             )
         self.register_buffer("ce_center", torch.tensor(float(center)))
         self.register_buffer("ce_scale", torch.tensor(float(scale)))
-        self.proj = build_fc_layers(
-            input_dim=1,
-            fc_dims=fc_dims,
-            output_dim=self._feature_dim,
-            dropout=0.0,
-        )
-
-        # Keep legacy projection parameter names; shared feature dropout is below.
-        self.proj = nn.Sequential(*(
-            layer for layer in self.proj if not isinstance(layer, nn.Dropout)
-        ))
-        self.dropout = nn.Dropout(0.0)
+        dims = (1, *fc_dims, self._feature_dim)
+        if any(type(width) is not int or width < 1 for width in dims):
+            raise ValueError("CE MLP widths must be positive integers")
+        layers = []
+        for index, (input_dim, output_dim) in enumerate(zip(dims, dims[1:])):
+            layers.append(nn.Linear(input_dim, output_dim))
+            if index < len(dims) - 2:
+                layers.append(nn.ReLU())
+        self.proj = nn.Sequential(*layers)
         self._init_weights()
 
     def _init_weights(self):
@@ -87,7 +81,7 @@ class CollisionEnergyFeatureLayer(nn.Module):
         normalized = (ce - self.ce_center) / self.ce_scale.clamp_min(1e-6)
         encoded = normalized
         out = self.proj(encoded)
-        return self.dropout(out)
+        return out
 
     @property
     def feature_dim(self) -> int:

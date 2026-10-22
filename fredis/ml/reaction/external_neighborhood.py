@@ -6,7 +6,7 @@ from torch import nn
 
 
 class ExternalNeighborhoodEncoder(nn.Module):
-    def __init__(self, atom_dim: int, hidden_dim: int, hops: int, *, bond_dim: int = 0):
+    def __init__(self, atom_dim: int, hidden_dim: int, hops: int, *, bond_dim: int = 0, dropout: float = 0.0):
         super().__init__()
         if type(hops) is not int or hops < 0:
             raise ValueError("neighborhood_hops must be a non-negative integer")
@@ -15,7 +15,7 @@ class ExternalNeighborhoodEncoder(nn.Module):
         if type(bond_dim) is not int or bond_dim < 0:
             raise ValueError("bond_dim must be a non-negative integer")
         self.hidden_dim, self.hops, self.bond_dim = hidden_dim, hops, bond_dim
-        self.dropout = nn.Dropout(0.0)
+        self.dropout = nn.Dropout(dropout)
         self.atom_projection = nn.Linear(atom_dim, hidden_dim, bias=False)
         self.messages = nn.ModuleList(
             nn.Linear(hidden_dim + bond_dim, hidden_dim, bias=False)

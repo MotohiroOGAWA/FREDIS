@@ -14,7 +14,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   const descriptions={
     ce_fc_dims:'CE MLP hidden widths, e.g. 32, 16; empty means linear. Input is (CE - center) / scale.',
     ce_center:'CE normalization center.',ce_scale:'Positive CE normalization scale. 100 maps CE 0..100 to 0..1 when center is zero.',
-    fragment_fc_dims:'Fragment Head hidden widths. Child, Self and Sink logits compete per parent fragment.',fragment_dropout:'Dropout in the Fragment Head.',state_fc_dims:'State Head hidden widths. Ion adduct and hydrogen-shift probabilities normalize within each fragment.','spectrum_model_params.state_dropout':'Dropout in the State Head.',
+    fragment_fc_dims:'Fragment Head hidden widths. Child, Self and Sink logits compete per parent fragment.',state_fc_dims:'State Head hidden widths. Ion adduct and hydrogen-shift probabilities normalize within each fragment.',
     architecture:'Spectrum generator architecture. Source-anchored reaction models operate on primitive reactions.',
     max_reaction_count:'Maximum number of primitive reactions in a normalized fragment reaction state.',
     precursor_candidate_max_reaction_count:'Maximum reaction count used to find candidates for the observed precursor.',
@@ -37,7 +37,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     descriptors:'Descriptors of materialized fragments used by the spectrum predictor after branch selection (transition scores in competitive mode).',
     num_layers:'Number of transformer layers.',num_heads:'Number of attention heads. Must divide the corresponding hidden dimension.',
     max_degree:'Maximum degree represented in graph structural embeddings.',max_spatial_dist:'Maximum atom graph distance encoded by the molecular encoder.',max_edge_dist:'Maximum bond distance encoded by the molecular encoder.',
-    edge_num_layers:'Number of hidden layers scoring a compound/reaction edge.',edge_dropout:'Dropout in the branch edge MLP.',
+    edge_num_layers:'Number of hidden layers scoring a compound/reaction edge.',
     branch_path_threshold:'Minimum cumulative path probability retained by fragment tree search. Zero disables threshold pruning. Saved with the model; prediction can override it.',
     max_fragment_nodes:'Maximum fragment nodes shared by the complete (compound, main adduct) branch group. Saved with the model; prediction can override it.',
     peak_intensity_threshold:'Minimum max-normalized intensity retained in generated spectra. Does not affect training loss.',
@@ -47,7 +47,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     freeze_mol_encoder:'Freeze the molecular encoder during training.',
   };
   const templates={patterns:{name:'new_pattern',reactant_smarts:'[!#1:1]-[!#1:2]',products:[{name:'product',smarts:'[!#1:1]'}]},products:{name:'product',smarts:'[!#1:1]'},adduct_rules:{name:'new_rule',adduct_type:'[M+H]+',fragment_ion_adducts:['[M+H]+']},fragment_ion_adducts:'[M+H]+',symbols:'C'};
-  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,edge_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,fragment_fc_dims:[128,64],fragment_dropout:0,state_fc_dims:[128,64],state_dropout:0},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
+  const optional={reaction_model_params:{branch_main_adduct_dim:128,num_heads:4,edge_num_layers:2,},mol_encoder_params:{dropout:0,external_feature_dim:0},spectrum_model_params:{adduct_embedding_dim:32,descriptors:[],collision_energy_dim:16,ce_fc_dims:[32],ce_center:0,ce_scale:100,fragment_fc_dims:[128,64],state_fc_dims:[128,64]},generation_params:{branch_path_threshold:0,max_fragment_nodes:100,peak_intensity_threshold:0}};
   // Purely cosmetic sub-headings for the sections with the most fields; any
   // field not listed here (e.g. a newer option) still renders, just ungrouped.
   const fieldGroups={
@@ -58,8 +58,8 @@ function createParameterEditor(container, initial, kind = "training", editReacti
       'Branch Scorer · Architecture':['edge_num_layers'],
     },
     spectrum_model_params:{
-      'Fragment Head':['fragment_fc_dims','fragment_dropout'],
-      'State Head':['state_fc_dims','state_dropout'],
+      'Fragment Head':['fragment_fc_dims'],
+      'State Head':['state_fc_dims'],
       'Adduct Embedding':['adduct_embedding_dim'],
       'Collision Energy MLP':['collision_energy_dim','ce_fc_dims','ce_center','ce_scale'],
       'Intensity Head · Architecture':['descriptors'],
@@ -69,10 +69,6 @@ function createParameterEditor(container, initial, kind = "training", editReacti
       'Spectrum Output':['peak_intensity_threshold'],
     },
   };
-  // A resumed/saved model_config always has these (training_model_config writes
-  // them from the single shared --dropout), but they must never be editable
-  // here independently of it -- only one dropout value can ever be specified.
-  const linkedToSharedDropout=new Set(['reaction_model_params.edge_dropout']);
   // max_roles is sized automatically and Mol Encoder symbols are owned by the
   // prepared dataset. A loaded config may carry both, but neither is edited
   // in the training architecture form.
@@ -86,7 +82,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   const title=key=>String(key).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()).replace('Smarts','SMARTS');
   function help(key,path){return descriptions[path]||descriptions[key]||'Configure '+path.replaceAll('_',' ').replaceAll('.',' / ')+'. This value is passed to the FREDIS Python workflow.';}
   function renderValue(parent,key,host,path,excludeBasic=false){
-    const full=path?path+'.'+key:String(key),value=parent[key];if(excludeBasic&&basic.has(full))return;if(['training','architecture'].includes(kind)&&/dropout$/.test(key))return;if(key==='pattern_model_params'||['reactant_node_dim','reactant_graph_dim','reactant_num_layers','reactant_dropout'].includes(key)&&kind==='training'||linkedToSharedDropout.has(full)||derivedFromDataset.has(full))return;
+    const full=path?path+'.'+key:String(key),value=parent[key];if(excludeBasic&&basic.has(full))return;if(['training','architecture'].includes(kind)&&/dropout$/.test(key))return;if(key==='pattern_model_params'||['reactant_node_dim','reactant_graph_dim','reactant_num_layers','reactant_dropout'].includes(key)&&kind==='training'||derivedFromDataset.has(full))return;
     if(key==='reaction_pattern_set'&&editReactionPatternSet){const details=node('details'),summary=node('summary','Reaction Pattern Set · '+(value.name||'(unnamed)')),mount=node('div');mount.className='embedded-set-editor';details.append(summary,mount);details.ontoggle=event=>{if(event.target===details&&details.open)editReactionPatternSet(clone(parent[key]),updated=>{parent[key]=clone(updated);summary.textContent='Reaction Pattern Set · '+(updated.name||'(unnamed)');},mount);};host.append(details);return;}
     if(key==='fragment_ion_adduct_rule_set'&&editAdductRuleSet){const mainAdducts=set=>[...new Set((set.adduct_rules||[]).map(rule=>rule.adduct_type).filter(Boolean))].join(', ')||'no main adducts',details=node('details'),summary=node('summary','Fragment Ion Adduct Rule Set · '+(value.name||'(unnamed)')+' · '+mainAdducts(value)),mount=node('div');mount.className='embedded-set-editor';details.append(summary,mount);details.ontoggle=event=>{if(event.target===details&&details.open)editAdductRuleSet(clone(parent[key]),updated=>{parent[key]=clone(updated);summary.textContent='Fragment Ion Adduct Rule Set · '+(updated.name||'(unnamed)')+' · '+mainAdducts(updated);},mount);};host.append(details);return;}
     if(full==='spectrum_model_params.descriptors'){

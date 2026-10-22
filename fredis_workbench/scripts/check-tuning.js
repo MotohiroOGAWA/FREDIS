@@ -7,6 +7,7 @@ assert.throws(()=>plan({...base,resume:'saved.pt'},()=>[]),/new model/);
 assert.throws(()=>plan({...base,tuning:{parameters:{lr:[null]}}},()=>[]),/numeric/);
 assert.throws(()=>plan({...base,tuning:{parameters:{'modelConfig.mol_encoder_params.node_dim':[33]}}},()=>[]),/divisible/);
 assert.equal(plan({...base,tuning:{parameters:{lr:Array.from({length:129},(_,i)=>i+1)}}},()=>[]).length,129);
+assert.throws(()=>plan({...base,tuning:{parameters:{'modelConfig.mol_encoder_params.dropout':[0.2]}}},()=>[]),/shared dropout/);
 console.log('Tuning trial expansion, isolation, resume lock and validation passed.');
 const {JSDOM,VirtualConsole}=require('jsdom'),Module=require('module'),load=Module._load;
 Module._load=function(name,parent,main){return name==='vscode'?{}:load.call(this,name,parent,main);};

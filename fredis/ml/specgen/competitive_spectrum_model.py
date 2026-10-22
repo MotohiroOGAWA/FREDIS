@@ -185,9 +185,8 @@ class CompetitiveSpectrumModel(nn.Module):
         formula_tensorizer,
         collision_energy_dim=16,
         fragment_fc_dims=(128, 64),
-        fragment_dropout=0.0,
         state_fc_dims=(128, 64),
-        state_dropout=0.0,
+        dropout=0.0,
         descriptors=(),
     ):
         super().__init__()
@@ -213,7 +212,7 @@ class CompetitiveSpectrumModel(nn.Module):
         self.fragment_heads = nn.ModuleDict(
             {
                 self.head_index[main]: ConditionHead(
-                    3, input_dim, tuple(fragment_fc_dims), fragment_dropout
+                    3, input_dim, tuple(fragment_fc_dims), dropout
                 )
                 for main in self.main_adduct_conditions
             }
@@ -227,7 +226,7 @@ class CompetitiveSpectrumModel(nn.Module):
                     len(conditions),
                     state_input_dim,
                     tuple(state_fc_dims),
-                    state_dropout,
+                    dropout,
                 )
                 for main, conditions in self.main_adduct_conditions.items()
             }

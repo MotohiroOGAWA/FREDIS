@@ -20,6 +20,7 @@ function plan(config,build){
  let trials=[JSON.parse(JSON.stringify(config))];
  for(const [keys,raw]of axes){
   for(const key of keys){
+  if(key!=='dropout'&&/dropout$/.test(key))throw new Error('Use the shared dropout tuning parameter.');
   const parts=key.split('.');
   if(!/^(lr|batchSize|dropout|weightDecay|modelConfig\.(mol_encoder_params|reaction_model_params|spectrum_model_params)\.[\w.]+)$/.test(key)||parts.some(p=>['__proto__','constructor','prototype'].includes(p)))throw new Error('Unsupported tuning parameter: '+key);
   if(!Array.isArray(raw)||!raw.length||raw.some(v=>typeof v!=='number'||!Number.isFinite(v)||v<0))throw new Error('Enter numeric candidates for '+key);

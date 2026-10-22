@@ -26,7 +26,7 @@ def pattern_config(params, pid):
         graph_dim=reaction.get("reactant_graph_dim", hidden),
         num_layers=reaction.get("reactant_num_layers", 2),
         num_heads=reaction.get("num_heads", 4),
-        dropout=reaction.get("reactant_dropout", 0.0),
+        dropout=params.get("dropout", 0.0),
         descriptors=[],
         input_mode="chemical",
         neighborhood_hops=3,
@@ -35,26 +35,28 @@ def pattern_config(params, pid):
     )
     override = dict(reaction.get("pattern_model_params", {}).get(str(pid), {}))
     result.update(override)
+    frozen = set(map(str, params.get("fine_tuning", {}).get("frozen_pattern_ids", [])))
+    if str(pid) not in frozen:
+        result["dropout"] = params.get("dropout", 0.0)
     return result
 
 
 def use_shared_dropout(config):
-    """Apply one dropout rate to all new networks in a fresh training run.
-
-    Old checkpoint configs remain readable so resumed runs keep their behavior.
-    """
+    """Keep one authoritative dropout setting for all trainable networks."""
     config = deepcopy(config)
     reaction = config.setdefault("reaction_model_params", {})
-    rate = config.get("dropout", reaction.get("edge_dropout", 0.0))
+    rate = config.get("dropout", 0.0)
     if not math.isfinite(rate) or not 0 <= rate < 1:
         raise ValueError("Shared dropout must be finite and in [0, 1)")
     config["dropout"] = rate
     frozen = {str(pid) for pid in config.get("fine_tuning", {}).get("frozen_pattern_ids", [])}
     if not config.get("fine_tuning"):
         config.setdefault("mol_encoder_params", {})["dropout"] = rate
-    config.setdefault("spectrum_model_params", {}).update(fragment_dropout=rate, state_dropout=rate)
-    reaction["edge_dropout"] = rate
-    reaction["reactant_dropout"] = rate
+    spectrum = config.setdefault("spectrum_model_params", {})
+    for key in ("fragment_dropout", "state_dropout"):
+        spectrum.pop(key, None)
+    for key in ("edge_dropout", "reactant_dropout"):
+        reaction.pop(key, None)
     for pid, params in reaction.get("pattern_model_params", {}).items():
         if str(pid) not in frozen:
             params.pop("dropout", None)

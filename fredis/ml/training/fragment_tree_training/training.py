@@ -1212,14 +1212,12 @@ MODEL_OPTIONS = {
         mlp_dims,
         mlp_dims("128,64"),
     ),
-    "fragment-dropout": ("spectrum_model_params", "fragment_dropout", float, 0.0),
     "state-fc-dims": (
         "spectrum_model_params",
         "state_fc_dims",
         mlp_dims,
         mlp_dims("128,64"),
     ),
-    "state-dropout": ("spectrum_model_params", "state_dropout", float, 0.0),
     "branch-path-threshold": ("generation_params", "branch_path_threshold", float, 0.0),
     "max-fragment-nodes": ("generation_params", "max_fragment_nodes", int, 100),
     "peak-intensity-threshold": (
@@ -1231,9 +1229,7 @@ MODEL_OPTIONS = {
 }
 MODEL_OPTION_HELP = {
     "state-fc-dims": "Comma-separated State Head MLP hidden widths. Empty selects a linear map.",
-    "state-dropout": "Dropout after hidden State Head MLP layers.",
     "fragment-fc-dims": "Comma-separated Fragment Head MLP hidden widths, e.g. 128,64. Empty selects a linear map.",
-    "fragment-dropout": "Dropout after hidden Fragment Head MLP layers.",
     "ce-fc-dims": "Comma-separated CE MLP hidden widths. Empty selects a linear map.",
     "ce-center": "Normalize CE as (CE - center) / scale; saved in the model.",
     "ce-scale": "Positive CE normalization scale (default 100). Does not convert measurement units.",
@@ -1284,28 +1280,17 @@ def training_model_config(args):
             config[section][key] = value if value is not None else default
     from .pattern_models import use_shared_dropout
 
-    # One rate for every newly trained neural network.
-    fragment_dropout = args.fragment_tree_dropout if args.fragment_tree_dropout is not None else args.dropout
-    config["reaction_model_params"]["edge_dropout"] = fragment_dropout
-    config["reaction_model_params"]["reactant_dropout"] = fragment_dropout
-    # A closed-choice architecture setting, kept out of the generic int/float
-    # MODEL_OPTIONS loop below.
+    config["dropout"] = args.dropout
     return use_shared_dropout(config)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_mol_encoder_arguments(parser)
-    parser.add_argument(
-        "--fragment-tree-dropout",
-        type=float,
-        default=None,
-        help="Legacy alias for --dropout (shared across all new neural networks).",
-    )
     for flag, (_, _, kind, default) in MODEL_OPTIONS.items():
         parser.add_argument(
             "--" + flag, type=kind, default=default,
-            help=argparse.SUPPRESS if flag.endswith("dropout") else MODEL_OPTION_HELP.get(flag)
+            help=MODEL_OPTION_HELP.get(flag)
         )
     for flag, (default, text) in SPECTRUM_LOSS_OPTIONS.items():
         parser.add_argument("--" + flag, type=float, default=default, help=text)
@@ -1414,9 +1399,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.resume:
         from .pattern_models import use_shared_dropout
 
-        model_config["dropout"] = (
-            args.fragment_tree_dropout if args.fragment_tree_dropout is not None else args.dropout
-        )
+        model_config["dropout"] = args.dropout
         model_config = use_shared_dropout(model_config)
     train_reactions(
         model_config=model_config,

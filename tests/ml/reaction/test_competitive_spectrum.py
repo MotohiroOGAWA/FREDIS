@@ -20,9 +20,7 @@ def competitive_config():
         ce_scale=100.0,
         ce_center=0.0,
         fragment_fc_dims=[16, 8],
-        fragment_dropout=0.0,
         state_fc_dims=[16, 8],
-        state_dropout=0.0,
     )
     return value
 
@@ -225,7 +223,7 @@ def test_mlp_cli_forwarding_and_configuration():
         and cfg["ce_scale"] == 50
     )
     assert cfg["fragment_fc_dims"] == [48, 24]
-    assert cfg["state_fc_dims"] == [32, 16] and cfg["state_dropout"] == 0.2
+    assert cfg["state_fc_dims"] == [32, 16] and training_model_config(forwarded)["dropout"] == 0.2
     assert "propagation_steps" not in cfg
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -309,7 +307,7 @@ def test_configurable_adduct_embedding_and_legacy_ce():
     assert features.adduct_encoder.embedding.embedding_dim == 7
     assert features.main_adduct_projection[0].in_features == 7
     ce = features.collision_energy_encoder
-    assert all(module.p == 0 for module in ce.modules() if isinstance(module, torch.nn.Dropout))
+    assert not any(isinstance(module, torch.nn.Dropout) for module in ce.modules())
     energy = torch.tensor([10.0, 20.0])
     torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
     for width in (0, -1, True):

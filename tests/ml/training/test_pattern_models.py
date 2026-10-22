@@ -101,14 +101,14 @@ def test_raw_pattern_position_capacity_is_independent_of_legacy_roles(checkpoint
     assert any(encoder.position_count==70 and encoder.node_proj.in_features==encoder.atom_dim+70 for encoder in reaction.reactant_encoders.values())
 
 
-def test_shared_reaction_dropout_overrides_legacy_pattern_settings(checkpoints):
+def test_shared_dropout_is_authoritative(checkpoints):
     from fredis.ml.training.fragment_tree_training.pattern_models import use_shared_dropout
 
     source, _, _ = checkpoints
     original = torch.load(source, weights_only=False)["model_config"]
     params = deepcopy(original)
     reaction = params.setdefault("reaction_model_params", {})
-    reaction["edge_dropout"] = 0.35
+    params["dropout"] = 0.35
     reaction["reactant_dropout"] = 0.1
     pid = str(Fragmenter.from_dict(params["fragmenter_params"]).reaction_pattern_set.patterns[0].pattern_id)
     reaction.setdefault("pattern_model_params", {}).setdefault(pid, {})["dropout"] = 0.8
@@ -125,7 +125,7 @@ def test_shared_reaction_dropout_overrides_legacy_pattern_settings(checkpoints):
     edge_drops = [module for module in generator.feature_model.edge_head.modules() if isinstance(module, torch.nn.Dropout)]
     assert edge_drops and all(module.p == 0.35 for module in edge_drops)
     for invalid in (-0.1, 1, float("nan")):
-        params["reaction_model_params"]["edge_dropout"] = invalid
+        params["dropout"] = invalid
         with pytest.raises(ValueError, match="Shared dropout"):
             use_shared_dropout(params)
 
@@ -143,9 +143,6 @@ def test_global_dropout_covers_all_new_networks_and_eval(checkpoints):
     features = generator.feature_model
     groups = [
         generator.mol_encoder,
-        features.adduct_encoder,
-        features.collision_energy_encoder,
-        features.main_adduct_projection,
         features.edge_head,
         *features.reaction_instance_encoder.reactant_encoders.values(),
         *features.reaction_instance_encoder.neighborhood_encoders.values(),
@@ -172,7 +169,12 @@ def test_global_dropout_covers_all_new_networks_and_eval(checkpoints):
     ce = features.collision_energy_encoder
     energy = torch.linspace(1, 100, 128)
     generator.train()
-    assert not torch.equal(ce(energy), ce(energy))
+    assert not any(isinstance(m, torch.nn.Dropout) for m in ce.modules())
+    assert not any(isinstance(m, torch.nn.Dropout) for m in features.adduct_encoder.modules())
+    assert not any(isinstance(m, torch.nn.Dropout) for m in features.main_adduct_projection.modules())
+    torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
+    adduct_index = torch.zeros(128, dtype=torch.long)
+    torch.testing.assert_close(features.adduct_encoder(adduct_index), features.adduct_encoder(adduct_index), rtol=0, atol=0)
     generator.eval()
     torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
     # Reconstructing a saved architecture preserves keys and rates.
@@ -211,9 +213,38 @@ def test_global_dropout_preserves_imported_features(checkpoints):
         assert [m.p for m in network.modules() if isinstance(m, torch.nn.Dropout)] == [
             m.p for m in old.modules() if isinstance(m, torch.nn.Dropout)
         ]
-    assert generator.feature_model.collision_energy_encoder.dropout.p == 0.45
+    assert not any(isinstance(m, torch.nn.Dropout) for m in generator.feature_model.collision_energy_encoder.modules())
     assert generator.feature_model.collision_energy_encoder.training
     wrapper = ReactionFragmentTreeTrainingModel(generator.feature_model, spectrum_model=generator.spectrum_model)
     wrapper.train()
     assert not generator.mol_encoder.training
     assert all(not reaction.reactant_encoders[pid].training for pid in reaction.frozen_pattern_ids)
+
+
+def test_leaf_networks_receive_dropout_at_construction(checkpoints):
+    from fredis.ml.mol.mol_encoder import MolEncoder
+    from fredis.ml.reaction.external_neighborhood import ExternalNeighborhoodEncoder
+    from fredis.ml.specgen.components.condition.condition_linear import ConditionHead
+    from fredis.ml.specgen.components.reaction.reaction_instance_encoder import PatternReactionReadout
+
+    source, _, _ = checkpoints
+    mol_params = torch.load(source, weights_only=False)["model_config"]["mol_encoder_params"]
+    networks = [
+        MolEncoder(**{**mol_params, "dropout": 0.3, "external_feature_dim": 4}),
+        ExternalNeighborhoodEncoder(4, 8, 2, dropout=0.3),
+        ConditionHead(2, 8, (), dropout=0.3),
+        PatternReactionReadout(8, 8, 8, 2, 2, dropout=0.3),
+    ]
+    for network in networks:
+        drops = [m for m in network.modules() if isinstance(m, torch.nn.Dropout)]
+        assert drops and all(m.p == 0.3 for m in drops), type(network)
+
+
+def test_model_dropout_defaults_to_zero(checkpoints):
+    source, _, _ = checkpoints
+    params = deepcopy(torch.load(source, weights_only=False)["model_config"])
+    params.pop("dropout", None)
+    generator = create_spectrum_generator(params)
+    drops = [m for m in generator.modules() if isinstance(m, torch.nn.Dropout)]
+    assert drops and all(m.p == 0.0 for m in drops)
+    assert all(m.dropout == 0.0 for m in generator.modules() if isinstance(m, torch.nn.MultiheadAttention))
