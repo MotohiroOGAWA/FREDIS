@@ -106,3 +106,14 @@ pytest -q tests/ml/reaction/test_fragment_tree_model.py
 Head configuration: `--fragment-fc-dims`, `--fragment-dropout`, `--state-fc-dims`,
 `--state-dropout` (defaults: `128,64`, `0`, `128,64`, `0`). The same fields appear
 in Workbench. Old coupled-head checkpoints require retraining.
+
+Weak negatives are limited to admissible outgoing edges whose source Compound
+has at least one positive outgoing edge in the same branch group. Positive
+evidence is pooled across CE measurements before selecting these sources.
+By default, preparation saves only positive/weak-negative edges, their endpoint
+Compounds, and source roots (including isolated roots). Use `--save-all-edges`
+(Workbench: **Save all candidate edges and nodes**, config `saveAllEdges`) to
+retain the complete candidate graph. Additional edges have label -1 and do not
+change branch supervision or its normalization. Spectrum candidate coverage can
+change with graph retention; this option guarantees identical branch labels,
+not identical spectrum losses.

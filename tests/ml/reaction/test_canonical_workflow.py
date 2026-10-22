@@ -455,3 +455,69 @@ def test_annotation_export_computes_compound_smiles_once_and_summary_reuses_it()
     ):
         summary = structure_manifest_fields(data, annotations)
     assert summary["num_nodes"] == len(data.compounds.compounds)
+
+
+def test_branch_frontier_storage_preserves_supervised_edges(tmp_path):
+    from fredis.ml.input.structure_builder import _ChemistryPreparationBuilder
+    from fredis.ml.input.source_reaction_structure import rows
+
+    model = create_spectrum_generator(config())
+    raw, _ = _ChemistryPreparationBuilder(model).build(
+        Compound.from_smiles("CC(O)N"),
+        [Adduct.parse("[M+H]+")],
+        [20.0],
+        [[18.033826, 44.049476]],
+        [[0.5, 1.0]],
+    )
+    compact = SourceReactionStructure.from_preparation(raw)
+    full = SourceReactionStructure.from_preparation(raw, save_all_edges=True)
+    compact.validate()
+    full.validate()
+
+    def entries(data):
+        graph = data.compound_graph
+        result = {}
+        labels = rows(
+            data.reaction_contexts.edge_ptr, data.reaction_contexts.edge_label
+        )
+        for group, edges in enumerate(
+            rows(data.reaction_contexts.edge_ptr, data.reaction_contexts.edge_index)
+        ):
+            for edge, label in zip(edges, labels[group]):
+                key = (
+                    group,
+                    data.compounds.smiles[int(graph.source_compound_index[edge])],
+                    data.compounds.smiles[int(graph.target_compound_index[edge])],
+                    int(graph.reaction_index[edge]),
+                )
+                result[key] = label
+        return result
+
+    all_entries, selected = entries(full), entries(compact)
+    positive_sources = {
+        (key[0], key[1]) for key, label in all_entries.items() if label == 1
+    }
+    assert positive_sources
+    assert any(label == -1 for label in all_entries.values())
+    for key, label in all_entries.items():
+        if label != 1:
+            assert label == (0 if (key[0], key[1]) in positive_sources else -1)
+    assert selected == {key: label for key, label in all_entries.items() if label >= 0}
+    endpoints = set(compact.source_compounds.compound_index.tolist())
+    endpoints.update(compact.compound_graph.source_compound_index.tolist())
+    endpoints.update(compact.compound_graph.target_compound_index.tolist())
+    assert endpoints == set(range(len(compact.compounds.compounds)))
+    assert len(compact.compounds.compounds) < len(full.compounds.compounds)
+    for data in (compact, full):
+        path = tmp_path / ("full.pt" if data is full else "compact.pt")
+        data.save(path)
+        assert entries(SourceReactionStructure.load(path)) == entries(data)
+    full_logits = torch.full((len(all_entries),), 0.3, requires_grad=True)
+    compact_logits = torch.full((len(selected),), 0.3, requires_grad=True)
+    full_labels = torch.tensor(list(all_entries.values()), dtype=torch.int8)
+    compact_labels = torch.tensor(list(selected.values()), dtype=torch.int8)
+    full_loss = branch_edge_loss(full_logits, full_labels)[0]
+    compact_loss = branch_edge_loss(compact_logits, compact_labels)[0]
+    torch.testing.assert_close(full_loss, compact_loss)
+    full_loss.backward()
+    assert (full_logits.grad[full_labels == -1] == 0).all()

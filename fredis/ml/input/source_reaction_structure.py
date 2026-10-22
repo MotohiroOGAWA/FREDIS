@@ -892,7 +892,7 @@ class SourceReactionStructure(SpectrumPredictionData):
         return replace(self, targets=target)
 
     @classmethod
-    def from_preparation(cls, raw):
+    def from_preparation(cls, raw, *, save_all_edges=False):
         a = raw.annotations
         h = raw.states
         decoded = raw.spectrum_batch.decoded
@@ -916,12 +916,22 @@ class SourceReactionStructure(SpectrumPredictionData):
             group = int(h.branch_group_index[parent])
             groups[group].add(key)
             positive[group].add(key)
+        positive_sources = [{key[0] for key in edges} for edges in positive]
+        if not save_all_edges:
+            groups = [
+                {key for key in edges if key[0] in positive_sources[g]}
+                for g, edges in enumerate(groups)
+            ]
         keys = sorted(set().union(*groups))
         lookup = {key: i for i, key in enumerate(keys)}
         ep, ei = csr([sorted(lookup[key] for key in group) for group in groups])
         labels = torch.tensor(
             [
-                1 if keys[i] in positive[g] else 0
+                (
+                    1
+                    if keys[i] in positive[g]
+                    else (0 if keys[i][0] in positive_sources[g] else -1)
+                )
                 for g, row in enumerate(rows(ep, ei))
                 for i in row
             ],
@@ -985,7 +995,114 @@ class SourceReactionStructure(SpectrumPredictionData):
                 ),
             ),
         )
+        if not save_all_edges:
+            result = result._retain_graph_compounds()
         return result.with_targets()
+
+    def _retain_graph_compounds(self):
+        """Compact nodes and explanation references after selecting training edges."""
+        graph = self.compound_graph
+        ids = torch.cat(
+            (
+                self.source_compounds.compound_index,
+                graph.source_compound_index,
+                graph.target_compound_index,
+            )
+        ).unique(sorted=True)
+        mapping = torch.full((len(self.compounds.compounds),), -1, dtype=torch.long)
+        mapping[ids] = torch.arange(len(ids))
+        compounds = self.compounds
+        generating_sets = rows(
+            compounds.generating_reaction_sets_ptr,
+            compounds.generating_reaction_sets_index,
+        )
+        rp, ri = csr([generating_sets[i] for i in ids.tolist()])
+        compact = CompoundBatch(
+            tuple(compounds.compounds[i] for i in ids.tolist()),
+            Batch.from_data_list(
+                [compounds.graph.get_example(i) for i in ids.tolist()]
+            ),
+            rp,
+            ri,
+        )
+        explanations = self.formula_explanations
+        keep = mapping[explanations.compound_index] >= 0
+        explanation_map = torch.full((len(keep),), -1, dtype=torch.long)
+        explanation_map[keep] = torch.arange(int(keep.sum()))
+
+        def remap(table):
+            ptr, index = csr(
+                [
+                    [
+                        int(explanation_map[i])
+                        for i in row
+                        if int(explanation_map[i]) >= 0
+                    ]
+                    for row in rows(
+                        table.formula_explanation_ptr, table.formula_explanation_index
+                    )
+                ]
+            )
+            return replace(
+                table, formula_explanation_ptr=ptr, formula_explanation_index=index
+            )
+
+        result = replace(
+            self,
+            compounds=compact,
+            source_compounds=replace(
+                self.source_compounds,
+                compound_index=mapping[self.source_compounds.compound_index],
+            ),
+            compound_graph=replace(
+                graph,
+                source_compound_index=mapping[graph.source_compound_index],
+                target_compound_index=mapping[graph.target_compound_index],
+            ),
+            formula_explanations=replace(
+                explanations,
+                **{
+                    f.name: (
+                        mapping[getattr(explanations, f.name)[keep]]
+                        if f.name == "compound_index"
+                        else getattr(explanations, f.name)[keep]
+                    )
+                    for f in fields(explanations)
+                },
+            ),
+            spectrum_explanations=remap(self.spectrum_explanations),
+            annotations=replace(
+                self.annotations, assignments=remap(self.annotations.assignments)
+            ),
+        )
+
+        # Shared Compounds can remain for another group while being unreachable here.
+        execution = result.execution_graph
+        reachable = [
+            set(
+                execution.compound_index[execution.branch_group_index == group].tolist()
+            )
+            for group in range(result.num_branch_groups)
+        ]
+        ptr, index = csr(
+            [
+                [
+                    i
+                    for i in candidates
+                    if int(result.formula_explanations.compound_index[i])
+                    in reachable[int(result.sample_branch_group_index[sample])]
+                ]
+                for sample, candidates in enumerate(
+                    rows(
+                        result.spectrum_explanations.formula_explanation_ptr,
+                        result.spectrum_explanations.formula_explanation_index,
+                    )
+                )
+            ]
+        )
+        return replace(
+            result, spectrum_explanations=SpectrumExplanationData(ptr, index)
+        )
 
     def save(self, path):
         self.validate()

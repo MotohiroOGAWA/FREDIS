@@ -234,7 +234,11 @@ states**: sets of primitive-reaction indices, starting from the empty state.
 - Positive transitions are the unique (parent, child, reaction) steps.
 - For every state below `max_reaction_count`, each other reaction is checked for
   chemical validity (relations, then an actual RDKit run cached per effect):
-  - Valid reactions that are not positive become **weak negatives**.
+  - In the saved canonical graph, unsupported valid edges become **weak negatives**
+    only when their source Compound has a positive outgoing edge in the same group.
+    Other unsupported edges are omitted by default, or labelled **ignored (-1)**
+    with `--save-all-edges`. This option also keeps all candidate nodes; it does
+    not change the positive/weak-negative training examples.
   - A positive reaction that is invalid is an error.
 
 The teacher states are then materialized into one fragment tree per branch
@@ -666,3 +670,11 @@ During training data preparation, reaching a search limit retains the largest re
 `manifest.tsv` and `.preft.pt` metadata under `metadata.search_stats` record `requested_max_reaction_count`, `completed_max_reaction_count`, `search_truncated`, and `discarded_from_reaction_count`. The saved metadata also includes `limit_attempts`, containing each failed attempt's reaction-count bound, limit name, limit value, and observed counters. Ordinary search counters describe the complete retained tree.
 
 The same behavior applies to trainable SpecID verification, which uses `ReactionStructureBuilder`. Combination enumeration runs once: overflow at depth n retains complete levels through n - 1 before any RDKit execution. The separate unique-structure limit can still require a lower-depth materialization retry, because unique structures are known only after execution. If existing seeds exceed the retained bound, the source is excluded with a recorded reason rather than silently dropping those seeds.
+
+### Candidate graph storage
+
+Default: save positive and weak-negative edges and their endpoint nodes, plus
+source roots. CLI `--save-all-edges` / Workbench `saveAllEdges: true` additionally
+saves ignored edges and candidate nodes. The Workbench checkbox defaults to off
+and is persisted in preparation configurations. Both modes use identical branch
+supervision; candidate coverage for spectrum prediction may differ.

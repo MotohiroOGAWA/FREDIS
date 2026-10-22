@@ -1064,8 +1064,10 @@ does not retain alternative-path MIL semantics.
 
 A positive label means the edge is useful in at least one retained explanation
 at some CE, not that its physical occurrence has been established. A weak
-negative must be chemically admissible in some reachable history but unsupported
-by all retained explanations in the group. If any history supports an edge,
+negative must be chemically admissible in some reachable history, unsupported
+by all retained explanations in the group, and have a source Compound with at
+least one positive outgoing edge in that group. Other unsupported edges are
+omitted by default or labelled -1 when saving all edges. If any history supports an edge,
 the group/edge summary is positive; it cannot simultaneously be a weak negative
 in this table. Invalid or uncertain cases are omitted or masked, not strong
 negative facts. Labels summarize support, not history-specific applicability.

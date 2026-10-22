@@ -111,7 +111,7 @@ function defaultConfig(context) {
     application: 'fragment-tree-data-preparation', fragmenterParams: chemistry.fragmenter_params, symbols: chemistry.symbols,
     input: '', smilesColumn:'SMILES', adductTypeColumn:'AdductType', collisionEnergyColumn:'CollisionEnergy', precursorMzColumn:'PrecursorMZ',
     validationSmilesColumn:'', validationAdductTypeColumn:'', validationCollisionEnergyColumn:'', validationPrecursorMzColumn:'',
-    datasets:[], datasetMode:'automatic', validationInput:'', validationRatio:0.1, testRatio:0, validationSeed:0, minimumRelativeIntensity:0, overwrite:false, numWorkers:1, chunkSize:1,
+    datasets:[], datasetMode:'automatic', validationInput:'', validationRatio:0.1, testRatio:0, validationSeed:0, minimumRelativeIntensity:0, saveAllEdges:false, overwrite:false, numWorkers:1, chunkSize:1,
     outputDir: ''
   },root);
 }
@@ -362,7 +362,7 @@ function normalizeConfig(config, baseDirectory) {
     precursor_mz_column:'precursorMzColumn',validation_smiles_column:'validationSmilesColumn',validation_adduct_type_column:'validationAdductTypeColumn',
     validation_collision_energy_column:'validationCollisionEnergyColumn',validation_precursor_mz_column:'validationPrecursorMzColumn',
     minimum_relative_intensity:'minimumRelativeIntensity',
-    num_workers:'numWorkers',chunk_size:'chunkSize',max_unique_fragment_smiles:'maxUniqueFragmentSmiles',max_reaction_combinations:'maxReactionCombinations'};
+    save_all_edges:'saveAllEdges',num_workers:'numWorkers',chunk_size:'chunkSize',max_unique_fragment_smiles:'maxUniqueFragmentSmiles',max_reaction_combinations:'maxReactionCombinations'};
   for(const [from,to] of Object.entries(aliases)){if(result[from]!==undefined&&result[to]===undefined)result[to]=result[from];delete result[from];}
   const chemistry=result.chemistry_config;delete result.chemistry_config;
   if(chemistry){result.fragmenterParams??=chemistry.fragmenter_params;result.symbols??=chemistry.symbols;result.reactionModels??=chemistry.reaction_models||[];}
@@ -468,6 +468,7 @@ function buildArgs(c) {
   // splitting a single dataset (which is what it does without --validation-input).
   if(c.validationRatio !== undefined && c.validationRatio !== '') args.push('--validation-ratio',String(c.validationRatio));
   for(const [key,flag] of Object.entries({testRatio:'--test-ratio',validationSeed:'--validation-seed',minimumRelativeIntensity:'--minimum-relative-intensity',numWorkers:'--num-workers',chunkSize:'--chunk-size'}))if(c[key] !== undefined && c[key] !== '')args.push(flag,String(c[key]));
+  if(c.saveAllEdges)args.push('--save-all-edges');
   for(const [key,flag] of Object.entries({overwrite:'--overwrite'}))if(c[key]!==undefined)args.push(flag,c[key]?'1':'0');
   return args;
 }

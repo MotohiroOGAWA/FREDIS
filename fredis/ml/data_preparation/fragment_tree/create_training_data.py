@@ -178,7 +178,8 @@ def _prepare_group(task, builder, options):
             addable_pattern_ids=options["addable_pattern_ids"],
         )
     structure, kept = builder.build(
-        Compound.from_smiles(smiles), adducts, energies, mzs, intensities, **incremental
+        Compound.from_smiles(smiles), adducts, energies, mzs, intensities,
+        save_all_edges=options.get("save_all_edges", False), **incremental
     )
     kept_rows = [rows[index] for index in kept]
     path = (
@@ -333,6 +334,7 @@ def create_reaction_training_data(
     precursor_mz_column: str = "PrecursorMZ",
     minimum_relative_intensity: float = 0.0,
     overwrite: bool = True,
+    save_all_edges: bool = False,
     split: str = "dataset",
     max_unique_fragment_smiles: int = -1,
     max_reaction_combinations: int = -1,
@@ -416,6 +418,7 @@ def create_reaction_training_data(
     )
     options = dict(
         output_dir=str(output),
+        save_all_edges=save_all_edges,
         adduct_type_column=adduct_type_column,
         collision_energy_column=collision_energy_column,
         precursor_mz_column=precursor_mz_column,
@@ -828,6 +831,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--datasets-json", help="JSON list of dataset paths, per-file mappings and split assignments.")
     parser.add_argument("--dataset-mode", choices=("automatic", "assigned"), default="automatic")
     parser.add_argument("--output-dir", required=True, type=output_directory)
+    parser.add_argument(
+        "--save-all-edges", action="store_true",
+        help="Save all candidate edges and nodes; edges outside positive source nodes are ignored by branch loss.",
+    )
     configure_chemistry_options(parser)
     parser.add_argument(
         "--pretrained-pattern-model",
@@ -1007,6 +1014,7 @@ def main(argv: list[str] | None = None) -> None:
         precursor_mz_column=args.precursor_mz_column,
         minimum_relative_intensity=args.minimum_relative_intensity,
         overwrite=bool(args.overwrite),
+        save_all_edges=args.save_all_edges,
         max_unique_fragment_smiles=args.max_unique_fragment_smiles,
         max_reaction_combinations=args.max_reaction_combinations,
         num_workers=args.num_workers,
@@ -1164,6 +1172,7 @@ def main(argv: list[str] | None = None) -> None:
         "minimum_relative_intensity": "minimumRelativeIntensity",
         "max_unique_fragment_smiles": "maxUniqueFragmentSmiles",
         "max_reaction_combinations": "maxReactionCombinations",
+        "save_all_edges": "saveAllEdges",
         "num_workers": "numWorkers",
         "chunk_size": "chunkSize",
     }
