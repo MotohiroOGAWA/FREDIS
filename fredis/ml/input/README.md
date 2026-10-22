@@ -1,5 +1,7 @@
 # SourceReactionStructure field guide
 
+Relational schema diagrams: [SCHEMA.md](SCHEMA.md).
+
 `SourceReactionStructure` connects source molecular graphs, concrete reactions,
 reaction-set states, observations, and supervision. This guide describes the
 current fields, including separate integer main-adduct IDs and floating-point CE.
