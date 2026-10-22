@@ -465,6 +465,7 @@ function buildArgs(c) {
 
 function buildTrainingArgs(c) {
   if(c.tuning?.enabled){const trials=require('./workbench/tuning').plan(c,buildTrainingArgs);return ['-m','fredis.cli','train','tune-fragment-tree','--plan-json',JSON.stringify({outputDir:c.outputDir,trials})];}
+  c=require('./workbench/reaction-parameters').resolvePatternArchitecture(JSON.parse(JSON.stringify(c)));
   const a = ['-m', 'fredis.cli', 'train', 'fragment-tree',
     '--dataset-dir', c.datasetDir, '--output-dir', c.outputDir,
     '--epochs', String(c.epochs || 1), '--batch-size', String(c.batchSize || 4),
@@ -473,6 +474,8 @@ function buildTrainingArgs(c) {
   if(!c.resume){
     if(c.modelConfig?.reaction_model_params?.pattern_model_params){const model=JSON.parse(JSON.stringify(c.modelConfig||{}));model.reaction_model_params??={};model.dropout=c.dropout??0;delete model.reaction_model_params.edge_dropout;delete model.reaction_model_params.reactant_dropout;for(const params of Object.values(model.reaction_model_params.pattern_model_params||{}))delete params.dropout;model.spectrum_model_params??={};a.push('--model-architecture-json',JSON.stringify({model_config:model}));}
 
+    const frozen=new Set((c.patternArchitecture?.frozenPatternIds||[]).map(String));
+    for(const [pid,params]of Object.entries(c.modelConfig?.reaction_model_params?.pattern_model_params||{})){if(frozen.has(String(pid)))continue;for(const key of require('./workbench/reaction-parameters').fields){if(params[key]!==undefined)a.push('--pattern-'+key.replaceAll('_','-'),pid+'='+params[key]);}}
     const sections={reaction_model_params:{hidden_dim:'reaction-hidden-dim',branch_main_adduct_dim:'reaction-main-adduct-dim',num_heads:'reaction-num-heads',edge_num_layers:'reaction-edge-layers'},spectrum_model_params:{"adduct_embedding_dim":"adduct-embedding-dim","collision_energy_dim": "collision-energy-feature-dim", "ce_fc_dims": "ce-fc-dims", "ce_center": "ce-center", "ce_scale": "ce-scale", "fragment_fc_dims": "fragment-fc-dims", "state_fc_dims": "state-fc-dims"},generation_params:{branch_path_threshold:'branch-path-threshold',max_fragment_nodes:'max-fragment-nodes',peak_intensity_threshold:'peak-intensity-threshold'},mol_encoder_params:{node_dim:'node-dim',graph_dim:'graph-dim',num_layers:'num-layers',num_heads:'num-heads',max_degree:'max-degree',max_spatial_dist:'max-spatial-dist',max_edge_dist:'max-edge-dist'}};
     for(const [section,flags]of Object.entries(sections))for(const [key,flag]of Object.entries(flags)){const value=c.modelConfig?.[section]?.[key];if(value!==undefined&&value!==null)a.push('--'+flag,Array.isArray(value)?value.join(','):String(value));}
     const descriptors=c.modelConfig?.spectrum_model_params?.descriptors;if(Array.isArray(descriptors))a.push('--intensity-descriptors',...descriptors);

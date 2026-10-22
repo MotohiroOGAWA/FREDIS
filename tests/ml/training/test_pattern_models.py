@@ -248,3 +248,39 @@ def test_model_dropout_defaults_to_zero(checkpoints):
     drops = [m for m in generator.modules() if isinstance(m, torch.nn.Dropout)]
     assert drops and all(m.p == 0.0 for m in drops)
     assert all(m.dropout == 0.0 for m in generator.modules() if isinstance(m, torch.nn.MultiheadAttention))
+
+
+def test_individual_cli_pattern_parameters(checkpoints):
+    from fredis.cli.base import namespace_argv
+    from fredis.ml.training.fragment_tree_training.training import build_arg_parser
+    from fredis.ml.training.fragment_tree_training.pattern_models import parse_pattern_parameters, apply_pattern_parameters
+
+    source, _, _ = checkpoints
+    params = torch.load(source, weights_only=False)["model_config"]
+    pid = str(Fragmenter.from_dict(params["fragmenter_params"]).reaction_pattern_set.patterns[0].pattern_id)
+    parser = build_arg_parser()
+    flags = ["--dataset-dir", "dataset", "--output-dir", "output"]
+    values = dict(hidden_dim=12, graph_dim=19, num_layers=3, num_heads=3, neighborhood_hops=0, neighborhood_hidden_dim=7)
+    for key, value in values.items():
+        flags += ["--pattern-" + key.replace("_", "-"), f"{pid}={value}"]
+    args = parser.parse_args(flags)
+    forwarded = parser.parse_args(namespace_argv(parser, args))
+    overrides = parse_pattern_parameters(forwarded)
+    assert overrides == {pid: values}
+    resolved = apply_pattern_parameters(params, overrides)
+    assert all(pattern_config(resolved, pid)[key] == value for key, value in values.items())
+    generator = create_spectrum_generator(resolved)
+    assert generator.feature_model.reaction_instance_encoder.reactant_encoders[pid].graph_dim == 19
+    assert pid not in generator.feature_model.reaction_instance_encoder.neighborhood_encoders
+    assert params != resolved
+    with pytest.raises(ValueError, match="Unknown reaction"):
+        apply_pattern_parameters(params, {"99999": values})
+    with pytest.raises(ValueError, match="Pretrained"):
+        apply_pattern_parameters({**params, "fine_tuning": {"frozen_pattern_ids": [pid]}}, overrides)
+    with pytest.raises(ValueError, match="divisible"):
+        apply_pattern_parameters(params, {pid: {"hidden_dim": 13, "num_heads": 3}})
+    for invalid in ("x=12", "0=1.5", "-1=12", "0=0"):
+        with pytest.raises(ValueError):
+            parse_pattern_parameters(parser.parse_args(["--dataset-dir", "d", "--output-dir", "o", "--pattern-hidden-dim=" + invalid]))
+    with pytest.raises(ValueError, match="Duplicate"):
+        parse_pattern_parameters(parser.parse_args(flags + ["--pattern-hidden-dim", f"{pid}=12"]))

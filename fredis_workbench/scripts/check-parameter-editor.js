@@ -46,6 +46,7 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');
  // Descriptors are chosen only on the post-branch intensity head.
+ assert(!walk(ionRoot).some(node=>node.dataset.parameterPath==='mol_encoder_params.external_feature_dim'));
  assert.equal(ionEditor.getValue().mol_encoder_params.external_feature_dim,0);assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,[]);
  const descriptorBox=name=>walk(ionRoot).find(node=>node.dataset.parameterPath==='spectrum_model_params.descriptors.'+name);
  assert.equal(descriptorBox('FormalCharge').type,'checkbox');assert(!descriptorBox('FormalCharge').checked);assert(!descriptorBox('TPSA').checked);

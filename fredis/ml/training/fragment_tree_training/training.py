@@ -354,6 +354,7 @@ def train_reactions(
     minimum_assignment_score: float = 0.0,
     minimum_assignment_score_without_precursor: float = 0.0,
     initialize_from: str | Path | None = None,
+    pattern_parameters: dict | None = None,
 ) -> dict:
     from dataclasses import replace
     import random
@@ -362,6 +363,8 @@ def train_reactions(
     from ...input.reaction_batching import select_samples
     from torch.utils.tensorboard import SummaryWriter
 
+    if resume and pattern_parameters:
+        raise ValueError("Reaction architecture cannot change on Resume")
     model_config = dict(model_config)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -489,9 +492,11 @@ def train_reactions(
         val_dir,
         saved_model=model_config if resume or params.get("fine_tuning") else None,
     )
-    from .pattern_models import pattern_config, use_shared_dropout
+    from .pattern_models import pattern_config, use_shared_dropout, apply_pattern_parameters
     from fredis.domain.fragment import Fragmenter
 
+    if pattern_parameters:
+        model_config = apply_pattern_parameters(model_config, pattern_parameters)
     if not resume:
         model_config = use_shared_dropout(model_config)
     reaction_params = model_config.setdefault("reaction_model_params", {})
@@ -1287,6 +1292,12 @@ def training_model_config(args):
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_mol_encoder_arguments(parser)
+    from .pattern_models import PATTERN_PARAMETERS
+    for key in PATTERN_PARAMETERS:
+        parser.add_argument(
+            "--pattern-" + key.replace("_", "-"), action="append", metavar="ID=VALUE",
+            help="Set " + key + " for one new reaction pattern; repeat for other IDs. Pretrained reactions stay fixed.",
+        )
     for flag, (_, _, kind, default) in MODEL_OPTIONS.items():
         parser.add_argument(
             "--" + flag, type=kind, default=default,
@@ -1362,6 +1373,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
+    from .pattern_models import parse_pattern_parameters
+    pattern_parameters = parse_pattern_parameters(args)
+    if args.resume and pattern_parameters:
+        raise ValueError("Reaction architecture cannot change on Resume")
     from .sources import prepared_dataset_paths
     args.train_dir, args.val_dir = map(str, prepared_dataset_paths(args.dataset_dir))
     architecture = None
@@ -1403,6 +1418,7 @@ def main(argv: list[str] | None = None) -> None:
         model_config = use_shared_dropout(model_config)
     train_reactions(
         model_config=model_config,
+        pattern_parameters=pattern_parameters,
         train_dir=args.train_dir,
         val_dir=args.val_dir,
         output_dir=args.output_dir,

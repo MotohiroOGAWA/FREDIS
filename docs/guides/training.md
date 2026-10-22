@@ -32,7 +32,22 @@ Use `--resume models/base/last.pt` together with `--dataset-dir` to continue an 
 
 In **Training Data → Fragmentation**, add pretrained reaction models (`.reaction-model.pt` or a complete prediction checkpoint) and new definitions (`.reaction.pft` / `.reactionset.pft`). Imported model definitions are included in the Fragmenter before any reaction enumeration or peak assignment. Lists support per-pattern removal and the same detail component as **Models**.
 
-Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, new patterns have independent `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `neighborhood_hops`, `neighborhood_hidden_dim`. The single **dropout** in Training Configuration (`--dropout`, default 0.5) applies to all newly trained neural networks: Mol Encoder, reaction Graphormers, external neighborhood encoders, reaction readout, branch scoring, Fragment Head, and State Head. CE layers, Adduct embeddings, and Adduct feature projections have no dropout. Network constructor defaults are 0.0; CLI and Workbench supply the shared training default of 0.5. This value is passed explicitly to each network constructor; there is no mutation of dropout rates after construction. Imported pretrained Mol Encoder and reaction features remain frozen with their saved settings. Dropout is disabled during evaluation and prediction. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
+Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, the default **Shared** reaction settings apply `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `neighborhood_hops`, and `neighborhood_hidden_dim` to every new reaction. Switch **Reaction parameter settings → Individual** to edit each reaction separately. Pretrained reactions are excluded from both modes. Mol Encoder and prediction heads keep their own architecture controls. Mol Encoder external feature width is input metadata, not an editable or tunable architecture parameter. Workbench currently supplies no external Mol Encoder features (width 0); its selected descriptors are consumed by the post-branch prediction heads. In tuning mode, enable **Tune** beside a shared reaction parameter to vary every new reaction together in one search dimension; Individual mode tunes each selected reaction independently. The selected mode, fixed values, and candidate lists are saved in the training configuration. The single **dropout** in Training Configuration (`--dropout`, default 0.5) applies to all newly trained neural networks: Mol Encoder, reaction Graphormers, external neighborhood encoders, reaction readout, branch scoring, Fragment Head, and State Head. CE layers, Adduct embeddings, and Adduct feature projections have no dropout. Network constructor defaults are 0.0; CLI and Workbench supply the shared training default of 0.5. This value is passed explicitly to each network constructor; there is no mutation of dropout rates after construction. Imported pretrained Mol Encoder and reaction features remain frozen with their saved settings. Dropout is disabled during evaluation and prediction. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
+
+CLI training uses explicit reaction IDs for every reaction architecture parameter. Repeat each option for additional new reactions; pretrained IDs, unknown IDs, duplicate assignments, and architecture changes on Resume are rejected. For example, configure reaction ID 2:
+
+```bash
+python -m fredis.cli train fragment-tree \
+  --dataset-dir prepared --output-dir trained \
+  --pattern-hidden-dim 2=64 \
+  --pattern-graph-dim 2=128 \
+  --pattern-num-layers 2=3 \
+  --pattern-num-heads 2=4 \
+  --pattern-neighborhood-hops 2=3 \
+  --pattern-neighborhood-hidden-dim 2=32
+```
+
+Workbench expands its Shared settings into these individual CLI options before starting training or a tuning trial.
 
 CLI can add every pattern from a checkpoint during preparation:
 

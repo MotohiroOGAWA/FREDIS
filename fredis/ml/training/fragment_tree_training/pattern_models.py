@@ -63,6 +63,53 @@ def use_shared_dropout(config):
     return config
 
 
+PATTERN_PARAMETERS = (
+    "hidden_dim", "graph_dim", "num_layers", "num_heads",
+    "neighborhood_hops", "neighborhood_hidden_dim",
+)
+
+
+def parse_pattern_parameters(args):
+    result = {}
+    for key in PATTERN_PARAMETERS:
+        for text in getattr(args, "pattern_" + key, None) or []:
+            try:
+                raw_pid, raw_value = text.split("=", 1)
+                pid, value = int(raw_pid), int(raw_value)
+            except (ValueError, TypeError) as error:
+                raise ValueError(f"--pattern-{key.replace('_', '-')} requires ID=INTEGER") from error
+            if pid < 0 or value < (0 if key == "neighborhood_hops" else 1):
+                raise ValueError(f"Invalid pattern {key}: {text}")
+            target = result.setdefault(str(pid), {})
+            if key in target:
+                raise ValueError(f"Duplicate pattern {pid} parameter: {key}")
+            target[key] = value
+    return result
+
+
+def apply_pattern_parameters(config, parameters):
+    """Apply explicit CLI overrides only to trainable, dataset-owned reactions."""
+    config = deepcopy(config)
+    known = {str(p.pattern_id) for p in Fragmenter.from_dict(config["fragmenter_params"]).reaction_pattern_set.patterns}
+    frozen = set(map(str, config.get("fine_tuning", {}).get("frozen_pattern_ids", [])))
+    unknown = set(parameters) - known
+    if unknown:
+        raise ValueError(f"Unknown reaction pattern IDs: {sorted(unknown)}")
+    if set(parameters) & frozen:
+        raise ValueError("Pretrained reaction parameters cannot be changed")
+    overrides = config.setdefault("reaction_model_params", {}).setdefault("pattern_model_params", {})
+    for pid, values in parameters.items():
+        if set(values) - set(PATTERN_PARAMETERS):
+            raise ValueError("Unknown reaction architecture parameter")
+        if any(type(value) is not int or value < (0 if key == "neighborhood_hops" else 1) for key, value in values.items()):
+            raise ValueError("Reaction architecture requires positive integers (hops may be zero)")
+        overrides.setdefault(pid, {}).update(values)
+        resolved = pattern_config(config, pid)
+        if resolved["hidden_dim"] % resolved["num_heads"]:
+            raise ValueError("Reaction hidden dimension must be divisible by attention heads")
+    return config
+
+
 def entries(saved):
     params = saved["model_config"]
     patterns = Fragmenter.from_dict(

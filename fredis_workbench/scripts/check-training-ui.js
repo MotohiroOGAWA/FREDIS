@@ -26,6 +26,7 @@ for(const button of form.querySelectorAll('[data-model-component]')){button.clic
 for(const key of ['fragmenter_params','adduct_type_strs'])assert(!form.querySelector('[data-model-block="'+key+'"]'));
 assert(form.querySelector('[data-model-block="mol_encoder_params"]'));
 assert(form.querySelector('[data-parameter-path="mol_encoder_params.node_dim"]'));
+assert.equal(form.querySelector('[data-parameter-path="mol_encoder_params.external_feature_dim"]'),null);
 assert(!form.querySelector('[data-parameter-path="mol_encoder_params.symbols"]'),'Dataset symbols are inherited, not edited during training');
 const dimension=form.querySelector('[data-parameter-path="reaction_model_params.hidden_dim"]');dimension.value='64';dimension.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.hidden_dim,64);
 assert(!form.querySelector('[id$=SaveDefaults]'));
@@ -158,6 +159,7 @@ const remove=Array.from(d.getElementById('dataPatternModels').querySelectorAll('
 const currentSources=messages.filter(item=>item.type==='training/sources').at(-1);
 const freshPattern={...pattern,pattern_id:0};
 post({type:'training/sources',requestId:currentSources.requestId,modelConfig:preset,patternModels:[{pattern:freshPattern,atom_count:2,architecture:{hidden_dim:8,graph_dim:11,num_layers:1,num_heads:2,dropout:0,descriptors:[],input_mode:'chemical',neighborhood_hops:3,neighborhood_hidden_dim:5}}]});
+const parameterMode=d.getElementById('patternParameterMode');assert.equal(parameterMode.value,'shared');assert(d.querySelector('[data-shared-pattern-parameter=hidden_dim]'));parameterMode.value='individual';parameterMode.dispatchEvent(new w.Event('change',{bubbles:true}));
 const hiddenInput=d.querySelector('#trainingPatternModels [data-pattern-parameter=hidden_dim]');assert(hiddenInput);assert(!d.querySelector('#trainingPatternModels [data-pattern-parameter=node_dim]'));
 hiddenInput.value='12';hiddenInput.dispatchEvent(new w.Event('input',{bubbles:true}));
 const neighborInput=d.querySelector('#trainingPatternModels [data-pattern-parameter=neighborhood_hidden_dim]');neighborInput.value='7';neighborInput.dispatchEvent(new w.Event('input',{bubbles:true}));

@@ -33,7 +33,6 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     adduct_embedding_dim:'Shared precursor-adduct identity embedding width before branch and spectrum projections.',
     branch_main_adduct_dim:'Main-adduct feature width used only by the Branch Scorer.',
     ...Object.fromEntries(molEncoderFields.map(field=>[field[5],field[6]])),
-    external_feature_dim:'Width of caller-supplied graph-level features (0 disables fusion). Nonzero widths require features for every source and generated fragment.',
     descriptors:'Descriptors of materialized fragments used by the spectrum predictor after branch selection (transition scores in competitive mode).',
     num_layers:'Number of transformer layers.',num_heads:'Number of attention heads. Must divide the corresponding hidden dimension.',
     max_degree:'Maximum degree represented in graph structural embeddings.',max_spatial_dist:'Maximum atom graph distance encoded by the molecular encoder.',max_edge_dist:'Maximum bond distance encoded by the molecular encoder.',
@@ -69,10 +68,9 @@ function createParameterEditor(container, initial, kind = "training", editReacti
       'Spectrum Output':['peak_intensity_threshold'],
     },
   };
-  // max_roles is sized automatically and Mol Encoder symbols are owned by the
-  // prepared dataset. A loaded config may carry both, but neither is edited
-  // in the training architecture form.
-  const derivedFromDataset=new Set(['mol_encoder_params.symbols']);
+  // Input vocabulary and external feature width come from actual input data,
+  // not architecture controls. Preserve checkpoint metadata without editing it.
+  const derivedFromInputs=new Set(['mol_encoder_params.symbols','mol_encoder_params.external_feature_dim']);
   // Closed-choice architecture settings are selects, not free-form text inputs.
 
   const basic=new Set(['fragmenter_params.fragment_ion_tree_builder.max_reaction_count','fragmenter_params.precursor_candidate_max_reaction_count','fragmenter_params.mass_tolerance']);
@@ -82,7 +80,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
   const title=key=>String(key).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()).replace('Smarts','SMARTS');
   function help(key,path){return descriptions[path]||descriptions[key]||'Configure '+path.replaceAll('_',' ').replaceAll('.',' / ')+'. This value is passed to the FREDIS Python workflow.';}
   function renderValue(parent,key,host,path,excludeBasic=false){
-    const full=path?path+'.'+key:String(key),value=parent[key];if(excludeBasic&&basic.has(full))return;if(['training','architecture'].includes(kind)&&/dropout$/.test(key))return;if(key==='pattern_model_params'||['reactant_node_dim','reactant_graph_dim','reactant_num_layers','reactant_dropout'].includes(key)&&kind==='training'||derivedFromDataset.has(full))return;
+    const full=path?path+'.'+key:String(key),value=parent[key];if(excludeBasic&&basic.has(full))return;if(['training','architecture'].includes(kind)&&/dropout$/.test(key))return;if(key==='pattern_model_params'||['reactant_node_dim','reactant_graph_dim','reactant_num_layers','reactant_dropout'].includes(key)&&kind==='training'||derivedFromInputs.has(full))return;
     if(key==='reaction_pattern_set'&&editReactionPatternSet){const details=node('details'),summary=node('summary','Reaction Pattern Set · '+(value.name||'(unnamed)')),mount=node('div');mount.className='embedded-set-editor';details.append(summary,mount);details.ontoggle=event=>{if(event.target===details&&details.open)editReactionPatternSet(clone(parent[key]),updated=>{parent[key]=clone(updated);summary.textContent='Reaction Pattern Set · '+(updated.name||'(unnamed)');},mount);};host.append(details);return;}
     if(key==='fragment_ion_adduct_rule_set'&&editAdductRuleSet){const mainAdducts=set=>[...new Set((set.adduct_rules||[]).map(rule=>rule.adduct_type).filter(Boolean))].join(', ')||'no main adducts',details=node('details'),summary=node('summary','Fragment Ion Adduct Rule Set · '+(value.name||'(unnamed)')+' · '+mainAdducts(value)),mount=node('div');mount.className='embedded-set-editor';details.append(summary,mount);details.ontoggle=event=>{if(event.target===details&&details.open)editAdductRuleSet(clone(parent[key]),updated=>{parent[key]=clone(updated);summary.textContent='Fragment Ion Adduct Rule Set · '+(updated.name||'(unnamed)')+' · '+mainAdducts(updated);},mount);};host.append(details);return;}
     if(full==='spectrum_model_params.descriptors'){
