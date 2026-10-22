@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections.abc import Sequence
+import math
 from fredis.ml.input.adduct_data import AdductData
 import torch
 from torch import nn
@@ -68,6 +69,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         max_samples: int = 128,
         adduct_type_strs: Sequence[str] | None = None,
         fine_tuning: dict | None = None,
+        dropout: float | None = None,
     ) -> None:
         super().__init__()
         if type(max_samples) is not int or max_samples < 1:
@@ -97,6 +99,18 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             raise ValueError(
                 "New reaction patterns do not accept descriptors; select intensity descriptors instead"
             )
+        if dropout is not None:
+            if not math.isfinite(dropout) or not 0 <= dropout < 1:
+                raise ValueError("dropout must be finite and in [0, 1)")
+            if not fine_tuning:
+                mol_params["dropout"] = dropout
+            params["edge_dropout"] = dropout
+            params["reactant_dropout"] = dropout
+            params["pattern_model_params"] = {
+                pid: {**value, **({"dropout": dropout} if str(pid) not in frozen else {})}
+                for pid, value in params.get("pattern_model_params", {}).items()
+            }
+            spectrum_params.update(fragment_dropout=dropout, state_dropout=dropout)
         self.mol_encoder = MolEncoder(**mol_params)
         adduct_embedding_dim = spectrum_params.pop("adduct_embedding_dim", 32)
         if type(adduct_embedding_dim) is not int or adduct_embedding_dim < 1:
@@ -193,6 +207,31 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             from .fine_tuning import configure_pattern_training
 
             configure_pattern_training(self, fine_tuning)
+
+        if dropout is not None:
+            # Imported source features stay frozen and retain their saved rates.
+            protected = set()
+            if fine_tuning:
+                protected.update(map(id, self.mol_encoder.modules()))
+            reaction = self.feature_model.reaction_instance_encoder
+            for pid in frozen:
+                for group in (reaction.reactant_encoders, reaction.pattern_heads, reaction.neighborhood_encoders):
+                    if pid in group:
+                        protected.update(map(id, group[pid].modules()))
+            for module in self.modules():
+                if id(module) in protected:
+                    continue
+                if isinstance(module, nn.Dropout):
+                    module.p = dropout
+                elif isinstance(module, nn.MultiheadAttention):
+                    module.dropout = dropout
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        # MolEncoder is shared with spectrum_model, whose train() runs last.
+        if getattr(self.feature_model, "_freeze_mol_encoder", False):
+            self.mol_encoder.eval()
+        return self
 
     def set_generation(self, settings: GenerationSettings) -> None:
         """Search and output settings used by every subsequent prediction."""

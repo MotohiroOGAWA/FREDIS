@@ -30,10 +30,11 @@ class CollisionEnergyFeatureLayer(nn.Module):
             dropout=0.0,
         )
 
-        # CE uses a plain MLP without dropout.
+        # Keep legacy projection parameter names; shared feature dropout is below.
         self.proj = nn.Sequential(*(
             layer for layer in self.proj if not isinstance(layer, nn.Dropout)
         ))
+        self.dropout = nn.Dropout(0.0)
         self._init_weights()
 
     def _init_weights(self):
@@ -86,7 +87,7 @@ class CollisionEnergyFeatureLayer(nn.Module):
         normalized = (ce - self.ce_center) / self.ce_scale.clamp_min(1e-6)
         encoded = normalized
         out = self.proj(encoded)
-        return out
+        return self.dropout(out)
 
     @property
     def feature_dim(self) -> int:

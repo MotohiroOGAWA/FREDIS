@@ -489,9 +489,11 @@ def train_reactions(
         val_dir,
         saved_model=model_config if resume or params.get("fine_tuning") else None,
     )
-    from .pattern_models import pattern_config
+    from .pattern_models import pattern_config, use_shared_dropout
     from fredis.domain.fragment import Fragmenter
 
+    if not resume:
+        model_config = use_shared_dropout(model_config)
     reaction_params = model_config.setdefault("reaction_model_params", {})
     reaction_params["pattern_model_params"] = {
         str(p.pattern_id): pattern_config(model_config, p.pattern_id)
@@ -1280,13 +1282,15 @@ def training_model_config(args):
         value = getattr(args, flag.replace("-", "_"))
         if value is not None or default is not None:
             config[section][key] = value if value is not None else default
-    # Mol Encoder dropout uses --dropout. The reaction-state and spectrum modules have their
-    # own setting to avoid overloading it.
-    fragment_dropout = args.fragment_tree_dropout
+    from .pattern_models import use_shared_dropout
+
+    # One rate for every newly trained neural network.
+    fragment_dropout = args.fragment_tree_dropout if args.fragment_tree_dropout is not None else args.dropout
     config["reaction_model_params"]["edge_dropout"] = fragment_dropout
+    config["reaction_model_params"]["reactant_dropout"] = fragment_dropout
     # A closed-choice architecture setting, kept out of the generic int/float
     # MODEL_OPTIONS loop below.
-    return config
+    return use_shared_dropout(config)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1295,12 +1299,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fragment-tree-dropout",
         type=float,
-        default=0.5,
-        help="Dropout for the reaction state encoder and the spectrum model.",
+        default=None,
+        help="Legacy alias for --dropout (shared across all new neural networks).",
     )
     for flag, (_, _, kind, default) in MODEL_OPTIONS.items():
         parser.add_argument(
-            "--" + flag, type=kind, default=default, help=MODEL_OPTION_HELP.get(flag)
+            "--" + flag, type=kind, default=default,
+            help=argparse.SUPPRESS if flag.endswith("dropout") else MODEL_OPTION_HELP.get(flag)
         )
     for flag, (default, text) in SPECTRUM_LOSS_OPTIONS.items():
         parser.add_argument("--" + flag, type=float, default=default, help=text)
@@ -1406,6 +1411,13 @@ def main(argv: list[str] | None = None) -> None:
             args.val_dir,
             saved_model=None,
         )
+    if not args.resume:
+        from .pattern_models import use_shared_dropout
+
+        model_config["dropout"] = (
+            args.fragment_tree_dropout if args.fragment_tree_dropout is not None else args.dropout
+        )
+        model_config = use_shared_dropout(model_config)
     train_reactions(
         model_config=model_config,
         train_dir=args.train_dir,

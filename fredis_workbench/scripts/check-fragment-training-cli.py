@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from fredis.ml.training.fragment_tree_training.training import build_arg_parser, training_model_config, MODEL_OPTIONS, MOL_ENCODER_OPTIONS
 parser = build_arg_parser()
 base = ['--dataset-dir', 'dataset', '--output-dir', 'out']
-argv = list(base)
+argv = list(base) + ['--dropout', '0.25']
 for flag, (_, _, kind, _) in MODEL_OPTIONS.items():
     value = 'competitive' if flag=='spectrum-prediction-mode' else 'mlp' if flag=='collision-energy-encoding' else '32,16' if flag.endswith('fc-dims') else str(0.25 if kind is float else 64)
     argv += ['--' + flag, value]

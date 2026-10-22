@@ -32,7 +32,7 @@ Use `--resume models/base/last.pt` together with `--dataset-dir` to continue an 
 
 In **Training Data → Fragmentation**, add pretrained reaction models (`.reaction-model.pt` or a complete prediction checkpoint) and new definitions (`.reaction.pft` / `.reactionset.pft`). Imported model definitions are included in the Fragmenter before any reaction enumeration or peak assignment. Lists support per-pattern removal and the same detail component as **Models**.
 
-Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, new patterns have independent `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `dropout`, `neighborhood_hops`, `neighborhood_hidden_dim`. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
+Preparation specifies only reaction definitions and pretrained source references. In **Training → New model**, new patterns have independent `hidden_dim`, `graph_dim`, `num_layers`, `num_heads`, `neighborhood_hops`, `neighborhood_hidden_dim`. The single **dropout** in Training Configuration (`--dropout`, default 0.5) applies to all newly trained neural networks: Mol Encoder, reaction Graphormers, external neighborhood encoders, reaction readout, Adduct features, branch scoring, CE features, Fragment Head, and State Head. Legacy component overrides are ignored for new training. Imported pretrained Mol Encoder and reaction features remain frozen with their saved settings. Dropout is disabled during evaluation and prediction. Imported architectures remain read-only, and Resume locks every architecture setting. `hidden_dim` controls Graphormer attention; raw atom feature width comes from the chemical feature schema and is not configurable per pattern. Atom capacity is derived from SMARTS.
 
 CLI can add every pattern from a checkpoint during preparation:
 
@@ -67,7 +67,7 @@ Training accepts `--model-architecture architecture.json` for per-pattern model 
     "reaction_model_params": {
       "pattern_input_version": 2,
       "pattern_model_params": {
-        "2": {"hidden_dim": 64, "graph_dim": 128, "num_layers": 3, "num_heads": 4, "dropout": 0, "neighborhood_hops": 3, "neighborhood_hidden_dim": 32}
+        "2": {"hidden_dim": 64, "graph_dim": 128, "num_layers": 3, "num_heads": 4, "neighborhood_hops": 3, "neighborhood_hidden_dim": 32}
       }
     }
   }

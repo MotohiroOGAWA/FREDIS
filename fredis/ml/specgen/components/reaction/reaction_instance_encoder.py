@@ -13,6 +13,7 @@ class PatternReactionReadout(nn.Module):
 
     def __init__(self, graph_dim, mol_dim, hidden_dim, rule_count, product_count):
         super().__init__()
+        self.dropout = nn.Dropout(0.0)
         self.rule_embedding = nn.Embedding(rule_count, hidden_dim)
         self.product_embedding = nn.Embedding(product_count, hidden_dim)
         self.context = nn.Linear(mol_dim + hidden_dim, hidden_dim)
@@ -28,7 +29,7 @@ class PatternReactionReadout(nn.Module):
         )
         inputs = [source, category]
         context = self.context(torch.cat(inputs, dim=1))
-        return self.output(torch.cat((atoms, context), dim=1))
+        return self.dropout(self.output(torch.cat((atoms, context), dim=1)))
 
 
 class ReactionInstanceEncoder(nn.Module):

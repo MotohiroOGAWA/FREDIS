@@ -100,6 +100,12 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
     def get_params(self):
         return dict(getattr(self, "_checkpoint_model_config", {}))
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if getattr(self.feature_model, "_freeze_mol_encoder", False):
+            self.feature_model.mol_encoder.eval()
+        return self
+
     def forward(self, data):
         if not hasattr(data, "targets") or data.targets is None:
             raise ValueError("Training requires annotated spectrum targets")

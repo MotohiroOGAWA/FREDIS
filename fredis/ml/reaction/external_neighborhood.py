@@ -15,6 +15,7 @@ class ExternalNeighborhoodEncoder(nn.Module):
         if type(bond_dim) is not int or bond_dim < 0:
             raise ValueError("bond_dim must be a non-negative integer")
         self.hidden_dim, self.hops, self.bond_dim = hidden_dim, hops, bond_dim
+        self.dropout = nn.Dropout(0.0)
         self.atom_projection = nn.Linear(atom_dim, hidden_dim, bias=False)
         self.messages = nn.ModuleList(
             nn.Linear(hidden_dim + bond_dim, hidden_dim, bias=False)
@@ -79,7 +80,7 @@ class ExternalNeighborhoodEncoder(nn.Module):
         parent = torch.tensor(parents, device=device, dtype=torch.long)
         child = torch.tensor(children, device=device, dtype=torch.long)
         bond_ids = torch.tensor(bonds, device=device, dtype=torch.long)
-        state = torch.nn.functional.gelu(self.atom_projection(atoms[ids]))
+        state = self.dropout(torch.nn.functional.gelu(self.atom_projection(atoms[ids])))
         # Root chemistry has its own input channel, so it must not leak into the
         # neighborhood channel, including through projection biases.
         state = state * (depth > 0).unsqueeze(-1)
@@ -94,7 +95,7 @@ class ExternalNeighborhoodEncoder(nn.Module):
             counts = state.new_zeros(state.shape[0]).index_add(
                 0, targets, state.new_ones(targets.numel())
             )
-            state = state + torch.nn.functional.gelu(
+            state = state + self.dropout(torch.nn.functional.gelu(
                 pooled / counts.clamp_min(1).unsqueeze(-1)
-            )
+            ))
         return state[torch.tensor(roots, device=device)].reshape(shape)

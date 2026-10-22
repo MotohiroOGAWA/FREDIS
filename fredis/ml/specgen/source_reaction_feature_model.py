@@ -73,6 +73,7 @@ class SourceReactionFeatureModel(nn.Module):
             nn.Linear(adduct_encoder.feature_dim, branch_main_adduct_dim),
             nn.GELU(),
             nn.LayerNorm(branch_main_adduct_dim),
+            nn.Dropout(0.0),
         )
         if edge_num_layers < 1:
             raise ValueError("edge_num_layers must be positive")

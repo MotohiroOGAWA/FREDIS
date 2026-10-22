@@ -39,8 +39,11 @@ class ConditionHead(nn.Module):
         )
         self.activation = nn.GELU()
         self.dropout = nn.Dropout(dropout)
+        self.input_dropout = nn.Dropout(0.0)
 
     def forward(self, values, condition):
         for layer in self.layers[:-1]:
             values = self.dropout(self.activation(layer(values, condition)))
+        if len(self.layers) == 1:
+            values = self.input_dropout(values)
         return self.layers[-1](values, condition).squeeze(-1)

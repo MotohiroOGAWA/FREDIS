@@ -46,7 +46,7 @@ const inheritedArgs=extension.buildTrainingArgs({modelConfig:{fragmenter_params:
 assert(!inheritedArgs.includes('--params-json'));assert(!inheritedArgs.includes('--fragmenter-params-json'));
 assert.equal(inheritedArgs[inheritedArgs.indexOf('--reaction-hidden-dim')+1],'64');
 assert.equal(inheritedArgs[inheritedArgs.indexOf('--node-dim')+1],'999');
-assert.equal(inheritedArgs[inheritedArgs.indexOf('--fragment-tree-dropout')+1],'0.3');
+assert.equal(inheritedArgs[inheritedArgs.indexOf('--dropout')+1],'0.3');
 assert(!inheritedArgs.includes('--reaction-state-dropout'));assert(!inheritedArgs.includes('--spectrum-dropout'));
 assert(!html.match(/<form id="trainingForm"[\s\S]*?<\/form>/)[0].includes('name="fineTunePatternSet"'));
 const savedTraining=extension.normalizeTrainingConfig({adduct_type_strs:['top'],symbols:['C'],modelConfig:{architecture:'x',fragmenter_params:{x:1},mol_encoder_params:{symbols:['C'],node_dim:9},adduct_type_strs:['nested'],reaction_model_params:{hidden_dim:64},spectrum_model_params:{hidden_dim:32},generation_params:{max_fragment_nodes:50}}});

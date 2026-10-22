@@ -117,7 +117,7 @@ function mode(value){const radio=form.querySelector('input[name=trainingMode][va
 mode('resume');form.elements.resume.value='/model/resume.pt';form.elements.resume.dispatchEvent(event());assert(messages.some(m=>m.type==='training/checkpoint'&&m.path==='/model/resume.pt'));
 const fine={source_checkpoint:'/model/base.pt',version:1,head_only:true};
 post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});assert.equal(form.elements.lr.value,'0.0003');assert(form.elements.lr.disabled);assert(form.elements.dropout.disabled);assert(!form.querySelector('input[name=trainingMode][value=patterns]'));assert(!d.querySelector('#navigationRail [data-page=jobs]'));
-const resumeArgs=ext.buildTrainingArgs(w.eval('getTrainingConfig()'));assert(!resumeArgs.includes('--fragment-tree-dropout'));assert(!resumeArgs.includes('--model-architecture-json'));assert(resumeArgs.includes('--resume'));
+const resumeArgs=ext.buildTrainingArgs(w.eval('getTrainingConfig()'));assert(!resumeArgs.includes('--dropout'));assert(!resumeArgs.includes('--model-architecture-json'));assert(resumeArgs.includes('--resume'));
 const resumeSourceCount=messages.filter(m=>m.type==='training/sources').length,resumeCheckpointCount=messages.filter(m=>m.type==='training/checkpoint').length;post({type:'picked',form:'training',field:'resume',value:'/model/resume.pt'});assert(!inherited.textContent.includes('Reaction Pattern Set'));assert(d.getElementById('trainingStart').disabled);form.elements.resume.dispatchEvent(event());assert.equal(messages.filter(m=>m.type==='training/sources').length,resumeSourceCount+1);assert.equal(messages.filter(m=>m.type==='training/checkpoint').length,resumeCheckpointCount+1);const refreshedResumeSource=messages.filter(m=>m.type==='training/sources').at(-1);post({type:'training/sources',requestId:refreshedResumeSource.requestId,modelConfig:{fragmenter_params:preset.fragmenter_params,mol_encoder_params:preset.mol_encoder_params,adduct_type_strs:preset.adduct_type_strs}});post({type:'training/checkpoint',path:'/model/resume.pt',modelConfig:{...preset,fine_tuning:fine},lr:0.0003,weightDecay:0.02});
 form.querySelector('[data-model-component=reaction_model_params]').click();assert(form.querySelector('[data-parameter-path="reaction_model_params.hidden_dim"]').disabled);assert(form.querySelector('[data-parameter-path="mol_encoder_params.node_dim"]').disabled);
 assert(!form.elements.validationIntervalSteps.disabled);assert(!form.elements.validationFraction.disabled);
@@ -162,7 +162,19 @@ hiddenInput.value='12';hiddenInput.dispatchEvent(new w.Event('input',{bubbles:tr
 const neighborInput=d.querySelector('#trainingPatternModels [data-pattern-parameter=neighborhood_hidden_dim]');neighborInput.value='7';neighborInput.dispatchEvent(new w.Event('input',{bubbles:true}));
 assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.pattern_model_params['0'].hidden_dim,12);
 assert.equal(w.eval('getTrainingConfig()').modelConfig.reaction_model_params.pattern_model_params['0'].neighborhood_hidden_dim,7);
+assert.equal(d.querySelector('#trainingPatternModels [data-pattern-parameter=dropout]'),null);
+const sharedDropout=d.getElementById('trainingForm').elements.dropout;sharedDropout.value='0.3';sharedDropout.dispatchEvent(new w.Event('input',{bubbles:true}));
+const sharedConfig=w.eval('getTrainingConfig()');
+assert.equal(sharedConfig.modelConfig.reaction_model_params.reactant_dropout,0.3);
+if(!sharedConfig.modelConfig.fine_tuning)assert.equal(sharedConfig.modelConfig.mol_encoder_params.dropout,0.3);
+assert.equal(sharedConfig.modelConfig.spectrum_model_params.fragment_dropout,0.3);
+assert.equal(sharedConfig.modelConfig.spectrum_model_params.state_dropout,0.3);
+assert.equal(d.querySelectorAll('#trainingParameterEditor [data-parameter-path$="dropout"]').length,0);
+assert(d.querySelector('#trainingForm input[name="dropout"]').parentElement.textContent.includes('dropout'));
+assert(!('dropout' in sharedConfig.modelConfig.reaction_model_params.pattern_model_params['0']));
 const modelArgs=ext.buildTrainingArgs(w.eval('getTrainingConfig()'));const architectureJSON=JSON.parse(modelArgs[modelArgs.indexOf('--model-architecture-json')+1]);assert.equal(architectureJSON.model_config.reaction_model_params.pattern_model_params['0'].hidden_dim,12);
+assert.equal(architectureJSON.model_config.reaction_model_params.edge_dropout,0.3);
+assert.equal(architectureJSON.model_config.reaction_model_params.reactant_dropout,0.3);
 mode('resume');assert.equal(d.querySelectorAll('#trainingPatternModels input, #trainingPatternModels select').length,0);
 post({type:'models/inspected',target:'models',path:'/models/base.pt',modelConfig:preset,patterns:[inspected]});
 assert(d.getElementById('modelDetails').textContent.includes('123 parameters'));

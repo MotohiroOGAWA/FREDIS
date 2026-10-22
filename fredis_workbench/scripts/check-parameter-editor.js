@@ -36,13 +36,12 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  const current=editor.getValue(),args=buildArgs({input:'input.msds',outputDir:'output',fragmenterParams:current.fragmenter_params});assert(!args.includes('--params'));assert.deepEqual(JSON.parse(args[args.indexOf('--params-json')+1]),current.fragmenter_params);
  const dataArgs=buildArgs({input:'input.msds',outputDir:'out',fragmenterParams:current.fragmenter_params,symbols:current.symbols,maxUniqueFragmentSmiles:500,maxReactionCombinations:1000});assert(dataArgs.includes('--symbols-json'));assert.equal(dataArgs[dataArgs.indexOf('--max-unique-fragment-smiles')+1],'500');assert.equal(dataArgs[dataArgs.indexOf('--max-reaction-combinations')+1],'1000');assert(!dataArgs.includes('--max-node')&&!dataArgs.includes('--max-edge'));
  const trainingArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',modelConfig:current});assert(!trainingArgs.includes('--params'));assert(!trainingArgs.includes('--params-json'));
- // Branch dropout remains linked to the shared setting; the new State Head
- // dropout is independently editable in the spectrum model.
+ // Every component uses the single training dropout setting.
  const dropoutConfigRoot=new Element('div');
  createParameterEditor(dropoutConfigRoot,{reaction_model_params:{edge_dropout:0.3},spectrum_model_params:{}},'training');
  assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.edge_dropout'));
- assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
- assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
+ assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
+ assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');
@@ -74,7 +73,7 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop'));
  // Dropout is one shared training-level flag, not a per-component model_config override.
  const dropoutArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',dropout:0.3});
- assert.equal(dropoutArgs[dropoutArgs.indexOf('--fragment-tree-dropout')+1],'0.3');
+ assert.equal(dropoutArgs[dropoutArgs.indexOf('--dropout')+1],'0.3');
  const sharedDropoutArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',modelConfig:{reaction_model_params:{edge_dropout:0.1},spectrum_model_params:{dropout:0.1}}});
  assert(!sharedDropoutArgs.includes('--reaction-state-dropout'));assert(!sharedDropoutArgs.includes('--spectrum-dropout'));
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-parameter-import-'));try{

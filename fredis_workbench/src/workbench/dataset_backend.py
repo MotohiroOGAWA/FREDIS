@@ -455,7 +455,7 @@ def training_checkpoint(payload):
     }
     restored.setdefault("intensityExponent", 1.0)
     params = config
-    restored["dropout"] = params.get("reaction_model_params", {}).get("edge_dropout", 0)
+    restored["dropout"] = params.get("dropout", params.get("reaction_model_params", {}).get("edge_dropout", 0))
     return {
         "modelConfig": config,
         "patternModels": describe_patterns(config),

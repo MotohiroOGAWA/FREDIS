@@ -213,7 +213,7 @@ def test_mlp_cli_forwarding_and_configuration():
             "48,24",
             "--state-fc-dims",
             "32,16",
-            "--state-dropout",
+            "--dropout",
             "0.2",
         ]
     )
@@ -301,7 +301,7 @@ def test_neutral_loss_precursor_initialization():
     assert output.spectra.metrics["probability_mass_error"] < 1e-5
 
 
-def test_configurable_adduct_embedding_and_dropout_free_ce():
+def test_configurable_adduct_embedding_and_legacy_ce():
     params = competitive_config()
     params["spectrum_model_params"]["adduct_embedding_dim"] = 7
     generator = create_spectrum_generator(params)
@@ -309,7 +309,7 @@ def test_configurable_adduct_embedding_and_dropout_free_ce():
     assert features.adduct_encoder.embedding.embedding_dim == 7
     assert features.main_adduct_projection[0].in_features == 7
     ce = features.collision_energy_encoder
-    assert not any(isinstance(module, torch.nn.Dropout) for module in ce.modules())
+    assert all(module.p == 0 for module in ce.modules() if isinstance(module, torch.nn.Dropout))
     energy = torch.tensor([10.0, 20.0])
     torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
     for width in (0, -1, True):

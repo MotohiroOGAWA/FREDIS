@@ -6,7 +6,6 @@ import argparse
 
 from ....domain.molecule.descriptors import SUPPORTED_DESCRIPTOR_NAMES
 from ...mol.mol_graphormer import (
-    DEFAULT_MOL_GRAPHORMER_DROPOUT,
     DEFAULT_MOL_GRAPHORMER_MAX_DEGREE,
     DEFAULT_MOL_GRAPHORMER_MAX_EDGE_DIST,
     DEFAULT_MOL_GRAPHORMER_MAX_SPATIAL_DIST,
@@ -41,8 +40,8 @@ def add_mol_encoder_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dropout",
         type=float,
-        default=DEFAULT_MOL_GRAPHORMER_DROPOUT,
-        help="Mol Encoder dropout.",
+        default=0.5,
+        help="Shared dropout for all newly trained neural networks.",
     )
     parser.add_argument(
         "--intensity-descriptors",
