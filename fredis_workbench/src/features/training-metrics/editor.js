@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const TRAINING_CONFIG_NAME = 'fragment-tree' + require('../../file-formats').format('training-config').suffix;
 
 function safeResolve(root, relative) {
   if (!relative) return null;
@@ -76,8 +77,9 @@ async function readRun(directory) {
   if (!files.length) throw new Error('No metrics.tsv or metric_distributions.tsv found. Select a training run directory.');
   let maxDepth = null;
   try {
-    const config = JSON.parse(await fs.promises.readFile(path.join(directory, 'training_config.json'), 'utf8'));
-    const value = config.model_config?.fragmenter_params?.fragment_ion_tree_builder?.max_reaction_count;
+    const configPath = safeResolve(directory, report?.artifacts?.trainingConfiguration || TRAINING_CONFIG_NAME);
+    const config = JSON.parse(await fs.promises.readFile(configPath, 'utf8'));
+    const value = config.modelConfig?.fragmenter_params?.fragment_ion_tree_builder?.max_reaction_count;
     if (Number.isInteger(value) && value >= 0) maxDepth = value;
   } catch {}
   const validation = report ? await validationResult(directory, report) : null;

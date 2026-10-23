@@ -405,7 +405,6 @@ def train_reactions(
         key: str(value) if isinstance(value, Path) else value
         for key, value in settings.items()
     }
-    (output / "training_args.json").write_text(json.dumps(settings, indent=2))
     from .report import write_training_report
 
     write_training_report(output, status="initializing", settings=settings)
@@ -507,9 +506,6 @@ def train_reactions(
         ).reaction_pattern_set.patterns
     }
     model_config["max_samples"] = max_samples
-    (output / "training_config.json").write_text(
-        json.dumps({"model_config": model_config, "training": settings}, indent=2)
-    )
     from .configuration import write_training_configuration
     write_training_configuration(output, model_config, settings)
     startup_progress.update(1)
@@ -1402,7 +1398,6 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     output.mkdir(parents=True, exist_ok=True)
-    (output / "training_args.json").write_text(json.dumps(vars(args), indent=2))
     model_config = training_model_config(args)
     if architecture is not None:
         from .sources import inherit_model_config

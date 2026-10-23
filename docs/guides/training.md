@@ -11,7 +11,7 @@ python -m fredis.cli train fragment-tree \
 The command jointly trains a newly initialized Mol Encoder and the
 fragment-tree model.
 
-Each run writes `result.training.pft` for metrics/results and `fragment-tree.training-config.pft` for the actual training settings. Open the result file to inspect metrics; open the configuration file to restore the Training Workbench page. Workbench **Save Configuration** also uses `.training-config.pft`. Relative dataset, output and checkpoint paths in a configuration are resolved from that file's directory.
+Each run writes `result.training.pft` for metrics/results and `fragment-tree.training-config.pft` for the actual training settings. Separate `training_args.json` and `training_config.json` files are not written. Open the result file to inspect metrics; open the configuration file to restore the Training Workbench page. Workbench **Save Configuration** also uses `.training-config.pft`. Relative dataset, output and checkpoint paths in a configuration are resolved from that file's directory.
 
 Prepared compound batches retain canonical SMILES metadata across serialization and device transfers. Previously, the training input's display adapter rebuilt every compound's SMILES on each node lookup. The cached identities and one-list-per-display lookup avoid that quadratic RDKit work; existing prepared files compute the missing identity cache once on loading and need no regeneration.
 

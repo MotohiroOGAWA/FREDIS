@@ -38,7 +38,7 @@ const { readRun, groupSeries, html, script } = require('../src/features/training
     await assert.rejects(readRun(dir), /No metrics\.tsv or metric_distributions\.tsv found/);
     await fs.writeFile(path.join(dir, 'metrics.tsv'), 'event\tepoch\tglobal_step\ttrain_loss\tval_loss\ntrain_step\t1\t10\t3\tnan\nvalidation\t1\t10\t3\t2\ntrain_step\t1\t20\tInfinity\t\ntrain_step\t1\t30');
     await fs.writeFile(path.join(dir, 'metric_distributions.tsv'), 'event\tepoch\tglobal_step\tsplit\tmetric\tvalue\r\ntrain_step\t1\t10\ttrain\tloss_q1\t0.5\r\n');
-    await fs.writeFile(path.join(dir, 'training_config.json'), JSON.stringify({model_config:{fragmenter_params:{fragment_ion_tree_builder:{max_reaction_count:3}}}}));
+    await fs.writeFile(path.join(dir, 'fragment-tree.training-config.pft'), JSON.stringify({modelConfig:{fragmenter_params:{fragment_ion_tree_builder:{max_reaction_count:3}}}}));
     const result = await readRun(dir);
     assert.equal(result.maxDepth, 3);
     assert.deepEqual(result.series.find(s => s.name === 'metrics/val_loss').points, [[10, 2]]);
