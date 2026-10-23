@@ -444,6 +444,7 @@ def training_checkpoint(payload):
         "negative_weight": "negativeWeight",
         "validation_interval_steps": "validationIntervalSteps",
         "validation_fraction": "validationFraction",
+        "validate_before_training": "validateBeforeTraining",
         "intensity_loss_weight": "intensityLossWeight",
         "cosine_loss_weight": "cosineLossWeight",
         "intensity_exponent": "intensityExponent",

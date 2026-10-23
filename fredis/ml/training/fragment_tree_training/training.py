@@ -100,6 +100,8 @@ def _write_metric_artifacts(output: Path, report: dict) -> None:
     events = [
         {"event": "train_step", **item} for item in report.get("train_step_history", [])
     ]
+    if report.get("initial_validation") is not None:
+        events.append({"event": "epoch_end", **report["initial_validation"]})
     events.extend({"event": "epoch_end", **item} for item in report.get("history", []))
     events.sort(
         key=lambda item: (
@@ -364,6 +366,7 @@ def train_reactions(
     train_log_interval_steps: int = 100,
     validation_interval_steps: int = 0,
     validation_fraction: float = 0.1,
+    validate_before_training: bool = False,
     train_mol_encoder: bool = True,
     cache_dataset_in_memory: bool = False,
     minimum_assignment_score: float = 0.0,
@@ -412,6 +415,7 @@ def train_reactions(
             "train_log_interval_steps",
             "validation_interval_steps",
             "validation_fraction",
+            "validate_before_training",
             "minimum_assignment_score",
             "minimum_assignment_score_without_precursor",
         )
@@ -562,6 +566,7 @@ def train_reactions(
     best = float("inf")
     bad_epochs = 0
     history = []
+    initial_validation = None
     intermediate_history = []
     train_step_history = []
     if checkpoint:
@@ -573,6 +578,7 @@ def train_reactions(
         global_step = int(checkpoint.get("global_step", 0))
         best = float(checkpoint.get("best_validation_loss", best))
         history = checkpoint.get("history", [])
+        initial_validation = checkpoint.get("initial_validation")
         intermediate_history = checkpoint.get("intermediate_validation_history", [])
         train_step_history = checkpoint.get("train_step_history", [])
         prior_events = [
@@ -584,7 +590,7 @@ def train_reactions(
             history = [
                 {key: value for key, value in item.items() if key != "event"}
                 for item in prior_events
-                if item.get("event") == "epoch_end"
+                if item.get("event") == "epoch_end" and int(item.get("epoch", 0)) > 0
             ]
         if not train_step_history:
             train_step_history = [
@@ -684,6 +690,7 @@ def train_reactions(
     def metric_report(reason="running"):
         return {
             "history": history,
+            "initial_validation": initial_validation,
             "train_step_history": train_step_history,
             "intermediate_validation_history": intermediate_history,
             "architecture": generator.architecture,
@@ -870,7 +877,95 @@ def train_reactions(
                 )
         iteration_writer.flush()
 
+    def evaluate_initial_model():
+        """Plot an epoch-zero reference without changing training or stopping state."""
+        groups = batch_groups(datasets[1], False)
+        bar = progress_bar(
+            total=len(groups) + len(datasets[1]),
+            description="Validation epoch 0",
+            position=0,
+            leave=True,
+        )
+        was_training = model.training
+        python_rng = random.getstate()
+        torch_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if use_cuda else None
+        totals, batches_metrics = {}, {}
+        count = 0
+        begin = time.perf_counter()
+        try:
+            model.eval()
+            with torch.no_grad():
+                for data in grouped_batches(datasets[1], groups):
+                    data = data.to(device)
+                    result = model(data)
+                    for key, value in metric_values(result).items():
+                        scalar = float(value.detach())
+                        if not math.isfinite(scalar):
+                            raise FloatingPointError(
+                                f"Non-finite initial validation metric {key}"
+                            )
+                        totals[key] = totals.get(key, 0.0) + scalar * data.num_samples
+                        batches_metrics.setdefault(key, []).append(scalar)
+                    count += data.num_samples
+                    del result, data, value
+                    bar.update(1)
+            row = {
+                "epoch": 0,
+                "global_step": 0,
+                "validation_loss": totals.pop("loss") / count,
+                "validation/samples": count,
+                "validation/batches": len(groups),
+            }
+            row.update(
+                {"validation/" + key: value / count for key, value in totals.items()}
+            )
+            append_metric_distributions(
+                output, 0, "validation", batches_metrics, epoch=0
+            )
+            row.update(
+                {
+                    "validation/" + key: value
+                    for key, value in validate_spectra(
+                        generator,
+                        datasets[1],
+                        output,
+                        "epoch_0",
+                        global_step=0,
+                        epoch=0,
+                        progress=lambda _, phase, *rest: (
+                            bar.update(1) if phase == "end" else None
+                        ),
+                    ).items()
+                }
+            )
+            row["epoch_seconds"] = time.perf_counter() - begin
+            for key, value in row.items():
+                if key != "epoch":
+                    writer.add_scalar(key, value, 0)
+            writer.flush()
+            return row
+        finally:
+            model.train(was_training)
+            random.setstate(python_rng)
+            torch.set_rng_state(torch_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+            bar.close()
+
     try:
+        if validate_before_training and not resume:
+            initial_validation = evaluate_initial_model()
+            publish_metrics()
+            write_training_report(
+                output,
+                status="running",
+                settings=settings,
+                datasets=dataset_report,
+                completed_epochs=0,
+                global_step=0,
+                latest_validation="spectrum_validation/epoch_0.json",
+            )
         epoch_progress = progress_bar(
             total=epochs, description="Epoch", position=0, leave=True
         )
@@ -1109,6 +1204,7 @@ def train_reactions(
                 train_step_history=train_step_history,
                 architecture=generator.architecture,
                 history=history,
+                initial_validation=initial_validation,
                 training_settings=settings,
                 best_validation_loss=best,
                 bad_epochs=bad_epochs,
@@ -1374,6 +1470,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Model architecture JSON; reaction definitions and pretrained sources come only from the prepared dataset",
     )
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--validate-before-training",
+        action="store_true",
+        help="Evaluate the initial model on the full validation set and plot epoch 0. Disabled by default; skipped on resume.",
+    )
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--resume")
     parser.add_argument(
@@ -1507,6 +1608,7 @@ def main(argv: list[str] | None = None) -> None:
         train_log_interval_steps=args.train_log_interval_steps,
         validation_interval_steps=args.validation_interval_steps,
         validation_fraction=args.validation_fraction,
+        validate_before_training=args.validate_before_training,
     )
 
 

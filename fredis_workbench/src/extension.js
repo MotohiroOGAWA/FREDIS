@@ -128,7 +128,7 @@ function defaultTrainingConfig(context) {
   return workbenchDefaults.workflowDefaults('training',{
     application: 'fragment-tree-training', modelConfig, datasetDir: '',
     outputDir: '',
-    experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.5,    intensityLossWeight:1, cosineLossWeight:1, intensityExponent:0.5,   gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false,
+    experimentName: 'exp_main', epochs: 1, batchSize: 4, device: 'cuda', maxSamples:128, seed:42, warmupSteps:100, trainLogIntervalSteps:100, validationIntervalSteps:0, validationFraction:0.1, lrPatience:3, earlyStoppingPatience:10, minLr:0.000001, branchWeight:1, negativeWeight:0.5,    intensityLossWeight:1, cosineLossWeight:1, intensityExponent:0.5,   gradientClip:1, lr: 0.0001, dropout: 0.5, resume: '', minimumAssignmentScore:0, minimumAssignmentScoreWithoutPrecursor:0, cacheDatasetInMemory:false, validateBeforeTraining:false,
   },root);
 }
 
@@ -488,6 +488,7 @@ function buildTrainingArgs(c) {
   }
   for (const [key, flag] of Object.entries(workbench.trainingFlags)) if (!(c.resume&&key==='dropout')&&c[key] !== undefined && c[key] !== '') a.push(flag, String(c[key]));
   if(c.cacheDatasetInMemory)a.push('--cache-dataset-in-memory');
+  if(c.validateBeforeTraining)a.push('--validate-before-training');
   if(c.overwrite)a.push('--overwrite');
   if (c.resume) a.push('--resume', c.resume);
   return a;

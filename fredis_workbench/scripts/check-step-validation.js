@@ -23,6 +23,10 @@ Module._load = originalLoad;
   }
   const html = workbenchHtml({}, base);
   assert(html.includes('name="validationFraction"'));
+  assert(html.includes('name="validateBeforeTraining"'));
+  assert(!buildTrainingArgs(normalizeTrainingConfig(base)).includes('--validate-before-training'));
+  assert(buildTrainingArgs(normalizeTrainingConfig({...base, validateBeforeTraining:true})).includes('--validate-before-training'));
+  assert(html.includes('current:Number(row.epoch)'));
   assert(html.includes('Intermediate validation compound fraction'));
   assert(html.includes('All eligible spectra of each selected compound are included.'));
   assert(html.includes('Full validation still runs at each epoch end.'));

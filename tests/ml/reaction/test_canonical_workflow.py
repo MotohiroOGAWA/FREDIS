@@ -393,6 +393,7 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(
         max_samples=2,
         warmup_steps=0,
         validation_interval_steps=1,
+        validate_before_training=device == "cpu",
     )
     subset = json.loads((output / "intermediate_validation_subset.json").read_text())
     assert subset["selection_unit"] == "compound"
@@ -402,8 +403,30 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(
     assert subset["compound_smiles"] == ["CC(N)O"]
     checkpoint = output / "last.pt"
     assert checkpoint.exists()
+    if device == "cuda":
+        assert not (output / "spectrum_validation" / "epoch_0.json").exists()
+        assert (
+            torch.load(checkpoint, map_location="cpu", weights_only=False)[
+                "initial_validation"
+            ]
+            is None
+        )
     if device == "cpu":
         saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        assert saved["initial_validation"]["epoch"] == 0
+        assert saved["initial_validation"]["global_step"] == 0
+        assert len(saved["history"]) == 1 and saved["epoch"] == 1
+        initial_file = output / "spectrum_validation" / "epoch_0.json"
+        initial_mtime = initial_file.stat().st_mtime_ns
+        from fredis.ml.training.fragment_tree_training.training import (
+            _read_metric_events,
+        )
+
+        assert [
+            r["epoch"]
+            for r in _read_metric_events(output / "metrics.tsv")
+            if r["event"] == "epoch_end"
+        ] == [0, 1]
         assert saved["cuda_rng_state"] is None
         assert "cuda_peak_memory_mb" not in saved["history"][-1]
         assert all(v.device.type == "cpu" for v in saved["model_state_dict"].values())
@@ -418,9 +441,17 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(
             epochs=1,
             device="cpu",
             resume=str(checkpoint),
+            validate_before_training=True,
         )
         resumed = torch.load(checkpoint, map_location="cpu", weights_only=False)
         assert resumed["epoch"] == 2 and resumed["cuda_rng_state"] is None
+        assert len(resumed["history"]) == 2
+        assert initial_file.stat().st_mtime_ns == initial_mtime
+        assert [
+            r["epoch"]
+            for r in _read_metric_events(output / "metrics.tsv")
+            if r["event"] == "epoch_end"
+        ] == [0, 1, 2]
     generator = load_generator(
         model_path=str(checkpoint),
         params_path=None,
