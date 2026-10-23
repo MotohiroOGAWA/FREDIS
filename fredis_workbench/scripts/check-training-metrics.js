@@ -61,6 +61,46 @@ const { readRun, groupSeries, html, script } = require('../src/features/training
     await fs.writeFile(reportPath, 'not json');
     await assert.rejects(readRun(reportPath), /not a training report/);
 
+    // Large validation reports must not be read as one V8 string. Include
+    // escaped delimiters and Unicode across stream boundaries and both key orders.
+    const rawFs = require('fs');
+    const {readValidation} = require('../src/features/training-metrics/validation-reader');
+    const validationFile = path.join(dir, 'epoch_0.json');
+    const records = [
+      {name:'first', generated:[{mz:10,intensity:.1}]},
+      {name:'skip', padding:'x'.repeat(180000)},
+      {name:'日本語 "quoted" \u007b brackets } [', generated:[{mz:20,intensity:.9}]}
+    ];
+    const representatives = {cosine_similarity:{q10:{spectrum_index:0,value:.1},q90:{spectrum_index:2,value:.9}}};
+    const summary = {samples:3};
+    const originalReadStream = rawFs.createReadStream;
+    rawFs.createReadStream = (file, options) => {
+      assert.notEqual(options?.encoding, 'buffer');
+      return originalReadStream(file, {...options, highWaterMark:1021});
+    };
+    try {
+      await fs.writeFile(validationFile, JSON.stringify({summary,representatives,spectra:records}));
+      const selected = await readValidation(validationFile);
+      assert.deepEqual(selected.summary, summary);
+      assert.deepEqual(selected.representatives.cosine_similarity.q90.spectrum, records[2]);
+      assert(!JSON.stringify(selected).includes('padding'));
+      rawFs.createReadStream = () => {throw new Error('unchanged validation report reread');};
+      assert.strictEqual(await readValidation(validationFile), selected);
+      rawFs.createReadStream = originalReadStream;
+      records[2].name = 'updated';
+      await fs.writeFile(validationFile, JSON.stringify({spectra:records,representatives,summary}));
+      const reordered = await readValidation(validationFile);
+      assert.equal(reordered.representatives.cosine_similarity.q90.spectrum.name, 'updated');
+      const compact = {summary, representatives:{cosine_similarity:{q10:{spectrum_index:0,value:.1,spectrum:records[0]}}}};
+      const compactFile = validationFile.replace('.json','.summary.json');
+      await fs.writeFile(compactFile, JSON.stringify(compact));
+      const future = new Date(Date.now()+2000); await fs.utimes(compactFile,future,future);
+      assert.deepEqual(await readValidation(validationFile), compact);
+      await fs.rm(compactFile);
+      await fs.writeFile(validationFile, '{"spectra":[{"unfinished":');
+      await assert.rejects(readValidation(validationFile), /incomplete/);
+    } finally { rawFs.createReadStream = originalReadStream; }
+
     console.log('Training metrics parsing and webview syntax checks passed.');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

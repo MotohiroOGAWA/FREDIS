@@ -418,6 +418,24 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(
         assert len(saved["history"]) == 1 and saved["epoch"] == 1
         initial_file = output / "spectrum_validation" / "epoch_0.json"
         initial_mtime = initial_file.stat().st_mtime_ns
+        saved_validation = json.loads(initial_file.read_text())
+        assert saved_validation["summary"]["samples"] == 2
+        assert len(saved_validation["spectra"]) <= 20
+        assert saved_validation["summary"]["saved_spectra"] == len(
+            saved_validation["spectra"]
+        )
+        assert set(saved_validation["representatives"]) == {
+            "cosine_similarity",
+            "cosine_similarity_without_precursor",
+            "assignment_score",
+            "assignment_score_without_precursor",
+        }
+        preview = json.loads(initial_file.with_suffix(".summary.json").read_text())
+        assert preview["summary"]["samples"] == 2
+        assert preview["representatives"]["cosine_similarity"]["median"]["spectrum"][
+            "generated_peaks"
+        ]
+
         from fredis.ml.training.fragment_tree_training.training import (
             _read_metric_events,
         )
