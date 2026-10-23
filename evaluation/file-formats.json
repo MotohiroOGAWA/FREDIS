@@ -3,6 +3,7 @@
   "fallback": { "suffix": ".pft", "viewType": "fredis.resultViewer" },
   "formats": [
     { "id": "training-data-config", "suffix": ".training-data-config.pft", "viewType": "fredis.trainingDataConfigEditor", "editorName": "FREDIS Training Data Configuration", "label": "Training Dataset Settings", "description": "Configure training dataset preparation." },
+    {"id": "training-config", "suffix": ".training-config.pft", "viewType": "fredis.trainingConfigEditor", "editorName": "FREDIS Training Configuration", "label": "Training Settings", "description": "Configure model training in the Training Workbench."},
     { "id": "reaction-analysis-config", "suffix": ".reaction-pattern-analysis.pft", "viewType": "fredis.reactionPatternAnalysisConfigEditor", "editorName": "FREDIS Reaction Pattern Analysis", "label": "Reaction Pattern Analysis Settings", "description": "Configure reaction pattern analysis." },
     { "id": "reaction-analysis-result", "suffix": ".reactionpatternanalysis.pft", "viewType": "fredis.reactionPatternAnalysisResultEditor", "editorName": "FREDIS Reaction Pattern Analysis Result", "label": "Reaction Pattern Analysis Results", "description": "Inspect binary reaction pattern analysis results." },
     { "id": "legacy-result", "suffix": ".fredis-result", "viewType": "fredis.resultViewer", "editorName": "FREDIS Result", "label": "FREDIS Results", "description": "Inspect a saved result manifest." },

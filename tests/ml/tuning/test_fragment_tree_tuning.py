@@ -12,7 +12,7 @@ from fredis.cli.train.commands.tune_fragment_tree import TuneFragmentTreeCommand
 class TuningTests(unittest.TestCase):
     def spec(self, output):
         return {'outputDir': str(output),
-                'baseArgs': ['--train-dir', 'train', '--val-dir', 'validation', '--lr', '0.001'],
+                'baseArgs': ['--dataset-dir', 'prepared', '--lr', '0.001'],
                 'parameters': {'--lr': [0.001, 0.002]}}
 
     def test_cli_and_subprocess_results(self):

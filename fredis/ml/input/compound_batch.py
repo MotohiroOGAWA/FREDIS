@@ -1,6 +1,7 @@
 """Unique molecular structures and the independent sets that generate them."""
 
 from dataclasses import dataclass, replace
+from functools import cached_property
 from torch import Tensor
 from torch_geometric.data import Batch
 from fredis.libs.mmkit.mmkit import Compound
@@ -14,13 +15,13 @@ class CompoundBatch:
     generating_reaction_sets_ptr: Tensor
     generating_reaction_sets_index: Tensor
 
-    @property
+    @cached_property
     def smiles(self) -> tuple[str, ...]:
-        """Derived view; structural identity is not stored twice."""
+        """Canonical identities computed once and retained in serialized data."""
         return tuple(compound.smiles for compound in self.compounds)
 
     def to(self, device):
-        return replace(
+        result = replace(
             self,
             graph=self.graph.clone().to(device),
             generating_reaction_sets_ptr=self.generating_reaction_sets_ptr.to(device),
@@ -28,3 +29,5 @@ class CompoundBatch:
                 device
             ),
         )
+        result.__dict__["smiles"] = self.smiles
+        return result

@@ -74,7 +74,7 @@ function attach(panel,context,projectRoot){
  if(stat.isDirectory())await vscode.commands.executeCommand('revealInExplorer',vscode.Uri.file(resolvedPath));else if(/\.(pft|fredis-result)$/.test(resolvedPath))await vscode.commands.executeCommand('vscode.openWith',vscode.Uri.file(resolvedPath),'fredis.resultViewer');else await vscode.commands.executeCommand('revealInExplorer',vscode.Uri.file(resolvedPath));
  }
  if(message.type==='library/pick'){
- const allowed=['quickTrainDir','quickValDir','quickTrainOutput','quickCheckpoint','quickPredictModel'];if(!allowed.includes(message.target))return;
+ const allowed=['quickDatasetDir','quickTrainOutput','quickCheckpoint','quickPredictModel'];if(!allowed.includes(message.target))return;
  const folder=/Dir|Output/.test(message.target);const selected=await vscode.window.showOpenDialog({canSelectMany:false,canSelectFolders:folder,canSelectFiles:!folder,...(!folder?{filters:{Checkpoint:['pt']}}:{})});if(selected?.[0])post({type:'library/picked',target:message.target,path:selected[0].fsPath});
  }
  if(message.type==='data/model')post({type:'data/model',requestId:message.requestId,...await backend(context,root,'model',{path:message.path})});

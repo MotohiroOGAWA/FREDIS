@@ -33,16 +33,16 @@ class SourceReactionFeatureModel(nn.Module):
         max_reaction_count: int = 3,
         num_heads: int = 4,
         edge_num_layers: int = 2,
-        edge_dropout: float = 0.0,
+        dropout: float = 0.0,
         adduct_encoder: nn.Module | None = None,
         collision_energy_encoder: nn.Module | None = None,
         pattern_smarts: dict[int, str] | None = None,
         reactant_num_layers: int = 2,
-        reactant_dropout: float = 0.0,
         reactant_node_dim: int | None = None,
         reactant_graph_dim: int | None = None,
         pattern_category_sizes: dict[int, tuple[int, int]] | None = None,
         pattern_model_params: dict[str, dict] | None = None,
+        frozen_pattern_ids=(),
     ) -> None:
         super().__init__()
         self.mol_encoder = mol_encoder
@@ -54,7 +54,8 @@ class SourceReactionFeatureModel(nn.Module):
             num_heads,
             pattern_smarts=pattern_smarts,
             reactant_num_layers=reactant_num_layers,
-            reactant_dropout=reactant_dropout,
+            dropout=dropout,
+            frozen_pattern_ids=frozen_pattern_ids,
             reactant_node_dim=reactant_node_dim,
             reactant_graph_dim=reactant_graph_dim,
             pattern_category_sizes=pattern_category_sizes,
@@ -80,7 +81,7 @@ class SourceReactionFeatureModel(nn.Module):
         width = 2 * mol_encoder.graph_dim + hidden_dim + branch_main_adduct_dim
         for _ in range(edge_num_layers):
             layers.extend(
-                [nn.Linear(width, hidden_dim), nn.GELU(), nn.Dropout(edge_dropout)]
+                [nn.Linear(width, hidden_dim), nn.GELU(), nn.Dropout(dropout)]
             )
             width = hidden_dim
         self.edge_head = nn.Sequential(*layers, nn.Linear(width, 1))

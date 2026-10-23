@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections.abc import Sequence
+import math
 from fredis.ml.input.adduct_data import AdductData
 import torch
 from torch import nn
@@ -68,6 +69,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         max_samples: int = 128,
         adduct_type_strs: Sequence[str] | None = None,
         fine_tuning: dict | None = None,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         if type(max_samples) is not int or max_samples < 1:
@@ -97,6 +99,15 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             raise ValueError(
                 "New reaction patterns do not accept descriptors; select intensity descriptors instead"
             )
+        if not math.isfinite(dropout) or not 0 <= dropout < 1:
+            raise ValueError("dropout must be finite and in [0, 1)")
+        if not fine_tuning:
+            mol_params["dropout"] = dropout
+        # Dropout is owned by the generator, never by individual components.
+        for key in ("edge_dropout", "reactant_dropout"):
+            params.pop(key, None)
+        for key in ("fragment_dropout", "state_dropout"):
+            spectrum_params.pop(key, None)
         self.mol_encoder = MolEncoder(**mol_params)
         adduct_embedding_dim = spectrum_params.pop("adduct_embedding_dim", 32)
         if type(adduct_embedding_dim) is not int or adduct_embedding_dim < 1:
@@ -146,6 +157,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 )
                 for pattern in patterns
             },
+            dropout=dropout,
+            frozen_pattern_ids=frozen,
             **params,
         )
         self.tensorizer = FormulaTensorizer.from_symbols_and_adducts(
@@ -185,6 +198,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             main_adduct_conditions=main_adduct_conditions,
             precursor_main_adducts=precursor_main_adducts,
             formula_tensorizer=self.tensorizer,
+            dropout=dropout,
             **spectrum_params,
         )
         self.ion_type_strs = ion_types
@@ -193,6 +207,13 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             from .fine_tuning import configure_pattern_training
 
             configure_pattern_training(self, fine_tuning)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        # MolEncoder is shared with spectrum_model, whose train() runs last.
+        if getattr(self.feature_model, "_freeze_mol_encoder", False):
+            self.mol_encoder.eval()
+        return self
 
     def set_generation(self, settings: GenerationSettings) -> None:
         """Search and output settings used by every subsequent prediction."""

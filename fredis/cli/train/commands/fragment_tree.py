@@ -15,8 +15,7 @@ class FragmentTreeTrainCommand(CLICommand):
     help = "Jointly train the fragment-tree model and molecular encoder."
     description = (
         "Train ReactionFragmentTreeTrainingModel from prepared .preft.pt tensors. "
-        "Pass --fine-tune-checkpoint to expand "
-        "a frozen base checkpoint with patterns inherited from the datasets."
+        "Pass --dataset-dir to inherit reactions and pretrained features from dataset preparation."
     )
     order = 30
 

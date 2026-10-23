@@ -37,7 +37,7 @@ def test_dataset_moves_and_trains_without_original_models(checkpoints,tmp_path,s
         digest=hashlib.sha256(original.read_bytes()).hexdigest()
         copied=next((root/'pretrained_models').glob(digest+'*.pt'))
         assert copied.read_bytes()==original.read_bytes()
-    (root/'preparation_config.json').write_text(json.dumps({'chemistry_config':archived}))
+    (root/'fragment-tree.training-data-config.pft').write_text(json.dumps({'chemistry_config':archived}))
     for name in ('train_structures','validation_structures'):
         directory=root/name;directory.mkdir()
         split=relocate_sources(archived,root,directory)
@@ -45,7 +45,19 @@ def test_dataset_moves_and_trains_without_original_models(checkpoints,tmp_path,s
         (directory/'reaction_statistics.json').write_text(json.dumps({'chemistry_config':split}))
     moved=tmp_path/'relocated';root.rename(moved)
     source.unlink();single.unlink()
-    inherited=inherit_model_config(params,moved/'train_structures',moved/'validation_structures')
+    from fredis.ml.training.fragment_tree_training.sources import prepared_dataset_paths
+    inherited=inherit_model_config(params,*prepared_dataset_paths(moved))
+    import importlib.util
+    backend_file = Path(__file__).resolve().parents[3] / 'fredis_workbench/src/workbench/dataset_backend.py'
+    spec = importlib.util.spec_from_file_location('prepared_training_backend', backend_file)
+    backend = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(backend)
+    inspected = backend.training_sources({'datasetDir': str(moved), 'modelConfig': params})
+    assert inspected['modelConfig']['fine_tuning'] == inherited['fine_tuning']
+    assert all(item['source'] for item in inspected['patternModels'])
+    with pytest.raises(ValueError, match='dataset preparation'):
+        backend.training_sources({'datasetDir': str(moved), 'modelConfig': params,
+                                  'pretrainedPatterns': [{'path': 'other.pt'}]})
     for item in inherited['fine_tuning']['pattern_imports']:
         assert Path(item['path']).is_relative_to(moved)
     generator=create_spectrum_generator(inherited)
@@ -71,3 +83,36 @@ def test_overwrite_stages_models_inside_the_dataset_before_reset(checkpoints,tmp
         rebuilt=staged.install(root)
     assert rebuilt==archived
     assert hashlib.sha256((root/archived['reaction_models'][0]['source']).read_bytes()).hexdigest()==digest
+
+
+def test_training_cli_uses_only_preparation_root_and_rejects_source_overrides(tmp_path):
+    from unittest.mock import patch
+    from fredis.ml.training.fragment_tree_training import training
+    root = tmp_path / 'prepared'
+    for split in ('train_structures', 'validation_structures'):
+        (root / split).mkdir(parents=True)
+    (root / 'fragment-tree.training-data-config.pft').write_text('{}')
+    argv = ['--dataset-dir', str(root), '--output-dir', str(tmp_path / 'training')]
+    with patch.object(training, 'train_reactions') as run:
+        training.main(argv)
+    assert Path(run.call_args.kwargs['train_dir']) == root / 'train_structures'
+    assert Path(run.call_args.kwargs['val_dir']) == root / 'validation_structures'
+    assert run.call_args.kwargs['initialize_from'] is None
+    for flag in ('--fine-tune-checkpoint', '--initialize-from', '--head-only', '--train-dir', '--val-dir'):
+        with pytest.raises(SystemExit):
+            training.build_arg_parser().parse_args(argv + [flag, 'other.pt'])
+    with pytest.raises(ValueError, match='dataset preparation'), patch.object(training, 'train_reactions') as run:
+        training.main(argv + ['--model-architecture-json', json.dumps({'pretrained_patterns': [{'path': 'other.pt'}]})])
+    run.assert_not_called()
+
+
+def test_preparation_root_requires_both_splits_and_shared_configuration(tmp_path):
+    from fredis.ml.training.fragment_tree_training.sources import prepared_dataset_paths
+    with pytest.raises(ValueError, match='configuration'):
+        prepared_dataset_paths(tmp_path)
+    (tmp_path / 'fragment-tree.training-data-config.pft').write_text('{}')
+    (tmp_path / 'train_structures').mkdir()
+    with pytest.raises(ValueError, match='validation_structures'):
+        prepared_dataset_paths(tmp_path)
+    (tmp_path / 'validation_structures').mkdir()
+    assert prepared_dataset_paths(tmp_path) == (tmp_path / 'train_structures', tmp_path / 'validation_structures')

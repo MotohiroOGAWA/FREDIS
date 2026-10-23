@@ -196,7 +196,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                 4,
             )
             self.assertEqual(len(list((root / "cli").rglob("*.preft.pt"))), 1)
-            saved = json.loads((root / "cli/preparation_config.json").read_text())
+            saved = json.loads((root / "cli/fragment-tree.training-data-config.pft").read_text())
             self.assertEqual(saved["input"], str(file))
             self.assertEqual(saved["max_unique_fragment_smiles"], -1)
             self.assertEqual(saved["max_reaction_combinations"], -1)
@@ -411,13 +411,18 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(saved["validationSeed"], 7)
             self.assertEqual(saved["maxUniqueFragmentSmiles"], 100)
             self.assertEqual(saved["maxReactionCombinations"], 200)
-            prepared = json.loads((output / "preparation_config.json").read_text())
+            prepared = json.loads((output / "fragment-tree.training-data-config.pft").read_text())
+            self.assertFalse((output / "preparation_config.json").exists())
+            self.assertFalse((output / "fragment-tree.training-data.pft").exists())
             self.assertEqual(
-                prepared,
-                json.loads(
-                    (output / "fragment-tree.training-data-config.pft").read_text()
-                ),
+                json.loads((output / "fragment-tree.fragmenter.pft").read_text()),
+                prepared["chemistry_config"]["fragmenter_params"],
             )
+            for split in ("train_structures", "validation_structures"):
+                for filename in ("fragment-tree.training-data.pft", "invalid_records.json",
+                                 "manifest.tsv", "assignment_scores.tsv",
+                                 "reaction_statistics.json", "skipped_sources.json"):
+                    self.assertTrue((output / split / filename).is_file(), (split, filename))
             self.assertEqual(prepared["max_unique_fragment_smiles"], 100)
             self.assertEqual(prepared["max_reaction_combinations"], 200)
             self.assertEqual(saved["minimumRelativeIntensity"], 0.2)
@@ -612,7 +617,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             self.assertEqual(
                 len(list((root / "out/validation_structures").rglob("*.preft.pt"))), 2
             )
-            self.assertTrue((root / "out/preparation_config.json").is_file())
+            self.assertTrue((root / "out/fragment-tree.training-data-config.pft").is_file())
             self.assertFalse(
                 (root / "out/train_structures/preparation_config.json").exists()
             )
@@ -733,7 +738,11 @@ class TestPreparationWorkflow(unittest.TestCase):
             build_arg_parser,
         )
 
-        options = build_arg_parser()._option_string_actions
+        parser = build_arg_parser()
+        base = ["--input", "missing.msds", "--output-dir", "unused"]
+        self.assertFalse(parser.parse_args(base).save_all_edges)
+        self.assertTrue(parser.parse_args(base + ["--save-all-edges"]).save_all_edges)
+        options = parser._option_string_actions
         for flag in (
             "--node-dim",
             "--max-fragment-nodes",
@@ -1050,11 +1059,11 @@ class TestPreparationWorkflow(unittest.TestCase):
 
         real_build = ReactionStructureBuilder.build
 
-        def build(builder, source, *args):
+        def build(builder, source, *args, **kwargs):
             if source.smiles == "CCN":
-                real_build(builder, Compound.from_smiles("CCN"), *args)
+                real_build(builder, Compound.from_smiles("CCN"), *args, **kwargs)
                 raise RuntimeError("after the tree search")
-            return real_build(builder, source, *args)
+            return real_build(builder, source, *args, **kwargs)
 
         model = chemistry()
         model["fragmenter_params"]["fragment_ion_tree_builder"][
@@ -1162,7 +1171,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                         "1",
                     ]
                 )
-            saved = json.loads((root / "out/preparation_config.json").read_text())
+            saved = json.loads((root / "out/fragment-tree.training-data-config.pft").read_text())
             script = """
 const Module=require('module'),load=Module._load;
 Module._load=function(name,...rest){return name==='vscode'?{window:{},Uri:{file:fsPath=>({fsPath})}}:load.call(this,name,...rest);};
@@ -1192,3 +1201,24 @@ process.stdout.write(JSON.stringify({config,args:buildArgs(config)}));
         self.assertEqual(
             (args.max_unique_fragment_smiles, args.max_reaction_combinations), (30, 400)
         )
+
+    def test_full_graph_storage_through_parallel_preparation(self):
+        from fredis.ml.data_preparation.fragment_tree.create_training_data import create_reaction_training_data
+        from fredis.ml.input.source_reaction_structure import SourceReactionStructure
+
+        model = chemistry()
+        model["fragmenter_params"]["fragment_ion_tree_builder"]["max_reaction_count"] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            for save_all in (False, True):
+                files = create_reaction_training_data(
+                    dataset=self.dataset(), chemistry_config=model,
+                    output_dir=Path(directory) / str(save_all),
+                    save_all_edges=save_all, num_workers=2, chunk_size=2,
+                )
+                self.assertEqual(len(files), 4)
+                for path in files:
+                    data = SourceReactionStructure.load(path)
+                    # This dataset observes only precursor peaks: no positive branches.
+                    # Root continuations are weak negatives even without positives.
+                    self.assertGreater(data.compound_graph.reaction_index.numel(), 0)
+                    self.assertTrue((data.reaction_contexts.edge_label == 0).all())

@@ -14,7 +14,7 @@ from fredis.libs.mmkit.mmkit import Compound, Adduct
 from .TestReactionPipeline import config
 
 
-def test_compound_batch_stores_no_duplicate_identity_or_reference_side_columns(
+def test_compound_batch_retains_identity_cache_without_reference_side_columns(
     tmp_path,
 ):
     generator = create_spectrum_generator(config())
@@ -36,7 +36,6 @@ def test_compound_batch_stores_no_duplicate_identity_or_reference_side_columns(
     }
     assert isinstance(table.compounds, tuple)
     assert all(isinstance(compound, Compound) for compound in table.compounds)
-    assert "smiles" not in vars(table)
     assert table.smiles == tuple(compound.smiles for compound in table.compounds)
     assert table.graph.num_graphs == len(set(table.smiles))
     assert table.generating_reaction_sets_ptr.shape == (len(table.compounds) + 1,)
@@ -53,7 +52,9 @@ def test_compound_batch_stores_no_duplicate_identity_or_reference_side_columns(
     loaded = SourceReactionStructure.load(path)
     loaded.validate()
     assert isinstance(loaded.compounds, CompoundBatch)
-    assert "smiles" not in vars(loaded.compounds)
+    # Identity is still derived from immutable compounds; its cached strings
+    # are retained on disk so training does not regenerate them with RDKit.
+    assert vars(loaded.compounds)["smiles"] == table.smiles
     assert loaded.compounds.smiles == table.smiles
     assert "descriptors" not in loaded.spectrum_batch.decoded.node_graph
 

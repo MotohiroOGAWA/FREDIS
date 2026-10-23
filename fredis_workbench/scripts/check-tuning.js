@@ -7,6 +7,8 @@ assert.throws(()=>plan({...base,resume:'saved.pt'},()=>[]),/new model/);
 assert.throws(()=>plan({...base,tuning:{parameters:{lr:[null]}}},()=>[]),/numeric/);
 assert.throws(()=>plan({...base,tuning:{parameters:{'modelConfig.mol_encoder_params.node_dim':[33]}}},()=>[]),/divisible/);
 assert.equal(plan({...base,tuning:{parameters:{lr:Array.from({length:129},(_,i)=>i+1)}}},()=>[]).length,129);
+assert.throws(()=>plan({...base,tuning:{parameters:{'modelConfig.mol_encoder_params.dropout':[0.2]}}},()=>[]),/shared dropout/);
+assert.throws(()=>plan({...base,tuning:{parameters:{'modelConfig.mol_encoder_params.external_feature_dim':[16,32]}}},()=>[]),/supplied features/);
 console.log('Tuning trial expansion, isolation, resume lock and validation passed.');
 const {JSDOM,VirtualConsole}=require('jsdom'),Module=require('module'),load=Module._load;
 Module._load=function(name,parent,main){return name==='vscode'?{}:load.call(this,name,parent,main);};
@@ -25,37 +27,10 @@ assert.equal(ext.buildTrainingArgs(w.eval('getTrainingConfig()'))[3],'tune-fragm
 d.getElementById('trainingTuningToggle').click();assert.equal(w.eval('getTrainingConfig()').tuning.enabled,false);assert(ext.buildTrainingArgs(w.eval('getTrainingConfig()')).includes('fragment-tree'));
 assert.deepEqual(errors,[]);setImmediate(()=>dom.window.close());
 console.log('Tuning mode toggle, candidate editing, configuration snapshot and CLI integration passed.');
-const hopKey=id=>'modelConfig.reaction_model_params.pattern_model_params.'+id+'.neighborhood_hops';
-const linked=JSON.parse(JSON.stringify(base));
-linked.modelConfig.reaction_model_params.pattern_model_params={1:{neighborhood_hops:3},2:{neighborhood_hops:3},3:{neighborhood_hops:3}};
-linked.tuning={parameters:Object.fromEntries([1,2,3].map(id=>[hopKey(id),[1,2,3]])),groups:Object.fromEntries([1,2,3].map(id=>[hopKey(id),'hops']))};
-const linkedTrials=plan(linked,c=>['--hops',String(c.modelConfig.reaction_model_params.pattern_model_params[2].neighborhood_hops)]);
-assert.equal(linkedTrials.length,3);
-linkedTrials.forEach((trial,i)=>{for(const item of Object.values(trial.config.modelConfig.reaction_model_params.pattern_model_params))assert.equal(item.neighborhood_hops,i+1);assert.equal(trial.args[1],String(i+1));});
-assert.equal(linked.modelConfig.reaction_model_params.pattern_model_params[1].neighborhood_hops,3);
-linked.tuning.parameters.lr=[0.001,0.002];assert.equal(plan(linked,()=>[]).length,6);
-delete linked.tuning.groups[hopKey(3)];assert.equal(plan(linked,()=>[]).length,18);
-linked.tuning.parameters[hopKey(2)]=[1,2];assert.throws(()=>plan(linked,()=>[]),/same candidates/);
-linked.tuning.parameters[hopKey(2)]=[1,2,3];linked.tuning.parameters[hopKey(1)]=[1.5];linked.tuning.parameters[hopKey(2)]=[1.5];assert.throws(()=>plan(linked,()=>[]),/Integer/);
-(async()=>{
- d.getElementById('trainingTuningToggle').click();
- check.checked=false;check.dispatchEvent(new w.Event('change',{bubbles:true}));
- const host=d.createElement('div');
- for(const id of [1,2,3]){const section=d.createElement('div');section.dataset.patternId=String(id);const label=d.createElement('label'),input=d.createElement('input');input.type='number';input.value='3';input.dataset.patternParameter='neighborhood_hops';label.append(input);section.append(label);host.append(section);}
- d.getElementById('trainingForm').append(host);host.dispatchEvent(new w.Event('input',{bubbles:true}));await Promise.resolve();
- const first=host.querySelector('.tuning-control'),inputs=first.querySelectorAll('input');inputs[0].checked=true;inputs[0].dispatchEvent(new w.Event('change',{bubbles:true}));inputs[1].value='1, 2, 3';inputs[1].dispatchEvent(new w.Event('input',{bubbles:true}));first.querySelector('button').click();
- let snapshot=w.eval('getTrainingConfig()').tuning;for(const id of [1,2,3])assert.equal(JSON.stringify(snapshot.parameters[hopKey(id)]),'[1,2,3]');assert.match(d.getElementById('trainingTuningStatus').textContent,/3 trials/);
- inputs[1].value='1, 2';inputs[1].dispatchEvent(new w.Event('input',{bubbles:true}));snapshot=w.eval('getTrainingConfig()').tuning;assert.equal(JSON.stringify(snapshot.parameters[hopKey(2)]),'[1,2]');
- const second=host.querySelectorAll('.tuning-control')[1],group=second.querySelector('[data-tuning-group]');group.value='';group.dispatchEvent(new w.Event('change',{bubbles:true}));assert(!w.eval('getTrainingConfig()').tuning.groups[hopKey(2)]);assert.match(d.getElementById('trainingTuningStatus').textContent,/4 trials/);
- group.value='all-patterns:neighborhood_hops';group.dispatchEvent(new w.Event('change',{bubbles:true}));assert.match(d.getElementById('trainingTuningStatus').textContent,/2 trials/);
- // Browser checkbox input arrives before change; refresh must preserve the new value.
- inputs[0].checked=false;inputs[0].dispatchEvent(new w.Event('input',{bubbles:true}));await Promise.resolve();
- assert.equal(inputs[0].checked,false);assert(!w.eval('getTrainingConfig()').tuning.parameters[hopKey(1)]);assert(!w.eval('getTrainingConfig()').tuning.groups[hopKey(1)]);
- inputs[0].dispatchEvent(new w.Event('change',{bubbles:true}));assert.equal(inputs[0].checked,false);
- first.querySelector('button').click();assert.equal(first.querySelector('button').textContent,'Unlink all patterns');assert.equal(first.querySelector('button').getAttribute('aria-pressed'),'true');
- first.querySelector('button').click();snapshot=w.eval('getTrainingConfig()').tuning;
- for(const id of [1,2,3]){assert(!snapshot.groups[hopKey(id)]);assert(snapshot.parameters[hopKey(id)]);}
- assert.equal(first.querySelector('button').textContent,'Link all patterns');assert.equal(first.querySelector('button').getAttribute('aria-pressed'),'false');
- inputs[0].click();await Promise.resolve();assert.equal(inputs[0].checked,false);assert(!w.eval('getTrainingConfig()').tuning.parameters[hopKey(1)]);
- assert.deepEqual(errors,[]);console.log('Linked pattern grids, independent dimensions, validation, group editing and UI candidate synchronization passed.');
-})().catch(e=>{console.error(e);process.exitCode=1;});
+const shared={...base,patternArchitecture:{mode:'shared',shared:{hidden_dim:32,num_heads:4,neighborhood_hops:3},frozenPatternIds:['3']},modelConfig:{...base.modelConfig,reaction_model_params:{pattern_model_params:{1:{hidden_dim:32,num_heads:4,neighborhood_hops:3},2:{hidden_dim:64,num_heads:4,neighborhood_hops:2},3:{hidden_dim:96,num_heads:4,neighborhood_hops:1}}}},tuning:{parameters:{'patternArchitecture.shared.neighborhood_hops':[1,2,3]}}};
+const sharedTrials=plan(shared,c=>[String(c.modelConfig.reaction_model_params.pattern_model_params[2].neighborhood_hops)]);
+assert.equal(sharedTrials.length,3);sharedTrials.forEach((trial,i)=>{assert.equal(trial.config.modelConfig.reaction_model_params.pattern_model_params[1].neighborhood_hops,i+1);assert.equal(trial.config.modelConfig.reaction_model_params.pattern_model_params[2].neighborhood_hops,i+1);assert.equal(trial.config.modelConfig.reaction_model_params.pattern_model_params[3].neighborhood_hops,1);});
+assert.throws(()=>plan({...shared,tuning:{parameters:{'modelConfig.reaction_model_params.pattern_model_params.3.hidden_dim':[32]}}},()=>[]),/Pretrained/);
+assert.throws(()=>plan({...shared,tuning:{parameters:{'modelConfig.reaction_model_params.pattern_model_params.1.hidden_dim':[32]}}},()=>[]),/Shared mode/);
+assert.throws(()=>plan({...shared,tuning:{parameters:{'patternArchitecture.shared.neighborhood_hops':[1.5]}}},()=>[]),/integer/);
+console.log('Shared reaction candidate expansion and pretrained exclusion passed.');

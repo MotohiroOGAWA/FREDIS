@@ -99,3 +99,188 @@ def test_raw_pattern_position_capacity_is_independent_of_legacy_roles(checkpoint
     reaction=generator.feature_model.reaction_instance_encoder
     assert not hasattr(reaction,'roles')
     assert any(encoder.position_count==70 and encoder.node_proj.in_features==encoder.atom_dim+70 for encoder in reaction.reactant_encoders.values())
+
+
+def test_shared_dropout_is_authoritative(checkpoints):
+    from fredis.ml.training.fragment_tree_training.pattern_models import use_shared_dropout
+
+    source, _, _ = checkpoints
+    original = torch.load(source, weights_only=False)["model_config"]
+    params = deepcopy(original)
+    reaction = params.setdefault("reaction_model_params", {})
+    params["dropout"] = 0.35
+    reaction["reactant_dropout"] = 0.1
+    pid = str(Fragmenter.from_dict(params["fragmenter_params"]).reaction_pattern_set.patterns[0].pattern_id)
+    reaction.setdefault("pattern_model_params", {}).setdefault(pid, {})["dropout"] = 0.8
+    shared = use_shared_dropout(params)
+    assert reaction["pattern_model_params"][pid]["dropout"] == 0.8
+    assert "dropout" not in shared["reaction_model_params"]["pattern_model_params"][pid]
+    generator = create_spectrum_generator(shared)
+    encoders = generator.feature_model.reaction_instance_encoder
+    for config in encoders.pattern_model_params.values():
+        assert config["dropout"] == 0.35
+    for encoder in encoders.reactant_encoders.values():
+        drops = [module for module in encoder.modules() if isinstance(module, torch.nn.Dropout)]
+        assert drops and all(module.p == 0.35 for module in drops)
+    edge_drops = [module for module in generator.feature_model.edge_head.modules() if isinstance(module, torch.nn.Dropout)]
+    assert edge_drops and all(module.p == 0.35 for module in edge_drops)
+    for invalid in (-0.1, 1, float("nan")):
+        params["dropout"] = invalid
+        with pytest.raises(ValueError, match="Shared dropout"):
+            use_shared_dropout(params)
+
+
+def test_global_dropout_covers_all_new_networks_and_eval(checkpoints):
+    from fredis.ml.training.fragment_tree_training.pattern_models import use_shared_dropout
+
+    source, _, _ = checkpoints
+    params = deepcopy(torch.load(source, weights_only=False)["model_config"])
+    params["dropout"] = 0.4
+    params.pop("fine_tuning", None)
+    params["spectrum_model_params"].update(fragment_fc_dims=[], state_fc_dims=[])
+    shared = use_shared_dropout(params)
+    generator = create_spectrum_generator(shared)
+    features = generator.feature_model
+    groups = [
+        generator.mol_encoder,
+        features.edge_head,
+        *features.reaction_instance_encoder.reactant_encoders.values(),
+        *features.reaction_instance_encoder.neighborhood_encoders.values(),
+        *features.reaction_instance_encoder.pattern_heads.values(),
+        *generator.spectrum_model.fragment_heads.values(),
+        *generator.spectrum_model.state_heads.values(),
+    ]
+    for network in groups:
+        drops = [m for m in network.modules() if isinstance(m, torch.nn.Dropout)]
+        assert drops and all(m.p == 0.4 for m in drops), type(network)
+    for module in generator.modules():
+        if isinstance(module, torch.nn.MultiheadAttention):
+            assert module.dropout == 0.4
+    head = next(iter(generator.spectrum_model.fragment_heads.values()))
+    with torch.no_grad():
+        head.layers[0].weight.fill_(1)
+        head.layers[0].bias.zero_()
+    values = torch.ones(128, head.layers[0].weight.shape[-1])
+    condition = torch.zeros(128, dtype=torch.long)
+    generator.train()
+    assert not torch.equal(head(values, condition), head(values, condition))
+    generator.eval()
+    torch.testing.assert_close(head(values, condition), head(values, condition), rtol=0, atol=0)
+    ce = features.collision_energy_encoder
+    energy = torch.linspace(1, 100, 128)
+    generator.train()
+    assert not any(isinstance(m, torch.nn.Dropout) for m in ce.modules())
+    assert not any(isinstance(m, torch.nn.Dropout) for m in features.adduct_encoder.modules())
+    assert not any(isinstance(m, torch.nn.Dropout) for m in features.main_adduct_projection.modules())
+    torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
+    adduct_index = torch.zeros(128, dtype=torch.long)
+    torch.testing.assert_close(features.adduct_encoder(adduct_index), features.adduct_encoder(adduct_index), rtol=0, atol=0)
+    generator.eval()
+    torch.testing.assert_close(ce(energy), ce(energy), rtol=0, atol=0)
+    # Reconstructing a saved architecture preserves keys and rates.
+    restored = create_spectrum_generator(shared)
+    restored.load_state_dict(generator.state_dict(), strict=True)
+    restored.eval()
+    torch.testing.assert_close(ce(energy), restored.feature_model.collision_energy_encoder(energy))
+
+
+def test_global_dropout_preserves_imported_features(checkpoints):
+    from fredis.ml.training.fragment_tree_training.pattern_models import use_shared_dropout
+
+    source, _, _ = checkpoints
+    original = torch.load(source, weights_only=False)["model_config"]
+    imported = assemble_config(original, [dict(path=str(source))])
+    imported["dropout"] = 0.45
+    shared = use_shared_dropout(imported)
+    assert shared["mol_encoder_params"] == imported["mol_encoder_params"]
+    before = create_spectrum_generator(imported)
+    generator = create_spectrum_generator(shared)
+    initialize_imports(generator, shared)
+    generator.train()
+    reaction = generator.feature_model.reaction_instance_encoder
+    old_reaction = before.feature_model.reaction_instance_encoder
+    protected = [(generator.mol_encoder, before.mol_encoder)]
+    for pid in reaction.frozen_pattern_ids:
+        for new_group, old_group in zip(
+            (reaction.reactant_encoders, reaction.pattern_heads, reaction.neighborhood_encoders),
+            (old_reaction.reactant_encoders, old_reaction.pattern_heads, old_reaction.neighborhood_encoders),
+        ):
+            if pid in new_group:
+                protected.append((new_group[pid], old_group[pid]))
+    for network, old in protected:
+        assert not network.training
+        assert not any(p.requires_grad for p in network.parameters())
+        assert [m.p for m in network.modules() if isinstance(m, torch.nn.Dropout)] == [
+            m.p for m in old.modules() if isinstance(m, torch.nn.Dropout)
+        ]
+    assert not any(isinstance(m, torch.nn.Dropout) for m in generator.feature_model.collision_energy_encoder.modules())
+    assert generator.feature_model.collision_energy_encoder.training
+    wrapper = ReactionFragmentTreeTrainingModel(generator.feature_model, spectrum_model=generator.spectrum_model)
+    wrapper.train()
+    assert not generator.mol_encoder.training
+    assert all(not reaction.reactant_encoders[pid].training for pid in reaction.frozen_pattern_ids)
+
+
+def test_leaf_networks_receive_dropout_at_construction(checkpoints):
+    from fredis.ml.mol.mol_encoder import MolEncoder
+    from fredis.ml.reaction.external_neighborhood import ExternalNeighborhoodEncoder
+    from fredis.ml.specgen.components.condition.condition_linear import ConditionHead
+    from fredis.ml.specgen.components.reaction.reaction_instance_encoder import PatternReactionReadout
+
+    source, _, _ = checkpoints
+    mol_params = torch.load(source, weights_only=False)["model_config"]["mol_encoder_params"]
+    networks = [
+        MolEncoder(**{**mol_params, "dropout": 0.3, "external_feature_dim": 4}),
+        ExternalNeighborhoodEncoder(4, 8, 2, dropout=0.3),
+        ConditionHead(2, 8, (), dropout=0.3),
+        PatternReactionReadout(8, 8, 8, 2, 2, dropout=0.3),
+    ]
+    for network in networks:
+        drops = [m for m in network.modules() if isinstance(m, torch.nn.Dropout)]
+        assert drops and all(m.p == 0.3 for m in drops), type(network)
+
+
+def test_model_dropout_defaults_to_zero(checkpoints):
+    source, _, _ = checkpoints
+    params = deepcopy(torch.load(source, weights_only=False)["model_config"])
+    params.pop("dropout", None)
+    generator = create_spectrum_generator(params)
+    drops = [m for m in generator.modules() if isinstance(m, torch.nn.Dropout)]
+    assert drops and all(m.p == 0.0 for m in drops)
+    assert all(m.dropout == 0.0 for m in generator.modules() if isinstance(m, torch.nn.MultiheadAttention))
+
+
+def test_individual_cli_pattern_parameters(checkpoints):
+    from fredis.cli.base import namespace_argv
+    from fredis.ml.training.fragment_tree_training.training import build_arg_parser
+    from fredis.ml.training.fragment_tree_training.pattern_models import parse_pattern_parameters, apply_pattern_parameters
+
+    source, _, _ = checkpoints
+    params = torch.load(source, weights_only=False)["model_config"]
+    pid = str(Fragmenter.from_dict(params["fragmenter_params"]).reaction_pattern_set.patterns[0].pattern_id)
+    parser = build_arg_parser()
+    flags = ["--dataset-dir", "dataset", "--output-dir", "output"]
+    values = dict(hidden_dim=12, graph_dim=19, num_layers=3, num_heads=3, neighborhood_hops=0, neighborhood_hidden_dim=7)
+    for key, value in values.items():
+        flags += ["--pattern-" + key.replace("_", "-"), f"{pid}={value}"]
+    args = parser.parse_args(flags)
+    forwarded = parser.parse_args(namespace_argv(parser, args))
+    overrides = parse_pattern_parameters(forwarded)
+    assert overrides == {pid: values}
+    resolved = apply_pattern_parameters(params, overrides)
+    assert all(pattern_config(resolved, pid)[key] == value for key, value in values.items())
+    generator = create_spectrum_generator(resolved)
+    assert generator.feature_model.reaction_instance_encoder.reactant_encoders[pid].graph_dim == 19
+    assert pid not in generator.feature_model.reaction_instance_encoder.neighborhood_encoders
+    assert params != resolved
+    with pytest.raises(ValueError, match="Unknown reaction"):
+        apply_pattern_parameters(params, {"99999": values})
+    with pytest.raises(ValueError, match="Pretrained"):
+        apply_pattern_parameters({**params, "fine_tuning": {"frozen_pattern_ids": [pid]}}, overrides)
+    with pytest.raises(ValueError, match="divisible"):
+        apply_pattern_parameters(params, {pid: {"hidden_dim": 13, "num_heads": 3}})
+    for invalid in ("x=12", "0=1.5", "-1=12", "0=0"):
+        with pytest.raises(ValueError):
+            parse_pattern_parameters(parser.parse_args(["--dataset-dir", "d", "--output-dir", "o", "--pattern-hidden-dim=" + invalid]))
+    with pytest.raises(ValueError, match="Duplicate"):
+        parse_pattern_parameters(parser.parse_args(flags + ["--pattern-hidden-dim", f"{pid}=12"]))

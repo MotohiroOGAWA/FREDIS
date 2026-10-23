@@ -3,7 +3,7 @@ function css(){return `#projectHome{border-top:3px solid var(--accent)}#projectP
 function client(){
   const el=id=>document.getElementById(id),clone=value=>JSON.parse(JSON.stringify(value));
   let notesDirty=false,project=null,ready=false,restoring=false,switching=false,timer,lastDraft='',configLimit=20,fileLimit=20;
-  const quickIds=['quickTrainDir','quickValDir','quickCheckpoint','quickTrainOutput','quickEpochs','quickBatchSize','quickLearningRate','quickPredictModel','quickSmiles','quickAdduct','quickCE'];
+  const quickIds=['quickDatasetDir','quickCheckpoint','quickTrainOutput','quickEpochs','quickBatchSize','quickLearningRate','quickPredictModel','quickSmiles','quickAdduct','quickCE'];
   const names={data:'Data preparation',training:'Training',prediction:'Prediction',reactionPatterns:'Reaction patterns'};
   function formValues(form){const value={};for(const input of form.elements)if(input.name){if(input.type==='radio'){if(input.checked)value[input.name]=input.value;}else value[input.name]=input.name==='adductType'?(input.value||input.dataset.restoreValue||''):input.type==='checkbox'?input.checked:input.type==='number'?(input.value===''?'':Number(input.value)):input.value;}return value;}
   function capture(){return clone({data:getConfig(),training:getTrainingConfig(),prediction:formValues(el('predictForm')),reactionPatterns:{value:reactionPatternModel,path:reactionPatternPath},quick:Object.fromEntries(quickIds.map(id=>[id,el(id).value]))});}

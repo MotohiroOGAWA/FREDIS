@@ -23,7 +23,7 @@ change('metric','validation_loss');change('aggregation','min');assert(d.getEleme
 change('aggregation','last');assert(d.getElementById('best').textContent.includes('trial 2'));
 change('order','score');assert.equal(d.querySelector('#trials tr td').textContent,'2');
 change('metric','validation_cosine_similarity_mean');change('aggregation','min');assert.equal(d.getElementById('aggregation').value,'max');assert(d.getElementById('best').textContent.includes('trial 2'));
-d.querySelector('.point').dispatchEvent(new w.MouseEvent('click'));assert.equal(d.getElementById('detail').hidden,false);d.getElementById('openTrial').click();assert.equal(messages.at(-1).path,'trial-002/training.pft');
+d.querySelector('.point').dispatchEvent(new w.MouseEvent('click'));assert.equal(d.getElementById('detail').hidden,false);d.getElementById('openTrial').click();assert.equal(messages.at(-1).path,'trial-002/result.training.pft');
 d.getElementById('scoresExport').click();assert.equal(messages.at(-1).path,'tuning-scores.tsv');
 d.getElementById('refresh').click();assert.equal(messages.at(-1).type,'refresh');assert.deepEqual(errors,[]);dom.window.close();
 console.log('Tuning cosine quartiles, all-score table, max/last switching, loss ranking and report links passed.');

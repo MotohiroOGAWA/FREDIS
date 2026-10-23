@@ -26,7 +26,7 @@ const { readRun } = require('../src/features/training-metrics/editor');
       completedEpochs: 1, globalStep: 10, updatedAt: 'now', latestValidation: 'spectrum_validation/epoch_1.json',
       datasets: { train: { samples: 2 }, validation: { samples: 1 } }, artifacts: { validationDirectory: 'spectrum_validation' },
     };
-    const reportPath = path.join(directory, 'training.pft');
+    const reportPath = path.join(directory, 'result.training.pft');
     await fs.writeFile(reportPath, JSON.stringify(manifest));
 
     // The click-to-open viewer must be a thin wrapper: no bespoke chart/spectra

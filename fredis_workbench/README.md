@@ -266,15 +266,7 @@ The file is loaded once and each distinct input SMILES is parsed once per run.
 
 ### Fragment Tree Fine-tuning
 
-Fine-tuning is part of **Fragment Tree Training**. Choose **Fine-tune patterns**,
-select a base checkpoint, and use training/validation structures regenerated
-with the complete expanded reaction pattern set. The training command uses
-`--fine-tune-checkpoint` and `--adapter-width`; resume an interrupted expansion
-from the same page. Existing base parameters remain frozen while new category
-parameters and projection adapters train.
-
-See `../fredis/ml/training/fragment_tree_training/README.md` for CLI usage,
-checkpoint/resume behavior, and the exact expansion architecture.
+Select pretrained reaction models and new reaction definitions in **Training Data → Fragmentation**. Preparation archives the selected weights under `output_dir/pretrained_models/`. Training takes one **Prepared dataset directory**, inherits the recorded reaction models, freezes imported features, and trains new reaction features and prediction heads. Use **Resume training** to continue a checkpoint with its optimizer state. Reaction models cannot be added or integrated on the training page.
 
 ### Training metrics
 
@@ -406,17 +398,13 @@ provides Worker Processes and Chunk Size (`1` each by default). The CLI supports
 Open **FREDIS: Start Training** (or **Training → New Training**) to configure
 `fredis.cli train fragment-tree`, implemented by
 `fredis/ml/training/fragment_tree_training/training.py`.
-The training page provides three run modes:
+The training page provides two run modes:
 
 - **New model** trains a newly initialized Mol Encoder jointly with the
   fragment-tree model. Its architecture is edited in the same model-parameter
   UI as the reaction and spectrum models.
 - **Resume training** supplies `--resume` to restore the optimizer and epoch.
-- **Fine-tune patterns** supplies `--fine-tune-checkpoint`,
-  and `--adapter-width`; patterns are inherited from the datasets. Include every old pattern and
-  regenerate training and validation structures with the expanded configuration.
-
-The page groups dataset paths, model configuration, training settings and output
+The page groups the preparation output directory, model configuration, training settings and output
 beside a live run summary, environment/input checks and weighted loss summary.
 Dataset cards recursively count `.preft.pt` files and their bytes without loading
 tensors. Estimated optimizer steps are `ceil(training files / batch size) × epochs`.

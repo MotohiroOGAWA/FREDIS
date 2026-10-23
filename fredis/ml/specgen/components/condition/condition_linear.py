@@ -43,4 +43,6 @@ class ConditionHead(nn.Module):
     def forward(self, values, condition):
         for layer in self.layers[:-1]:
             values = self.dropout(self.activation(layer(values, condition)))
+        if len(self.layers) == 1:
+            values = self.dropout(values)
         return self.layers[-1](values, condition).squeeze(-1)

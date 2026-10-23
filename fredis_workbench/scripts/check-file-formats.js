@@ -18,7 +18,8 @@ async function main() {
   assert.equal(formats.match('/tmp/unknown.pft'),undefined);
   assert.equal(formats.match('/tmp/removed-format.pft'),undefined);
   assert.equal(formats.match('/tmp/SETTINGS.EVALTRAINABLE.PFT').evaluationKind,'filtering');
-  assert.equal(formats.match('/tmp/training.pft').id,'training-report');
+  assert.equal(formats.match('/tmp/result.training.pft').id,'training-report');
+  assert.equal(formats.match('/tmp/fragment-tree.training-config.pft').id,'training-config');
   assert.equal(formats.match('/tmp/result.reactionpatternanalysis.pft').id,'reaction-analysis-result');
   const generated = formats.contributions();
   const manifest = require('../package.json');

@@ -37,8 +37,8 @@ def find_fragmenter_params(
     if metadata.get("fragmenter_params"):
         return metadata["fragmenter_params"]
     for parent in Path(file_path).resolve().parents:
-        config = parent / "preparation_config.json"
-        if not config.exists():
+        config = next((parent / name for name in ("fragment-tree.training-data-config.pft", "preparation_config.json") if (parent / name).is_file()), None)
+        if config is None:
             continue
         value = json.loads(config.read_text())
         return value.get("chemistry_config", {}).get("fragmenter_params")

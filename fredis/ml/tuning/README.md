@@ -12,8 +12,7 @@ python -m fredis.cli train tune-fragment-tree --plan search.json
 {
   "outputDir": "runs/search-001",
   "baseArgs": [
-    "--train-dir", "data/train_structures",
-    "--val-dir", "data/validation_structures",
+    "--dataset-dir", "data/prepared",
     "--epochs", "20",
     "--device", "cuda"
   ],

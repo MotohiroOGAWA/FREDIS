@@ -30,7 +30,7 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
     // The host's fs.stat() check is covered by check-path-drop.js; here every path is accepted.
     const statKinds = [];
     w.validateDroppedPaths = (paths, kind) => { statKinds.push(kind); return paths; };
-    const drop = async (target, data = {}, files = [], shiftKey = target.matches('[data-file]')) => {
+    const drop = async (target, data = {}, files = [], shiftKey = target.matches('[data-file], [data-path-kind]')) => {
       const event = new w.Event('drop', { bubbles: true, cancelable: true });
       Object.defineProperty(event, 'shiftKey', { value: shiftKey });
       Object.defineProperty(event, 'dataTransfer', { value: { types: Object.keys(data), files, getData: type => data[type] || '' } });
@@ -85,16 +85,24 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
 
     // Fragment Tree Training: folder fields are validated as folders and follow the Browse flow.
     const trainingForm = d.getElementById('trainingForm');
-    const trainDirZone = trainingForm.elements.trainDir.closest('.path').querySelector('.file-drop-zone');
-    assert.equal(trainDirZone.textContent, 'Drop a folder here or click to Browse');
+    const trainDirZone = trainingForm.elements.datasetDir;
+    const trainDirPicker = trainDirZone.closest('.path').querySelector('button');
+    assert.equal(trainDirPicker.textContent, 'Browse');
+    assert.equal(trainDirZone.closest('.path').querySelector('.file-drop-zone'), null);
+    const originalDir = trainDirZone.value;
+    await drop(trainDirZone, { 'text/uri-list': 'file:///ignored' }, [], false);
+    assert.equal(trainDirZone.value, originalDir, 'training paths require Shift');
+    messages.length = 0;
+    trainDirPicker.click();
+    assert(messages.some(message => message.type === 'pick' && message.field === 'datasetDir'), 'Browse still opens the folder picker');
     await drop(trainDirZone, { 'text/uri-list': 'file:///workspaces/FREDIS/prepared/train' });
-    assert.equal(trainingForm.elements.trainDir.value, '/workspaces/FREDIS/prepared/train');
+    assert.equal(trainingForm.elements.datasetDir.value, '/workspaces/FREDIS/prepared/train');
     assert.equal(statKinds.at(-1), 'folder');
     uploads.length = 0;
     await drop(trainDirZone, {}, [{ name: 'train', size: 0 }]);
     assert.deepEqual(uploads, [], 'folders are never uploaded');
     assert.match(trainDirZone.parentElement.querySelector('.path-drop-error').textContent, /A folder is required/);
-    const resumeZone = trainingForm.elements.resume.closest('.path').querySelector('.file-drop-zone');
+    const resumeZone = trainingForm.elements.resume;
     // Disabled fields (resume in New-model mode) ignore drops just like their disabled Browse button.
     assert(resumeZone.disabled);
     await drop(resumeZone, { 'text/uri-list': 'file:///models/ignored.pt' });
@@ -117,7 +125,9 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
     assert.equal(predictForm.elements.batchInput.value, '/workspaces/FREDIS/data/batch.msds');
     assert(messages.some(message => message.type === 'data/columns' && message.target === 'prediction' && message.path === '/workspaces/FREDIS/data/batch.msds'));
     assert.equal(messages.filter(message => message.type === 'data/columns').length, 1, 'one inspection request per drop');
-    const modelZone = predictForm.elements.modelPath.closest('.path').querySelector('.file-drop-zone');
+    const modelZone = predictForm.elements.modelPath;
+    assert.equal(modelZone.closest('.path').querySelector('button').textContent, 'Browse');
+    assert.equal(modelZone.closest('.path').querySelector('.file-drop-zone'), null);
     await drop(modelZone, { 'text/uri-list': 'file:///models/model.pt' });
     assert.equal(predictForm.elements.modelPath.value, '/models/model.pt');
 
@@ -132,7 +142,7 @@ const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resol
     await drop(d.getElementById('rpaDatasetDrop'), { 'text/uri-list': 'file:///data/a.msds\nfile:///data/b.msds' });
     assert.deepEqual(plain(messages.filter(message => message.type === 'reactionPatternAnalysis/addSources').at(-1).paths), ['/data/a.msds', '/data/b.msds']);
     const outputZone = d.getElementById('rpaPickOutput');
-    await drop(outputZone, { 'text/uri-list': 'file:///runs/out' });
+    await drop(outputZone, { 'text/uri-list': 'file:///runs/out' }, [], true);
     assert.equal(d.getElementById('rpaOutput').value, '/runs/out');
     assert.equal(statKinds.at(-1), 'folder');
     await drop(d.getElementById('rpaPickParams'), { 'text/uri-list': 'file:///cfg/model.json' });

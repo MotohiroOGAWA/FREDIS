@@ -11,8 +11,9 @@ from ....reaction.external_neighborhood import ExternalNeighborhoodEncoder
 class PatternReactionReadout(nn.Module):
     """Pattern-owned category/context fusion and final reaction feature readout."""
 
-    def __init__(self, graph_dim, mol_dim, hidden_dim, rule_count, product_count):
+    def __init__(self, graph_dim, mol_dim, hidden_dim, rule_count, product_count, *, dropout=0.0):
         super().__init__()
+        self.dropout = nn.Dropout(dropout)
         self.rule_embedding = nn.Embedding(rule_count, hidden_dim)
         self.product_embedding = nn.Embedding(product_count, hidden_dim)
         self.context = nn.Linear(mol_dim + hidden_dim, hidden_dim)
@@ -28,7 +29,7 @@ class PatternReactionReadout(nn.Module):
         )
         inputs = [source, category]
         context = self.context(torch.cat(inputs, dim=1))
-        return self.output(torch.cat((atoms, context), dim=1))
+        return self.dropout(self.output(torch.cat((atoms, context), dim=1)))
 
 
 class ReactionInstanceEncoder(nn.Module):
@@ -41,12 +42,13 @@ class ReactionInstanceEncoder(nn.Module):
         num_heads: int = 4,
         pattern_smarts: Mapping[int, str] | None = None,
         reactant_num_layers: int = 2,
-        reactant_dropout: float = 0.0,
+        dropout: float = 0.0,
         reactant_node_dim: int | None = None,
         reactant_graph_dim: int | None = None,
         pattern_category_sizes: Mapping[int, tuple[int, int]] | None = None,
         pattern_model_params: Mapping[str, dict] | None = None,
         raw_bond_dim: int = 0,
+        frozen_pattern_ids=(),
     ) -> None:
         super().__init__()
         self.output_dim = hidden_dim
@@ -65,6 +67,7 @@ class ReactionInstanceEncoder(nn.Module):
         self.neighborhood_encoders = nn.ModuleDict()
         self.pattern_model_params = {}
         overrides = pattern_model_params or {}
+        frozen = set(map(str, frozen_pattern_ids))
         unknown = set(map(str, overrides)) - set(map(str, pattern_smarts))
         if unknown:
             raise ValueError(f"Unknown pattern architecture IDs: {sorted(unknown)}")
@@ -74,7 +77,7 @@ class ReactionInstanceEncoder(nn.Module):
                 graph_dim=self.reactant_graph_dim,
                 num_heads=num_heads,
                 num_layers=reactant_num_layers,
-                dropout=reactant_dropout,
+                dropout=dropout,
                 descriptors=[],
                 input_mode="chemical",
                 neighborhood_hops=3,
@@ -87,6 +90,8 @@ class ReactionInstanceEncoder(nn.Module):
                     f"Unknown pattern model parameters: {set(override) - set(config)}"
                 )
             config.update(override)
+            if str(pid) not in frozen:
+                config["dropout"] = dropout
             for key in ("hidden_dim", "graph_dim", "num_heads", "num_layers"):
                 if type(config[key]) is not int or config[key] < 1:
                     raise ValueError(f"{key} must be a positive integer")
@@ -110,6 +115,7 @@ class ReactionInstanceEncoder(nn.Module):
                     config["neighborhood_hidden_dim"],
                     config["neighborhood_hops"],
                     bond_dim=raw_bond_dim,
+                    dropout=config["dropout"],
                 )
             else:
                 # Validate even when no neighborhood parameters are allocated.
@@ -141,6 +147,7 @@ class ReactionInstanceEncoder(nn.Module):
                 mol_dim,
                 hidden_dim,
                 *(pattern_category_sizes or {}).get(pid, category_sizes[1:]),
+                dropout=config["dropout"],
             )
         self.frozen_pattern_ids = set()
 

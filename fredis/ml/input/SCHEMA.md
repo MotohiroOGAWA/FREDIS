@@ -1058,14 +1058,23 @@ For each selected edge predict a logit z(group, edge), conditioned on the group'
 main adduct and the source Compound, target Compound, and concrete Reaction.
 CE is not an input to this branch objective. Train labelled entries with weighted
 binary cross entropy: positive loss softplus(-z), weak-negative loss
-negative_weight * softplus(z); mask label -1. Normalize by the sum of supervised weights (N_positive + negative_weight *
-N_weak_negative). No supervised weight contributes zero. This edge classification
+negative_weight * softplus(z); mask label -1. For each (branch group, source
+Compound) with supervised outgoing edges, average
+positive and weak-negative terms separately. Combine these class means as
+(P + negative_weight * N) / (1 + negative_weight), or P if no negatives exist.
+Negative-only nodes use N when negative_weight > 0
+(and zero otherwise).
+Sum the resulting source losses without averaging across sources. Empty
+supervision contributes differentiable zero. This edge classification
 does not retain alternative-path MIL semantics.
 
 A positive label means the edge is useful in at least one retained explanation
 at some CE, not that its physical occurrence has been established. A weak
-negative must be chemically admissible in some reachable history but unsupported
-by all retained explanations in the group. If any history supports an edge,
+negative must be chemically admissible in some reachable history, unsupported
+by all retained explanations in the group, and originate from the precursor
+root or an endpoint of a positive edge in that group, including terminal nodes.
+Other unsupported edges are
+omitted by default or labelled -1 when saving all edges. If any history supports an edge,
 the group/edge summary is positive; it cannot simultaneously be a weak negative
 in this table. Invalid or uncertain cases are omitted or masked, not strong
 negative facts. Labels summarize support, not history-specific applicability.

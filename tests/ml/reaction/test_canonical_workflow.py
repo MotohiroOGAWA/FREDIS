@@ -2,7 +2,7 @@
 
 from dataclasses import fields, replace
 from importlib.util import spec_from_file_location, module_from_spec
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 import json
 import torch
 import pytest
@@ -71,7 +71,13 @@ def test_canonical_indices_labels_and_shared_prediction_components():
 def test_branch_weighting_and_ignored_gradient():
     logits = torch.tensor([0.2, -0.7, 1.2], requires_grad=True)
     labels = torch.tensor([1, 0, -1], dtype=torch.int8)
-    loss, _, _ = branch_edge_loss(logits, labels, 0.25)
+    loss, _, _ = branch_edge_loss(
+        logits,
+        labels,
+        0.25,
+        source_index=torch.zeros(3, dtype=torch.long),
+        branch_group_index=torch.zeros(3, dtype=torch.long),
+    )
     expected = (
         torch.nn.functional.softplus(-logits[0])
         + 0.25 * torch.nn.functional.softplus(logits[1])
@@ -80,7 +86,12 @@ def test_branch_weighting_and_ignored_gradient():
     loss.backward()
     assert logits.grad[2] == 0
     ignored = torch.tensor([1.0, -1.0], requires_grad=True)
-    loss, _, _ = branch_edge_loss(ignored, torch.full((2,), -1, dtype=torch.int8))
+    loss, _, _ = branch_edge_loss(
+        ignored,
+        torch.full((2,), -1, dtype=torch.int8),
+        source_index=torch.zeros(2, dtype=torch.long),
+        branch_group_index=torch.zeros(2, dtype=torch.long),
+    )
     loss.backward()
     assert loss == 0 and torch.equal(ignored.grad, torch.zeros(2))
 
@@ -435,7 +446,7 @@ def test_annotation_export_computes_compound_smiles_once_and_summary_reuses_it()
     )
 
     _, data = prepared()
-    original = CompoundBatch.smiles.fget
+    original = CompoundBatch.smiles.func
     calls = []
 
     def counted(batch):
@@ -455,3 +466,174 @@ def test_annotation_export_computes_compound_smiles_once_and_summary_reuses_it()
     ):
         summary = structure_manifest_fields(data, annotations)
     assert summary["num_nodes"] == len(data.compounds.compounds)
+
+
+def test_branch_frontier_storage_preserves_supervised_edges(tmp_path):
+    from fredis.ml.input.structure_builder import _ChemistryPreparationBuilder
+    from fredis.ml.input.source_reaction_structure import rows
+
+    model = create_spectrum_generator(config())
+    raw, _ = _ChemistryPreparationBuilder(model).build(
+        Compound.from_smiles("CC(O)N"),
+        [Adduct.parse("[M+H]+")],
+        [20.0],
+        [[18.033826, 44.049476]],
+        [[0.5, 1.0]],
+    )
+    compact = SourceReactionStructure.from_preparation(raw)
+    full = SourceReactionStructure.from_preparation(raw, save_all_edges=True)
+    compact.validate()
+    full.validate()
+
+    def entries(data):
+        graph = data.compound_graph
+        result = {}
+        labels = rows(
+            data.reaction_contexts.edge_ptr, data.reaction_contexts.edge_label
+        )
+        for group, edges in enumerate(
+            rows(data.reaction_contexts.edge_ptr, data.reaction_contexts.edge_index)
+        ):
+            for edge, label in zip(edges, labels[group]):
+                key = (
+                    group,
+                    data.compounds.smiles[int(graph.source_compound_index[edge])],
+                    data.compounds.smiles[int(graph.target_compound_index[edge])],
+                    int(graph.reaction_index[edge]),
+                )
+                result[key] = label
+        return result
+
+    all_entries, selected = entries(full), entries(compact)
+    supported_nodes = {
+        (key[0], node)
+        for key, label in all_entries.items()
+        if label == 1
+        for node in key[1:3]
+    }
+    supported_nodes.update(
+        (g, full.source_smiles[int(source)])
+        for g, source in enumerate(full.branch_groups.source_compound_index)
+    )
+    assert supported_nodes
+    assert any(label == -1 for label in all_entries.values())
+    for key, label in all_entries.items():
+        if label != 1:
+            assert label == (0 if (key[0], key[1]) in supported_nodes else -1)
+    assert selected == {key: label for key, label in all_entries.items() if label >= 0}
+    positive_sources = {(k[0], k[1]) for k, label in all_entries.items() if label == 1}
+    terminal_nodes = {
+        (k[0], k[2]) for k, label in all_entries.items() if label == 1
+    } - positive_sources
+    terminal_edges = {
+        k: label for k, label in all_entries.items() if (k[0], k[1]) in terminal_nodes
+    }
+    assert terminal_edges, "Fixture must exercise positive terminal continuations"
+    assert all(label == 0 for label in terminal_edges.values())
+    assert all(k in selected for k in terminal_edges)
+    endpoints = set(compact.source_compounds.compound_index.tolist())
+    endpoints.update(compact.compound_graph.source_compound_index.tolist())
+    endpoints.update(compact.compound_graph.target_compound_index.tolist())
+    assert endpoints == set(range(len(compact.compounds.compounds)))
+    assert len(compact.compounds.compounds) < len(full.compounds.compounds)
+    for data in (compact, full):
+        path = tmp_path / ("full.pt" if data is full else "compact.pt")
+        data.save(path)
+        assert entries(SourceReactionStructure.load(path)) == entries(data)
+    full_logits = torch.full((len(all_entries),), 0.3, requires_grad=True)
+    compact_logits = torch.full((len(selected),), 0.3, requires_grad=True)
+    full_labels = torch.tensor(list(all_entries.values()), dtype=torch.int8)
+    compact_labels = torch.tensor(list(selected.values()), dtype=torch.int8)
+    full_loss = branch_edge_loss(
+        full_logits,
+        full_labels,
+        source_index=torch.tensor(
+            [full.compounds.smiles.index(k[1]) for k in all_entries]
+        ),
+        branch_group_index=torch.tensor([k[0] for k in all_entries]),
+    )[0]
+    compact_loss = branch_edge_loss(
+        compact_logits,
+        compact_labels,
+        source_index=torch.tensor(
+            [compact.compounds.smiles.index(k[1]) for k in selected]
+        ),
+        branch_group_index=torch.tensor([k[0] for k in selected]),
+    )[0]
+    torch.testing.assert_close(full_loss, compact_loss)
+    full_loss.backward()
+    assert (full_logits.grad[full_labels == -1] == 0).all()
+
+
+def test_branch_node_balancing_and_sum():
+    def loss(values, labels, sources, groups, weight=0.5):
+        z = torch.tensor(values, dtype=torch.float64, requires_grad=True)
+        output = branch_edge_loss(
+            z,
+            torch.tensor(labels, dtype=torch.int8),
+            weight,
+            source_index=torch.tensor(sources, dtype=torch.long),
+            branch_group_index=torch.tensor(groups, dtype=torch.long),
+        )
+        return z, output
+
+    z, (actual, positive, negative) = loss(
+        [0.2, -0.4] + [0.7] * 10, [1, 1] + [0] * 10, [0] * 12, [0] * 12
+    )
+    pl = torch.nn.functional.softplus(-z[:2]).mean()
+    nl = torch.nn.functional.softplus(z[2:]).mean()
+    torch.testing.assert_close(actual, (pl + 0.5 * nl) / 1.5)
+    torch.testing.assert_close(positive, pl)
+    torch.testing.assert_close(negative, nl)
+    # Replicating either class leaves this node's loss unchanged.
+    _, repeated = loss(
+        [0.2, -0.4] * 3 + [0.7] * 20, [1] * 6 + [0] * 20, [0] * 26, [0] * 26
+    )
+    torch.testing.assert_close(actual, repeated[0])
+    # A second group with the same Compound ID is an independent source node.
+    _, doubled = loss(
+        ([0.2, -0.4] + [0.7] * 10) * 2,
+        ([1, 1] + [0] * 10) * 2,
+        [0] * 24,
+        [0] * 12 + [1] * 12,
+    )
+    torch.testing.assert_close(doubled[0], 2 * actual)
+    # Positive-only and negative-only terminal nodes use their class mean.
+    z, output = loss([0.2, 0.7, 4.0], [1, 0, -1], [0, 1, 0], [0, 0, 0])
+    torch.testing.assert_close(
+        output[0],
+        torch.nn.functional.softplus(-z[0]) + torch.nn.functional.softplus(z[1]),
+    )
+    output[0].backward()
+    assert z.grad[1] > 0 and z.grad[2] == 0
+    # Zero negative weight and empty batches remain differentiable.
+    z, output = loss([0.2, 0.7], [1, 0], [0, 0], [0, 0], weight=0)
+    torch.testing.assert_close(output[0], torch.nn.functional.softplus(-z[0]))
+    output[0].backward()
+    assert z.grad[1] == 0
+    z, terminal = loss([0.7, -0.2], [0, 0], [0, 0], [0, 0])
+    torch.testing.assert_close(terminal[0], torch.nn.functional.softplus(z).mean())
+    terminal[0].backward()
+    torch.testing.assert_close(z.grad, z.detach().sigmoid() / 2)
+    _, replicated_terminal = loss([0.7, -0.2] * 5, [0] * 10, [0] * 10, [0] * 10)
+    torch.testing.assert_close(terminal[0], replicated_terminal[0])
+    # Terminal-only sources also honor zero negative weight.
+    z, output = loss([0.7, -0.2], [0, 0], [0, 0], [0, 0], weight=0)
+    output[0].backward()
+    assert output[0] == 0 and (z.grad == 0).all()
+    z, output = loss([], [], [], [])
+    output[0].backward()
+    assert output[0] == 0 and z.grad.numel() == 0
+
+
+def test_prepared_compound_smiles_reused_on_transfer_and_reload(tmp_path):
+    _, data = prepared()
+    expected = data.compounds.smiles
+    # Prepared identity metadata survives both device copies and serialization.
+    with patch.object(Compound, 'smiles', new_callable=PropertyMock, side_effect=AssertionError('Unexpected RDKit SMILES regeneration')):
+        copied = data.to('cpu')
+        assert copied.compounds.smiles == expected
+        file = tmp_path / 'prepared.preft.pt'
+        copied.save(file)
+        restored = SourceReactionStructure.load(file)
+        assert restored.compounds.smiles == expected

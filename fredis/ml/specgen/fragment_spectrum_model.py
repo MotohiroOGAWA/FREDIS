@@ -126,8 +126,11 @@ class SpectrumLossSettings:
 
     intensity_loss_weight: float = 1.0
     cosine_loss_weight: float = 1.0
+    intensity_exponent: float = 0.5
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.intensity_exponent) or self.intensity_exponent <= 0:
+            raise ValueError("intensity_exponent must be finite and positive")
         for name in ("intensity_loss_weight", "cosine_loss_weight"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:

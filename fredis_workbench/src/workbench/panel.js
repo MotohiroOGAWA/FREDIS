@@ -7,7 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const sessions = new Map();
-const trainingFlags = { weightDecay:'--weight-decay', gradientClip:'--gradient-clip',branchWeight:'--branch-weight',negativeWeight:'--negative-weight',intensityLossWeight:'--intensity-loss-weight',cosineLossWeight:'--cosine-loss-weight',maxSamples:'--max-samples',seed:'--seed',warmupSteps:'--warmup-steps',trainLogIntervalSteps:'--train-log-interval-steps',validationIntervalSteps:'--validation-interval-steps',validationFraction:'--validation-fraction',lrPatience:'--lr-patience',earlyStoppingPatience:'--early-stopping-patience',minLr:'--min-lr',dropout:'--fragment-tree-dropout',minimumAssignmentScore:'--minimum-assignment-score',minimumAssignmentScoreWithoutPrecursor:'--minimum-assignment-score-without-precursor' };
+const trainingFlags = { weightDecay:'--weight-decay', gradientClip:'--gradient-clip',branchWeight:'--branch-weight',negativeWeight:'--negative-weight',intensityLossWeight:'--intensity-loss-weight',cosineLossWeight:'--cosine-loss-weight',intensityExponent:'--intensity-exponent',maxSamples:'--max-samples',seed:'--seed',warmupSteps:'--warmup-steps',trainLogIntervalSteps:'--train-log-interval-steps',validationIntervalSteps:'--validation-interval-steps',validationFraction:'--validation-fraction',lrPatience:'--lr-patience',earlyStoppingPatience:'--early-stopping-patience',minLr:'--min-lr',dropout:'--dropout',minimumAssignmentScore:'--minimum-assignment-score',minimumAssignmentScoreWithoutPrecursor:'--minimum-assignment-score-without-precursor' };
 const pages = [['HOME','home','Overview'],['DATA','data','Training Data'],['DATA','trainable','Trainable Spectra'],['DATA','reactionPatterns','Reaction Patterns'],['DATA','adduct','Adduct Rules'],['TRAINING','training','Fragment Tree Training'],['TRAINING','models','Models'],['PREDICTION','predictSingle','Single Prediction'],['PREDICTION','predictBatch','Batch Prediction'],['VISUALIZATION','viewer','Spectrum Viewer'],['VISUALIZATION','fragmentTree','Fragment Tree'],['VISUALIZATION','reactionViewer','Reaction Viewer'],['VISUALIZATION','smarts','Structure / SMARTS Search'],['SETTINGS','environment','Environment']];
 function session(context) {
   const dir=path.join(projects.root(context)?projects.store.metadata(projects.root(context)):(context.storageUri || context.globalStorageUri).fsPath,'jobs');
@@ -40,6 +40,7 @@ function register(context, output, projectRoot, open) {
   context.subscriptions.push(vscode.commands.registerCommand('fredis.navigate',page=>open(context,output,page)),vscode.window.registerTreeDataProvider('fredis.navigation',{getTreeItem:item=>item,getChildren:item=>item?pages.filter(p=>p[0]===item.label).map(p=>({label:p[2],command:{command:'fredis.navigate',title:p[2],arguments:[p[1]]}})):[...new Set(pages.map(p=>p[0]))].map(label=>({label,collapsibleState:1}))}));
 }
 async function startTraining(context,panel,output,root,python,config,buildArgs){
+  if(config.intensityExponent!==undefined&&(!Number.isFinite(Number(config.intensityExponent))||Number(config.intensityExponent)<=0))throw new Error('Intensity exponent must be finite and positive.');
   for(const key of Object.keys(trainingFlags))if(config[key]!==undefined&&(!Number.isFinite(Number(config[key]))||Number(config[key])<0))throw new Error(key+' must be non-negative.');
   for(const key of ['epochs','batchSize'])if(!Number.isInteger(Number(config[key]))||Number(config[key])<1)throw new Error(key+' must be a positive integer.');
   if(config.validationIntervalSteps!==undefined&&(!Number.isInteger(Number(config.validationIntervalSteps))||Number(config.validationIntervalSteps)<0))throw new Error('Validation interval must be a non-negative integer.');
@@ -79,7 +80,7 @@ function attach(panel,context,projectRoot,output,initialPage){
       if(message.type==='workbench/predictionResult'){const job=s.jobs.find(j=>j.id===message.jobId);if(job?.resultsPath&&job.type==='prediction')post({type:'workbench/predictionResult',result:JSON.parse(await fs.promises.readFile(job.resultsPath,'utf8'))});}
       if(message.type==='workbench/openOutput'){const job=s.jobs.find(j=>j.id===message.jobId);if(job)await vscode.commands.executeCommand('revealInExplorer',vscode.Uri.file(job.outputDir));}
       if(message.type==='workbench/openPreparationReport'){const job=s.jobs.find(j=>j.id===message.jobId);if(!job)return;const report=['fragment-tree.training-data.pft'].map(name=>path.join(job.outputDir,'train_structures',name)).find(file=>fs.existsSync(file));if(report)await vscode.commands.executeCommand('vscode.openWith',vscode.Uri.file(report),'fredis.resultViewer');}
-      if(message.type==='workbench/openTrainingReport'){const job=s.jobs.find(j=>j.id===message.jobId);if(!job)return;const report=[path.join(job.outputDir,'fragment-tree.tuning.pft'),path.join(job.outputDir,'training.pft')].find(candidate=>fs.existsSync(candidate));if(report)await vscode.commands.executeCommand('vscode.openWith',vscode.Uri.file(report),'fredis.resultViewer');else post({type:'workbench/trainingReportMissing',jobId:job.id,directory:job.outputDir});}
+      if(message.type==='workbench/openTrainingReport'){const job=s.jobs.find(j=>j.id===message.jobId);if(!job)return;const report=[path.join(job.outputDir,'fragment-tree.tuning.pft'),path.join(job.outputDir,'result.training.pft')].find(candidate=>fs.existsSync(candidate));if(report)await vscode.commands.executeCommand('vscode.openWith',vscode.Uri.file(report),'fredis.resultViewer');else post({type:'workbench/trainingReportMissing',jobId:job.id,directory:job.outputDir});}
       if(message.type==='workbench/settings')await vscode.commands.executeCommand('workbench.action.openSettings','fredis');
       if(message.type==='workbench/terminal')vscode.window.createTerminal({name:'FREDIS',cwd:projectRoot(context)}).show();
       if(message.type==='workbench/trainingInspect'){
@@ -114,8 +115,9 @@ const fields={
  weightDecay:['Weight decay',0.01,'Optimizer weight decay. Larger values apply stronger parameter regularization.'],
  gradientClip:['Gradient clip (0 disables)',1,'Maximum gradient norm per optimizer update. Set to 0 to disable clipping.'],
  branchWeight:['Branch loss weight',1,'Weight of the reaction branch objective in the total loss.'],
- negativeWeight:['Weak negative reaction weight',0.5,'Weight of valid reactions absent from the teacher paths, relative to the positive branch loss.'],
+ negativeWeight:['Branch weak negative weight',0.5,'Weight of valid reactions absent from the teacher paths, relative to the positive branch loss.'],
  intensityLossWeight:['Intensity loss weight',1,'Overall weight of both spectrum objectives, with and without the precursor and its hydrogen shifts.'],
+ intensityExponent:['Intensity exponent',0.5,'Positive exponent for target cross-entropy weights and both cosine inputs. 0.5: square root; 1: unchanged.'],
  cosineLossWeight:['Cosine loss weight',1,'Weight of the cosine loss added to cross entropy in each spectrum objective.'],
  maxSamples:['Maximum simultaneous spectra',128,'Maximum spectra processed together when a structural batch is split into smaller chunks.'],
  seed:['Random seed',42,'Random seed for training initialization and sampling.'],

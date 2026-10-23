@@ -141,7 +141,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _prepared_config(source: Path, document: dict | None = None) -> dict:
-    """Preparation settings of a prepared source: its Workbench project file or ``preparation_config.json``."""
+    """Preparation settings of a prepared source: its Workbench file or shared preparation configuration."""
     if document and document.get("application") == "fragment-tree-data-preparation":
         return {
             "input": document.get("input"),
@@ -161,14 +161,15 @@ def _prepared_config(source: Path, document: dict | None = None) -> dict:
     start = source if source.is_dir() else source.parent
     config_path = next(
         (
-            parent / "preparation_config.json"
+            parent / name
             for parent in (start, *start.parents)
-            if (parent / "preparation_config.json").exists()
+            for name in ("fragment-tree.training-data-config.pft", "preparation_config.json")
+            if (parent / name).exists()
         ),
         None,
     )
     if config_path is None:
-        raise ValueError(f"Cannot find preparation_config.json for {source}")
+        raise ValueError(f"Cannot find preparation configuration for {source}")
     value = _read_json(config_path)
     value["_config_path"] = str(config_path)
     return value

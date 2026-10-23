@@ -78,7 +78,7 @@ def test_report_quantiles_and_pft_manifest(tmp_path):
     target = write_training_report(tmp_path / 'project' / 'runs' / 'run-1', status='running',
                                    completed_epochs=2, global_step=40,
                                    latest_validation='spectrum_validation/epoch_2.json')
-    assert target.name == REPORT_NAME == 'training.pft'
+    assert target.name == REPORT_NAME == 'result.training.pft'
     payload = json.loads(target.read_text())
     assert payload['schema'] == 'fredis.training-report'
     assert payload['kind'] == 'training-result'

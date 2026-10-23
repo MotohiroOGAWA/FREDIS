@@ -6,7 +6,6 @@ import json
 import math
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 import torch
 from tqdm.auto import tqdm
@@ -340,6 +339,7 @@ def train_reactions(
     negative_weight: float = 0.5,
     intensity_loss_weight: float = 1.0,
     cosine_loss_weight: float = 1.0,
+    intensity_exponent: float = 0.5,
     max_samples: int = 128,
     seed: int = 42,
     warmup_steps: int = 100,
@@ -354,6 +354,7 @@ def train_reactions(
     minimum_assignment_score: float = 0.0,
     minimum_assignment_score_without_precursor: float = 0.0,
     initialize_from: str | Path | None = None,
+    pattern_parameters: dict | None = None,
 ) -> dict:
     from dataclasses import replace
     import random
@@ -362,6 +363,8 @@ def train_reactions(
     from ...input.reaction_batching import select_samples
     from torch.utils.tensorboard import SummaryWriter
 
+    if resume and pattern_parameters:
+        raise ValueError("Reaction architecture cannot change on Resume")
     model_config = dict(model_config)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -402,7 +405,6 @@ def train_reactions(
         key: str(value) if isinstance(value, Path) else value
         for key, value in settings.items()
     }
-    (output / "training_args.json").write_text(json.dumps(settings, indent=2))
     from .report import write_training_report
 
     write_training_report(output, status="initializing", settings=settings)
@@ -459,7 +461,7 @@ def train_reactions(
         branch_weight = settings["branch_weight"]
         negative_weight = settings["negative_weight"]
         for key in SPECTRUM_LOSS_KEYS:
-            settings[key] = prior[key]
+            settings[key] = prior.get(key, 1.0 if key == "intensity_exponent" else settings[key])
         spectrum_loss = SpectrumLossSettings(
             **{key: settings[key] for key in SPECTRUM_LOSS_KEYS}
         )
@@ -489,9 +491,13 @@ def train_reactions(
         val_dir,
         saved_model=model_config if resume or params.get("fine_tuning") else None,
     )
-    from .pattern_models import pattern_config
+    from .pattern_models import pattern_config, use_shared_dropout, apply_pattern_parameters
     from fredis.domain.fragment import Fragmenter
 
+    if pattern_parameters:
+        model_config = apply_pattern_parameters(model_config, pattern_parameters)
+    if not resume:
+        model_config = use_shared_dropout(model_config)
     reaction_params = model_config.setdefault("reaction_model_params", {})
     reaction_params["pattern_model_params"] = {
         str(p.pattern_id): pattern_config(model_config, p.pattern_id)
@@ -500,9 +506,8 @@ def train_reactions(
         ).reaction_pattern_set.patterns
     }
     model_config["max_samples"] = max_samples
-    (output / "training_config.json").write_text(
-        json.dumps({"model_config": model_config, "training": settings}, indent=2)
-    )
+    from .configuration import write_training_configuration
+    write_training_configuration(output, model_config, settings)
     startup_progress.update(1)
     startup_progress.set_description_str("CUDA model", refresh=True)
     params = dict(model_config)
@@ -1210,14 +1215,12 @@ MODEL_OPTIONS = {
         mlp_dims,
         mlp_dims("128,64"),
     ),
-    "fragment-dropout": ("spectrum_model_params", "fragment_dropout", float, 0.0),
     "state-fc-dims": (
         "spectrum_model_params",
         "state_fc_dims",
         mlp_dims,
         mlp_dims("128,64"),
     ),
-    "state-dropout": ("spectrum_model_params", "state_dropout", float, 0.0),
     "branch-path-threshold": ("generation_params", "branch_path_threshold", float, 0.0),
     "max-fragment-nodes": ("generation_params", "max_fragment_nodes", int, 100),
     "peak-intensity-threshold": (
@@ -1229,9 +1232,7 @@ MODEL_OPTIONS = {
 }
 MODEL_OPTION_HELP = {
     "state-fc-dims": "Comma-separated State Head MLP hidden widths. Empty selects a linear map.",
-    "state-dropout": "Dropout after hidden State Head MLP layers.",
     "fragment-fc-dims": "Comma-separated Fragment Head MLP hidden widths, e.g. 128,64. Empty selects a linear map.",
-    "fragment-dropout": "Dropout after hidden Fragment Head MLP layers.",
     "ce-fc-dims": "Comma-separated CE MLP hidden widths. Empty selects a linear map.",
     "ce-center": "Normalize CE as (CE - center) / scale; saved in the model.",
     "ce-scale": "Positive CE normalization scale (default 100). Does not convert measurement units.",
@@ -1239,6 +1240,10 @@ MODEL_OPTION_HELP = {
 }
 # Training objective of the spectrum model: (default, help).
 SPECTRUM_LOSS_OPTIONS = {
+    "intensity-exponent": (
+        0.5,
+        "Positive intensity exponent: transforms target cross-entropy weights and both cosine inputs (0.5: square root; 1: unchanged).",
+    ),
     "intensity-loss-weight": (
         1.0,
         "Weight of the independent spectrum intensity objective.",
@@ -1276,32 +1281,29 @@ def training_model_config(args):
         value = getattr(args, flag.replace("-", "_"))
         if value is not None or default is not None:
             config[section][key] = value if value is not None else default
-    # Mol Encoder dropout uses --dropout. The reaction-state and spectrum modules have their
-    # own setting to avoid overloading it.
-    fragment_dropout = args.fragment_tree_dropout
-    config["reaction_model_params"]["edge_dropout"] = fragment_dropout
-    # A closed-choice architecture setting, kept out of the generic int/float
-    # MODEL_OPTIONS loop below.
-    return config
+    from .pattern_models import use_shared_dropout
+
+    config["dropout"] = args.dropout
+    return use_shared_dropout(config)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_mol_encoder_arguments(parser)
-    parser.add_argument(
-        "--fragment-tree-dropout",
-        type=float,
-        default=0.5,
-        help="Dropout for the reaction state encoder and the spectrum model.",
-    )
+    from .pattern_models import PATTERN_PARAMETERS
+    for key in PATTERN_PARAMETERS:
+        parser.add_argument(
+            "--pattern-" + key.replace("_", "-"), action="append", metavar="ID=VALUE",
+            help="Set " + key + " for one new reaction pattern; repeat for other IDs. Pretrained reactions stay fixed.",
+        )
     for flag, (_, _, kind, default) in MODEL_OPTIONS.items():
         parser.add_argument(
-            "--" + flag, type=kind, default=default, help=MODEL_OPTION_HELP.get(flag)
+            "--" + flag, type=kind, default=default,
+            help=MODEL_OPTION_HELP.get(flag)
         )
     for flag, (default, text) in SPECTRUM_LOSS_OPTIONS.items():
         parser.add_argument("--" + flag, type=float, default=default, help=text)
-    for name in ("train-dir", "val-dir"):
-        parser.add_argument("--" + name, required=True)
+    parser.add_argument("--dataset-dir", required=True, help="Preparation output containing train_structures, validation_structures and shared configuration.")
     parser.add_argument("--output-dir", required=True, type=output_directory)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -1311,24 +1313,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-architecture",
-        help="Architecture JSON: model_config and pretrained_patterns; new models only",
+        help="Model architecture JSON; reaction definitions and pretrained sources come only from the prepared dataset",
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--resume")
-    parser.add_argument(
-        "--initialize-from",
-        help="Initialize compatible joint-model weights with a fresh optimizer.",
-    )
-    parser.add_argument(
-        "--head-only",
-        action="store_true",
-        help="Freeze all pattern features and train downstream prediction only; requires --fine-tune-checkpoint.",
-    )
-    parser.add_argument(
-        "--fine-tune-checkpoint",
-        help="Checkpoint to extend with immutable pattern features; fine-tuned/integrated checkpoints are supported.",
-    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -1382,8 +1371,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
-    if args.head_only and not args.fine_tune_checkpoint:
-        raise ValueError("--head-only requires --fine-tune-checkpoint")
+    from .pattern_models import parse_pattern_parameters
+    pattern_parameters = parse_pattern_parameters(args)
+    if args.resume and pattern_parameters:
+        raise ValueError("Reaction architecture cannot change on Resume")
+    from .sources import prepared_dataset_paths
+    args.train_dir, args.val_dir = map(str, prepared_dataset_paths(args.dataset_dir))
+    architecture = None
+    if args.model_architecture or args.model_architecture_json:
+        if args.resume:
+            raise ValueError("--model-architecture cannot change a resumed checkpoint")
+        architecture = json.loads(
+            args.model_architecture_json or Path(args.model_architecture).read_text()
+        )
+        if architecture.get("pretrained_patterns") or architecture.get("model_config", architecture).get("fine_tuning"):
+            raise ValueError("Pretrained reactions must be selected during dataset preparation, not training")
     output = Path(args.output_dir)
     confirm_output_overwrite(
         output,
@@ -1392,81 +1394,28 @@ def main(argv: list[str] | None = None) -> None:
         protected_paths=(
             args.train_dir,
             args.val_dir,
-            args.fine_tune_checkpoint,
-            args.initialize_from,
+            args.dataset_dir,
         ),
     )
     output.mkdir(parents=True, exist_ok=True)
-    (output / "training_args.json").write_text(json.dumps(vars(args), indent=2))
     model_config = training_model_config(args)
-    if args.model_architecture or args.model_architecture_json:
-        if args.resume or args.fine_tune_checkpoint:
-            raise ValueError("--model-architecture cannot change a resumed checkpoint")
+    if architecture is not None:
         from .sources import inherit_model_config
-        from .pattern_models import assemble_config
 
-        architecture = json.loads(
-            args.model_architecture_json or Path(args.model_architecture).read_text()
-        )
         model_config = inherit_model_config(
             architecture.get("model_config", architecture),
             args.train_dir,
             args.val_dir,
             saved_model=None,
         )
-        if architecture.get("pretrained_patterns"):
-            from .sources import dataset_sources
+    if not args.resume:
+        from .pattern_models import use_shared_dropout
 
-            if dataset_sources(args.train_dir, args.val_dir).get("reaction_models"):
-                raise ValueError(
-                    "Reaction models are fixed by dataset preparation; do not override them at training time"
-                )
-            model_config = assemble_config(
-                model_config, architecture["pretrained_patterns"]
-            )
-    # A new expansion must be materialized before training.  Ordinary and
-    # resumed runs defer inheritance to train_reactions(), where the already
-    # loaded dataset supplies max_roles without another complete disk scan.
-    if args.fine_tune_checkpoint and not args.resume:
-        from .sources import dataset_sources, inherit_model_config
-
-        saved_model = torch.load(
-            args.fine_tune_checkpoint, map_location="cpu", weights_only=False
-        )["model_config"]
-        saved_params = saved_model
-        inherited = dataset_sources(args.train_dir, args.val_dir)
-        saved_model = {
-            **saved_params,
-            "fragmenter_params": inherited["fragmenter_params"],
-            "adduct_type_strs": inherited["adduct_type_strs"],
-        }
-        model_config = inherit_model_config(
-            saved_model, args.train_dir, args.val_dir, saved_model=saved_model
-        )
-        model_config.pop("fine_tuning", None)
-        model_config["max_samples"] = args.max_samples
-        from .fine_tuning import prepare_model_config
-
-        with tempfile.TemporaryDirectory(prefix="fredis-training-config-") as directory:
-            config_path = Path(directory) / "model.json"
-            config_path.write_text(json.dumps(model_config))
-            patterns_path = Path(directory) / "patterns.json"
-            patterns_path.write_text(
-                json.dumps(
-                    model_config["fragmenter_params"]["fragment_ion_tree_builder"][
-                        "reaction_pattern_set"
-                    ]
-                )
-            )
-            model_config = prepare_model_config(
-                checkpoint_path=args.fine_tune_checkpoint,
-                pattern_set_path=patterns_path,
-                new_params_path=config_path,
-                head_only=args.head_only,
-            )
-            model_config["fine_tuning"].pop("pattern_set_path", None)
+        model_config["dropout"] = args.dropout
+        model_config = use_shared_dropout(model_config)
     train_reactions(
         model_config=model_config,
+        pattern_parameters=pattern_parameters,
         train_dir=args.train_dir,
         val_dir=args.val_dir,
         output_dir=args.output_dir,
@@ -1490,7 +1439,7 @@ def main(argv: list[str] | None = None) -> None:
         min_lr=args.min_lr,
         train_mol_encoder=args.train_mol_encoder,
         cache_dataset_in_memory=args.cache_dataset_in_memory,
-        initialize_from=args.initialize_from,
+        initialize_from=None,
         train_log_interval_steps=args.train_log_interval_steps,
         validation_interval_steps=args.validation_interval_steps,
         validation_fraction=args.validation_fraction,

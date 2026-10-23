@@ -35,24 +35,24 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  find(node=>node.tag==='button'&&node.textContent==='Add Adduct Rules').onclick();assert.equal(editor.getValue().fragmenter_params.fragment_ion_tree_builder.fragment_ion_adduct_rule_set.adduct_rules.length,5);
  const current=editor.getValue(),args=buildArgs({input:'input.msds',outputDir:'output',fragmenterParams:current.fragmenter_params});assert(!args.includes('--params'));assert.deepEqual(JSON.parse(args[args.indexOf('--params-json')+1]),current.fragmenter_params);
  const dataArgs=buildArgs({input:'input.msds',outputDir:'out',fragmenterParams:current.fragmenter_params,symbols:current.symbols,maxUniqueFragmentSmiles:500,maxReactionCombinations:1000});assert(dataArgs.includes('--symbols-json'));assert.equal(dataArgs[dataArgs.indexOf('--max-unique-fragment-smiles')+1],'500');assert.equal(dataArgs[dataArgs.indexOf('--max-reaction-combinations')+1],'1000');assert(!dataArgs.includes('--max-node')&&!dataArgs.includes('--max-edge'));
- const trainingArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:current});assert(!trainingArgs.includes('--params'));assert(!trainingArgs.includes('--params-json'));
- // Branch dropout remains linked to the shared setting; the new State Head
- // dropout is independently editable in the spectrum model.
+ const trainingArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',modelConfig:current});assert(!trainingArgs.includes('--params'));assert(!trainingArgs.includes('--params-json'));
+ // Every component uses the single training dropout setting.
  const dropoutConfigRoot=new Element('div');
  createParameterEditor(dropoutConfigRoot,{reaction_model_params:{edge_dropout:0.3},spectrum_model_params:{}},'training');
  assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.edge_dropout'));
- assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
- assert(walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
+ assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.state_dropout'));
+ assert(!walk(dropoutConfigRoot).some(node=>node.dataset.parameterPath==='spectrum_model_params.fragment_dropout'));
  // Generation settings are their own model_config section, filled in with
  // defaults immediately -- no "Override" button to click first.
  const ionRoot=new Element('div'),ionEditor=createParameterEditor(ionRoot,{spectrum_model_params:{}},'training');
  // Descriptors are chosen only on the post-branch intensity head.
+ assert(!walk(ionRoot).some(node=>node.dataset.parameterPath==='mol_encoder_params.external_feature_dim'));
  assert.equal(ionEditor.getValue().mol_encoder_params.external_feature_dim,0);assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,[]);
  const descriptorBox=name=>walk(ionRoot).find(node=>node.dataset.parameterPath==='spectrum_model_params.descriptors.'+name);
  assert.equal(descriptorBox('FormalCharge').type,'checkbox');assert(!descriptorBox('FormalCharge').checked);assert(!descriptorBox('TPSA').checked);
  descriptorBox('TPSA').checked=true;descriptorBox('TPSA').onchange();assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,['TPSA']);
  descriptorBox('FormalCharge').checked=false;descriptorBox('FormalCharge').onchange();assert.deepEqual(ionEditor.getValue().spectrum_model_params.descriptors,['TPSA']);
- const descriptorArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:ionEditor.getValue()});
+ const descriptorArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',modelConfig:ionEditor.getValue()});
  assert.deepEqual(descriptorArgs.slice(descriptorArgs.indexOf('--intensity-descriptors'),descriptorArgs.indexOf('--intensity-descriptors')+2),['--intensity-descriptors','TPSA']);
  descriptorBox('TPSA').checked=false;descriptorBox('TPSA').onchange();
  assert(!walk(ionRoot).some(node=>node.tag==='button'&&node.textContent.startsWith('Override ')));
@@ -60,21 +60,22 @@ const app=path.resolve(__dirname,'../..'),preset=service.chemistryDefaults(app);
  assert(!walk(ionRoot).some(node=>node.dataset.parameterPath==='generation_params.ion_prediction_threshold'));
  assert(!walk(ionRoot).some(node=>/loss_weight|intensity_power/.test(node.dataset.parameterPath||'')));
  assert(walk(ionRoot).some(node=>node.className==='parameter-group-heading'&&node.textContent==='Fragment Tree Search'));
- const ionArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:ionEditor.getValue()});
+ const ionArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',modelConfig:ionEditor.getValue()});
  assert.equal(ionArgs[ionArgs.indexOf('--max-fragment-nodes')+1],'100');
  assert(!ionArgs.includes('--ion-prediction-threshold'));
  assert(!ionArgs.includes('--fragment-loss-weight'));
- const lossArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',intensityLossWeight:0.4,cosineLossWeight:1});
+ const lossArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',intensityLossWeight:0.4,cosineLossWeight:1,intensityExponent:0.5});
  assert.equal(lossArgs[lossArgs.indexOf('--intensity-loss-weight')+1],'0.4');
  assert.equal(lossArgs[lossArgs.indexOf('--cosine-loss-weight')+1],'1');
+ assert.equal(lossArgs[lossArgs.indexOf('--intensity-exponent')+1],'0.5');
  // Neighborhood settings are owned by the per-pattern architecture editor.
  const neighborhoodRoot=new Element('div');createParameterEditor(neighborhoodRoot,{reaction_model_params:{}},'training');
  assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_mode'));
  assert(!walk(neighborhoodRoot).some(node=>node.dataset.parameterPath==='reaction_model_params.reaction_neighborhood_max_hop'));
  // Dropout is one shared training-level flag, not a per-component model_config override.
- const dropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',dropout:0.3});
- assert.equal(dropoutArgs[dropoutArgs.indexOf('--fragment-tree-dropout')+1],'0.3');
- const sharedDropoutArgs=buildTrainingArgs({trainDir:'train',valDir:'val',outputDir:'out',modelConfig:{reaction_model_params:{edge_dropout:0.1},spectrum_model_params:{dropout:0.1}}});
+ const dropoutArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',dropout:0.3});
+ assert.equal(dropoutArgs[dropoutArgs.indexOf('--dropout')+1],'0.3');
+ const sharedDropoutArgs=buildTrainingArgs({datasetDir:'dataset',outputDir:'out',modelConfig:{reaction_model_params:{edge_dropout:0.1},spectrum_model_params:{dropout:0.1}}});
  assert(!sharedDropoutArgs.includes('--reaction-state-dropout'));assert(!sharedDropoutArgs.includes('--spectrum-dropout'));
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-parameter-import-'));try{
  const file=path.join(temp,'fragmenter config.json');fs.writeFileSync(file,JSON.stringify({fragment_ion_tree_builder:{max_reaction_count:2},mass_tolerance:'0.04Da'}));let handler;const messages=[];service.attach({webview:{onDidReceiveMessage:fn=>handler=fn,postMessage:data=>messages.push(data)}},{},()=>app);

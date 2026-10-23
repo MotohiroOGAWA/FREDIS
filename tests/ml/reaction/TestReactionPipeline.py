@@ -19,6 +19,7 @@ def config() -> dict:
     """A small model configuration over the same chemistry."""
     return {
         "architecture": "fragment-tree-competitive-ion",
+        "dropout": 0.0,
         "fragmenter_params": chemistry()["fragmenter_params"],
         "mol_encoder_params": dict(
             symbols=list(SYMBOLS),

@@ -537,11 +537,16 @@ class _ChemistryPreparationBuilder:
 class ReactionStructureBuilder(_ChemistryPreparationBuilder):
     """Prepare chemistry, then normalize the shared training/prediction components."""
 
-    def build(self, *args, **kwargs):
+    def build(self, *args, save_all_edges=False, **kwargs):
         from .source_reaction_structure import SourceReactionStructure
 
         prepared, kept = super().build(*args, **kwargs)
-        return SourceReactionStructure.from_preparation(prepared), kept
+        return (
+            SourceReactionStructure.from_preparation(
+                prepared, save_all_edges=save_all_edges
+            ),
+            kept,
+        )
 
     def build_prediction(self, source, precursor_types, collision_energy, **kwargs):
         from .source_reaction_structure import SourceReactionStructure
@@ -554,4 +559,9 @@ class ReactionStructureBuilder(_ChemistryPreparationBuilder):
             [[] for _ in precursor_types],
             **kwargs,
         )
-        return SourceReactionStructure.from_preparation(prepared).for_prediction(), kept
+        return (
+            SourceReactionStructure.from_preparation(
+                prepared, save_all_edges=True
+            ).for_prediction(),
+            kept,
+        )

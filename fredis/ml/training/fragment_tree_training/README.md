@@ -6,8 +6,7 @@ propagates fragment probabilities, then assigns conditional ion/shift probabilit
 
 ```bash
 python -m fredis.cli train fragment-tree \
-  --train-dir prepared/train_structures \
-  --val-dir prepared/validation_structures \
+  --dataset-dir prepared \
   --output-dir training/run \
   --node-dim 32 --graph-dim 128 \
   --epochs 20 --device cuda \
@@ -37,12 +36,22 @@ The branch MLP scores parent Compound, child Compound, concrete reaction and mai
 adduct, without CE. The weighted binary cross entropy is
 
 ```text
-L_branch = (sum_positive softplus(-logit)
-            + negative_weight * sum_weak_negative softplus(logit))
-           / (N_positive + negative_weight * N_weak_negative)
+P_s = mean_positive_at_source_s softplus(-logit)
+N_s = mean_weak_negative_at_source_s softplus(logit)
+L_s = (P_s + negative_weight * N_s) / (1 + negative_weight)  # with negatives
+L_s = P_s                                                       # positive only
+L_s = N_s                                                       # negative only, weight > 0
+L_branch = sum_s L_s
 ```
 
-A zero denominator contributes zero loss. Labels excluded with -1 contribute
+Each source is a (BranchGroup, source Compound) pair with supervised edges.
+Negative-only terminal nodes use L_s = N_s when negative_weight > 0; with zero
+negative_weight they contribute zero. Class counts are averaged separately
+within each source; source losses are
+summed, not averaged across sources or the batch. Thus batch source count affects
+branch loss scale relative to spectrum loss. Diagnostic `branch_positive_loss`
+and `branch_negative_loss` sum the respective source means before weighting.
+An empty objective gives differentiable zero. Labels excluded with -1 contribute
 no loss or gradient. `--reaction-edge-layers` controls this MLP's hidden layers.
 Prediction uses the same tables through `SpectrumPredictionData`, without
 observations, targets or edge labels. See [input components](../../input/README.md).
@@ -106,3 +115,19 @@ pytest -q tests/ml/reaction/test_fragment_tree_model.py
 Head configuration: `--fragment-fc-dims`, `--fragment-dropout`, `--state-fc-dims`,
 `--state-dropout` (defaults: `128,64`, `0`, `128,64`, `0`). The same fields appear
 in Workbench. Old coupled-head checkpoints require retraining.
+
+Weak negatives are limited to admissible outgoing edges whose source Compound
+is the precursor root or an endpoint of a positive edge in the same branch group
+(including positive terminal nodes). Positive
+evidence is pooled across CE measurements before selecting these sources.
+By default, preparation saves only positive/weak-negative edges, their endpoint
+Compounds, and source roots (including isolated roots). Use `--save-all-edges`
+(Workbench: **Save all candidate edges and nodes**, config `saveAllEdges`) to
+retain the complete candidate graph. Additional edges have label -1 and do not
+change branch supervision or its normalization. Spectrum candidate coverage can
+change with graph retention; this option guarantees identical branch labels,
+not identical spectrum losses.
+
+Spectrum loss uses `--intensity-exponent` (default `0.5`, positive finite values only). Target intensities are raised to this power before normalization into cross-entropy weights; both predicted and target intensities are raised to this power for cosine similarity. Use `1` for the original objective. Prediction output intensities are unchanged. Resuming an older checkpoint without this setting retains exponent `1`.
+
+Reaction-path probabilities are propagated in log space. Transition and state probabilities use grouped log-softmax; incoming paths, execution histories, and formula-equivalent peaks are combined with logsumexp. Cross entropy consumes the merged log probability directly, without a probability floor. Precursor-excluded normalization also uses logsumexp. Cosine inputs are centered in log space before exponentiation; prediction outputs remain ordinary intensities.

@@ -178,7 +178,8 @@ def _prepare_group(task, builder, options):
             addable_pattern_ids=options["addable_pattern_ids"],
         )
     structure, kept = builder.build(
-        Compound.from_smiles(smiles), adducts, energies, mzs, intensities, **incremental
+        Compound.from_smiles(smiles), adducts, energies, mzs, intensities,
+        save_all_edges=options.get("save_all_edges", False), **incremental
     )
     kept_rows = [rows[index] for index in kept]
     path = (
@@ -333,6 +334,7 @@ def create_reaction_training_data(
     precursor_mz_column: str = "PrecursorMZ",
     minimum_relative_intensity: float = 0.0,
     overwrite: bool = True,
+    save_all_edges: bool = False,
     split: str = "dataset",
     max_unique_fragment_smiles: int = -1,
     max_reaction_combinations: int = -1,
@@ -409,6 +411,9 @@ def create_reaction_training_data(
         with stage_pretrained_models(chemistry_config) as staged:
             _reset_output(output, overwrite)
             chemistry_config = staged.install(output)
+        (output / "fragment-tree.fragmenter.pft").write_text(
+            json.dumps(chemistry_config["fragmenter_params"], indent=2)
+        )
     else:
         _reset_output(output, overwrite)
     (output / "invalid_records.json").write_text(
@@ -416,6 +421,7 @@ def create_reaction_training_data(
     )
     options = dict(
         output_dir=str(output),
+        save_all_edges=save_all_edges,
         adduct_type_column=adduct_type_column,
         collision_energy_column=collision_energy_column,
         precursor_mz_column=precursor_mz_column,
@@ -436,7 +442,7 @@ def create_reaction_training_data(
         for tree, (smiles, rows) in enumerate(grouped.items())
     )
     if preparation_config is None:
-        (output / "preparation_config.json").write_text(
+        (output / "fragment-tree.training-data-config.pft").write_text(
             json.dumps(
                 dict(
                     split=split,
@@ -828,6 +834,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--datasets-json", help="JSON list of dataset paths, per-file mappings and split assignments.")
     parser.add_argument("--dataset-mode", choices=("automatic", "assigned"), default="automatic")
     parser.add_argument("--output-dir", required=True, type=output_directory)
+    parser.add_argument(
+        "--save-all-edges", action="store_true",
+        help="Save all candidate edges and nodes; edges beyond the root and positive-path endpoints are ignored by branch loss.",
+    )
     configure_chemistry_options(parser)
     parser.add_argument(
         "--pretrained-pattern-model",
@@ -1007,6 +1017,7 @@ def main(argv: list[str] | None = None) -> None:
         precursor_mz_column=args.precursor_mz_column,
         minimum_relative_intensity=args.minimum_relative_intensity,
         overwrite=bool(args.overwrite),
+        save_all_edges=args.save_all_edges,
         max_unique_fragment_smiles=args.max_unique_fragment_smiles,
         max_reaction_combinations=args.max_reaction_combinations,
         num_workers=args.num_workers,
@@ -1145,6 +1156,9 @@ def main(argv: list[str] | None = None) -> None:
         archived = staged.install(output)
     config.clear()
     config.update(archived)
+    (output / "fragment-tree.fragmenter.pft").write_text(
+        json.dumps(config["fragmenter_params"], indent=2)
+    )
     workbench_path.unlink(missing_ok=True)
     aliases = {
         "validation_input": "validationInput",
@@ -1164,6 +1178,7 @@ def main(argv: list[str] | None = None) -> None:
         "minimum_relative_intensity": "minimumRelativeIntensity",
         "max_unique_fragment_smiles": "maxUniqueFragmentSmiles",
         "max_reaction_combinations": "maxReactionCombinations",
+        "save_all_edges": "saveAllEdges",
         "num_workers": "numWorkers",
         "chunk_size": "chunkSize",
     }
@@ -1190,8 +1205,9 @@ def main(argv: list[str] | None = None) -> None:
         restored.pop("datasets", None)
         restored.pop("datasetMode", None)
     preparation_config["workbench_config"] = restored
-    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
-        (output / name).write_text(json.dumps(preparation_config, indent=2))
+    (output / "fragment-tree.training-data-config.pft").write_text(
+        json.dumps(preparation_config, indent=2)
+    )
     (output / "split_manifest.json").write_text(json.dumps({
         "version": 1, "key": "rdkit-canonical-isomeric-smiles", "seed": args.validation_seed,
         "validationRatio": args.validation_ratio, "testRatio": args.test_ratio,
@@ -1234,8 +1250,9 @@ def main(argv: list[str] | None = None) -> None:
             json.dumps(split_config, indent=2)
         )
     (output / "invalid_records.json").write_text(json.dumps(reports, indent=2))
-    for name in ("fragment-tree.training-data-config.pft", "preparation_config.json"):
-        (output / name).write_text(json.dumps(preparation_config, indent=2))
+    (output / "fragment-tree.training-data-config.pft").write_text(
+        json.dumps(preparation_config, indent=2)
+    )
 
 
 if __name__ == "__main__":

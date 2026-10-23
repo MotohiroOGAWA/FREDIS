@@ -58,6 +58,7 @@ class MolEncoder(nn.Module):
         )
         self._node_dim = self.encoder.mol_node_dim
         self._graph_dim = self.encoder.mol_graph_dim
+        self.external_dropout = nn.Dropout(dropout)
         if external_feature_dim:
             self.external_feature_projection = nn.Sequential(
                 nn.Linear(external_feature_dim, self._graph_dim),
@@ -109,10 +110,10 @@ class MolEncoder(nn.Module):
         values = external_features.to(device=graph_h.device, dtype=graph_h.dtype)
         if not torch.isfinite(values).all():
             raise ValueError("external_features must contain only finite values")
-        feature_h = self.external_feature_projection(values)
-        return node_h, self.external_feature_fusion(
+        feature_h = self.external_dropout(self.external_feature_projection(values))
+        return node_h, self.external_dropout(self.external_feature_fusion(
             torch.cat((graph_h, feature_h), dim=-1)
-        )
+        ))
 
     def forward(self, batch: Batch, external_features: Tensor | None = None) -> Tensor:
         return self._encode_graph(batch, external_features)[1]

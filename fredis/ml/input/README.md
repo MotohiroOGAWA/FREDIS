@@ -68,3 +68,15 @@ shows its measured intensities, peak explanations and corresponding Compounds.
 `_annotation_preparation.py` are transient chemistry-building helpers. Their
 history/occurrence tables are not the persisted model input or public schema.
 Neural forward passes use prepared tensors without running reaction chemistry.
+
+Weak negatives are limited to admissible outgoing edges whose source Compound
+is the precursor root or an endpoint of a positive edge in the same branch group
+(including positive terminal nodes). Positive
+evidence is pooled across CE measurements before selecting these sources.
+By default, preparation saves only positive/weak-negative edges, their endpoint
+Compounds, and source roots (including isolated roots). Use `--save-all-edges`
+(Workbench: **Save all candidate edges and nodes**, config `saveAllEdges`) to
+retain the complete candidate graph. Additional edges have label -1 and do not
+change branch supervision or its normalization. Spectrum candidate coverage can
+change with graph retention; this option guarantees identical branch labels,
+not identical spectrum losses.
