@@ -13,7 +13,9 @@ class GenerationSettings:
     branch_path_threshold:
         Minimum path probability for keeping a reaction branch (0 keeps all).
     max_fragment_nodes:
-        Fragment-node budget shared by one (compound, main adduct) branch group.
+        Fragment-node budget shared by one (compound, main adduct) branch group,
+        including Source. After each reaction depth, prune the lowest cumulative
+        path probabilities and continue expanding survivors to the depth limit.
     peak_intensity_threshold:
         Minimum max-normalized intensity for an output peak.
     """

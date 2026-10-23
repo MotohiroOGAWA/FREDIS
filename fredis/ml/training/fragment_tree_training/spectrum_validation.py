@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from fredis.libs.mmkit.mmkit import Compound, Adduct
+from fredis.libs.mmkit.mmkit import Adduct
 
 QUANTILES = (
     ("q10", 0.10),
@@ -351,14 +351,8 @@ def validate_spectra(
                 raise ValueError(
                     "Spectrum validation requires original peak annotations; regenerate structures"
                 )
-            sources = [
-                Compound.from_smiles(data.source_smiles[int(t)])
-                for t in data.sample_tree_index
-            ]
             annotations = data.sample_annotations
-            adducts = [Adduct.parse(a["adduct"]) for a in annotations]
-            energies = [a["collisionEnergy"] for a in annotations]
-            for output in generator.predict_batches(sources, adducts, energies):
+            for output in generator.predict_prepared_batches(data):
                 for sample, input_index in enumerate(output.sample_input_index):
                     annotation = annotations[input_index]
                     formula_rows = (
@@ -529,7 +523,7 @@ def validate_spectra(
                                 "mainAdduct",
                                 str(
                                     generator.fragmenter._resolve_main_adduct_type(
-                                        adducts[input_index]
+                                        Adduct.parse(annotation["adduct"])
                                     )
                                 ),
                             ),

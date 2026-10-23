@@ -24,6 +24,7 @@ from fredis.ml.input.source_reaction_structure import SourceReactionStructure
 class PreparedPiece:
     path: Path
     sample_indices: tuple[int, ...]
+    compound_smiles: str | None = None
 
     @property
     def num_samples(self) -> int:
@@ -122,6 +123,28 @@ class PreparedPieceSequence(Sequence[SourceReactionStructure]):
             random.shuffle(blocks)
         return [index for block in blocks for index in block]
 
+    def compound_sample_groups(self) -> dict[str, list[int]]:
+        """Group all retained spectra by Source, without loading indexed files.
+
+        Older manifests without SMILES are resolved from stored Source identities;
+        neither file boundaries nor sample chunks define compound identity.
+        """
+        groups: dict[str, list[int]] = {}
+        offset = 0
+        for piece in self._pieces:
+            if piece.compound_smiles:
+                groups.setdefault(piece.compound_smiles, []).extend(
+                    range(offset, offset + piece.num_samples)
+                )
+            else:
+                data = self._state.load(piece.path)
+                trees = data.sample_tree_index.tolist()
+                for local, sample in enumerate(piece.sample_indices):
+                    smiles = data.source_smiles[trees[sample]]
+                    groups.setdefault(smiles, []).append(offset + local)
+            offset += piece.num_samples
+        return groups
+
     def sample_subset(self, indices: Sequence[int]) -> "PreparedPieceSequence":
         selected = list(indices)
         pieces: list[PreparedPiece] = []
@@ -137,6 +160,7 @@ class PreparedPieceSequence(Sequence[SourceReactionStructure]):
                     PreparedPiece(
                         piece.path,
                         tuple(piece.sample_indices[index] for index in local),
+                        piece.compound_smiles,
                     )
                 )
             offset = end
@@ -181,11 +205,13 @@ def prepared_piece_sequence(
     if not files:
         raise ValueError(f"No prepared .preft.pt files in {directory}")
     counts: dict[str, int] = {}
+    compound_smiles: dict[str, str | None] = {}
     with manifest_path.open(newline="") as stream:
         for row in csv.DictReader(stream, delimiter="\t"):
             name = row.get("file", "")
             if name and row.get("status") == "completed":
                 counts[name] = int(row["num_valid_samples"])
+                compound_smiles[name] = row.get("smiles") or None
     missing = sorted(set(files) - set(counts))
     if missing:
         raise ValueError(
@@ -233,7 +259,11 @@ def prepared_piece_sequence(
         indices = selected.get(name, ())
         for start in range(0, len(indices), max_samples):
             pieces.append(
-                PreparedPiece(path, tuple(indices[start : start + max_samples]))
+                PreparedPiece(
+                    path,
+                    tuple(indices[start : start + max_samples]),
+                    compound_smiles[name],
+                )
             )
     if not pieces:
         raise ValueError(

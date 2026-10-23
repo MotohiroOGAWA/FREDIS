@@ -1,30 +1,24 @@
-"""Source -> reactions -> Torch decode -> selected molecules -> tree/intensity."""
+"""Source -> incremental reaction search -> selected graph -> spectrum intensity."""
 
 from __future__ import annotations
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from collections.abc import Sequence
 import math
-from fredis.ml.input.adduct_data import AdductData
 import torch
 from torch import nn
 from fredis.domain.fragment.fragmenter import Fragmenter
 from fredis.libs.mmkit.mmkit import Adduct, Compound
-from ..input.source_reaction_structure import (
-    SourceReactionStructure,
-)
 from ..mol.mol_encoder import MolEncoder
 from ..mol.formula_encoder import FormulaTensorizer
 from .components.condition.adduct_embedding import AdductEmbeddingLayer
 from .components.condition.collision_energy_feature import CollisionEnergyFeatureLayer
-from .components.reaction.reaction_decoder import ReactionDecoderOutput
 from .source_reaction_feature_model import (
     SourceReactionFeatureModel,
     SourceReactionFeatures,
 )
-from .materialization import materialize_reaction_states, DecodedFragmentTreeBatch
+from .materialization import DecodedFragmentTreeBatch
 from .generation import GenerationSettings
 from .fragment_spectrum_model import (
-    prepare_spectrum_model_batch,
     SpectrumModelOutput,
     SpectrumModelBatch,
 )
@@ -235,150 +229,42 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             ),
         )
 
-    def prepare(self, sources, precursor_types, collision_energy, *, precomputed=None):
-        from ..input.structure_builder import ReactionStructureBuilder
-        from ..input.source_reaction_structure import SpectrumPredictionData
+    @torch.no_grad()
+    def prepare(
+        self,
+        sources,
+        precursor_types,
+        collision_energy,
+        *,
+        precomputed=None,
+        prepared=None,
+    ):
+        from .incremental_generation import prepare_incremental
 
-        if not sources or not len(sources) == len(precursor_types) == len(
-            collision_energy
-        ):
-            raise ValueError(
-                "sources, precursor_types and collision_energy need equal nonzero lengths"
-            )
-        grouped = {}
-        for i, source in enumerate(sources):
-            grouped.setdefault(source.smiles, []).append(i)
-        inputs = []
-        unique = []
-        reactions = []
-        adducts = []
-        indices = []
-        for rows in grouped.values():
-            source = sources[rows[0]]
-            builder = ReactionStructureBuilder(self)
-            cached = precomputed.get(source.smiles) if precomputed else None
-            kwargs = (
-                {}
-                if cached is None
-                else {
-                    "precomputed_reactions": cached["reactions"],
-                    "precomputed_relations": cached["relations"],
-                }
-            )
-            data, kept = builder.build_prediction(
-                source,
-                [precursor_types[i] for i in rows],
-                [collision_energy[i] for i in rows],
-                **kwargs,
-            )
-            inputs.append(data)
-            unique.append(source)
-            reactions.append(builder.last_reactions)
-            adducts.extend(precursor_types[rows[i]] for i in kept)
-            indices.extend(rows[i] for i in kept)
-        return (
-            SpectrumPredictionData.from_structures(inputs),
-            tuple(unique),
-            tuple(reactions),
-            tuple(adducts),
-            tuple(indices),
+        return prepare_incremental(
+            self,
+            sources,
+            precursor_types,
+            collision_energy,
+            precomputed=precomputed,
+            prepared=prepared,
         )
 
-    def _select_graph(self, data, logits):
-        """Keep high-probability reachable branches with one budget per main-adduct group."""
-        from ..input.source_reaction_structure import csr
-        from ..input.annotated_spectrum_data import SpectrumExplanationData
-        import heapq, math
-
-        execution = data.execution_graph
-        graph = data.compound_graph
-        ctx = data.reaction_contexts
-        edge_lookup = {
-            (int(a), int(b), int(r)): i
-            for i, (a, b, r) in enumerate(
-                zip(
-                    graph.source_compound_index,
-                    graph.target_compound_index,
-                    graph.reaction_index,
-                )
-            )
-        }
-        edge_rows = []
-        selected_compounds = []
-        threshold = (
-            -math.inf
-            if self.generation.branch_path_threshold == 0
-            else math.log(self.generation.branch_path_threshold)
-        )
-        for group in range(data.num_branch_groups):
-            first, last = ctx.edge_ptr[group : group + 2]
-            scores = {
-                int(edge): float(torch.nn.functional.logsigmoid(logits[int(first) + j]))
-                for j, edge in enumerate(ctx.edge_index[first:last])
-            }
-            outgoing = {}
-            for parent, child, reaction in zip(
-                execution.source_index.tolist(),
-                execution.target_index.tolist(),
-                execution.reaction_index.tolist(),
-            ):
-                if int(execution.branch_group_index[parent]) != group:
-                    continue
-                eid = edge_lookup[
-                    (
-                        int(execution.compound_index[parent]),
-                        int(execution.compound_index[child]),
-                        reaction,
-                    )
-                ]
-                outgoing.setdefault(parent, []).append((child, eid))
-            root = int(execution.root_index[group])
-            reached = {root: 0.0}
-            compounds = {int(execution.compound_index[root])}
-            kept = set()
-            queue = [(0.0, root)]
-            while queue:
-                negative_score, parent = heapq.heappop(queue)
-                if -negative_score < reached[parent]:
-                    continue
-                for child, eid in outgoing.get(parent, []):
-                    score = -negative_score + scores[eid]
-                    compound = int(execution.compound_index[child])
-                    if score < threshold:
-                        continue
-                    if (
-                        compound not in compounds
-                        and len(compounds) >= self.generation.max_fragment_nodes
-                    ):
-                        continue
-                    compounds.add(compound)
-                    kept.add(eid)
-                    if score > reached.get(child, -math.inf):
-                        reached[child] = score
-                        heapq.heappush(queue, (-score, child))
-            edge_rows.append(sorted(kept))
-            selected_compounds.append(compounds)
-        ep, ei = csr(edge_rows, data.device)
-        candidates = []
-        e = data.formula_explanations
-        for sample, group in enumerate(data.sample_branch_group_index.tolist()):
-            a, b = data.spectrum_explanations.formula_explanation_ptr[
-                sample : sample + 2
+    @torch.no_grad()
+    def predict_prepared_batches(self, data, *, max_samples=None):
+        """Reuse saved chemistry without reading observed peaks or teacher labels."""
+        sources = [
+            data.compounds.compounds[
+                int(data.source_compounds.compound_index[int(tree)])
             ]
-            candidates.append(
-                [
-                    i
-                    for i in data.spectrum_explanations.formula_explanation_index[
-                        a:b
-                    ].tolist()
-                    if int(e.compound_index[i]) in selected_compounds[group]
-                ]
-            )
-        xp, xi = csr(candidates, data.device)
-        return replace(
-            data,
-            reaction_contexts=replace(ctx, edge_ptr=ep, edge_index=ei, edge_label=None),
-            spectrum_explanations=SpectrumExplanationData(xp, xi),
+            for tree in data.sample_tree_index.tolist()
+        ]
+        yield from self.predict_batches(
+            sources,
+            [Adduct.parse(a) for a in data.conditions.observed_adducts],
+            data.collision_energy_eV.tolist(),
+            max_samples=max_samples,
+            prepared=data,
         )
 
     @torch.no_grad()
@@ -390,6 +276,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
         *,
         max_samples=None,
         precomputed=None,
+        prepared=None,
     ):
         from .fragment_spectrum_model import spectrum_batch_from_input
 
@@ -402,9 +289,11 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             collision_energy
         ):
             raise ValueError("Input lengths must match and be nonzero")
+        from .incremental_generation import source_keys
+
         groups = {}
-        for i, source in enumerate(sources):
-            groups.setdefault(source.smiles, []).append(i)
+        for i, key in enumerate(source_keys(sources, prepared)):
+            groups.setdefault(key, []).append(i)
         packs = []
         pack = []
         for rows in groups.values():
@@ -424,6 +313,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 [precursor_types[i] for i in rows],
                 [collision_energy[i] for i in rows],
                 precomputed=precomputed,
+                prepared=prepared,
             )
             data = data.to(device)
             static = self.feature_model.encode_static(data, max_graphs=limit)
@@ -431,8 +321,8 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
             molecular = self.feature_model.encode_compounds(
                 data, features, max_graphs=limit
             )
-            logits, _ = self.feature_model.score_edges(data, features, molecular)
-            selected = self._select_graph(data, logits)
+            # prepare() has already performed probability-pruned incremental search.
+            selected = data
             for start in range(0, selected.num_samples, limit):
                 indices = list(range(start, min(start + limit, selected.num_samples)))
                 chunk = selected.select_samples(indices)
@@ -468,7 +358,15 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 )
 
     @torch.no_grad()
-    def predict(self, sources, precursor_types, collision_energy, *, precomputed=None):
+    def predict(
+        self,
+        sources,
+        precursor_types,
+        collision_energy,
+        *,
+        precomputed=None,
+        prepared=None,
+    ):
         if len(sources) > self.max_samples:
             raise ValueError("Use predict_batches() for inputs exceeding max_samples")
         outputs = list(
@@ -478,6 +376,7 @@ class SourceAnchoredFragmentSpectrumGenerator(nn.Module):
                 collision_energy,
                 max_samples=self.max_samples,
                 precomputed=precomputed,
+                prepared=prepared,
             )
         )
         if len(outputs) != 1:

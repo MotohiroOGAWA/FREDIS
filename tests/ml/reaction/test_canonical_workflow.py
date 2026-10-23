@@ -368,6 +368,12 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(tmp_path):
         warmup_steps=0,
         validation_interval_steps=1,
     )
+    subset = json.loads((output / "intermediate_validation_subset.json").read_text())
+    assert subset["selection_unit"] == "compound"
+    assert subset["total_compounds"] == subset["selected_compounds"] == 1
+    assert subset["selected_samples"] == 2
+    assert subset["sample_indices"] == [0, 1]
+    assert subset["compound_smiles"] == ["CC(N)O"]
     checkpoint = output / "last.pt"
     assert checkpoint.exists()
     generator = load_generator(

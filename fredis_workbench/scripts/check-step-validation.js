@@ -23,6 +23,8 @@ Module._load = originalLoad;
   }
   const html = workbenchHtml({}, base);
   assert(html.includes('name="validationFraction"'));
+  assert(html.includes('Intermediate validation compound fraction'));
+  assert(html.includes('All eligible spectra of each selected compound are included.'));
   assert(html.includes('Full validation still runs at each epoch end.'));
   assert(html.includes('Validation generates spectra'));
   assert(html.includes('class="dataset-validation-progress"'));

@@ -181,23 +181,38 @@ def _mean_training_interval(
     return row
 
 
-def validation_subset(pieces, fraction: float, seed: int):
-    """Select a fixed, uniformly sampled subset of measurement records."""
+def validation_compound_groups(pieces):
+    """Index validation spectra by canonical Source identity, across all chunks."""
+    if hasattr(pieces, "compound_sample_groups"):
+        return pieces.compound_sample_groups()
+    groups = {}
+    offset = 0
+    for piece in pieces:
+        for local, tree in enumerate(piece.sample_tree_index.tolist()):
+            groups.setdefault(piece.source_smiles[tree], []).append(offset + local)
+        offset += piece.num_samples
+    return groups
+
+
+def validation_subset(pieces, fraction: float, seed: int, *, compound_groups=None):
+    """Select whole compounds uniformly and retain all of their eligible spectra."""
     import random
     from ...input.reaction_batching import select_samples
 
     if not math.isfinite(fraction) or not 0 < fraction <= 1:
         raise ValueError("validation_fraction must be greater than 0 and at most 1")
-    total = (
-        pieces.total_samples
-        if hasattr(pieces, "total_samples")
-        else sum(piece.num_samples for piece in pieces)
+    groups = (
+        validation_compound_groups(pieces)
+        if compound_groups is None
+        else compound_groups
     )
-    if not total:
-        raise ValueError("Validation dataset contains no samples")
-    indices = sorted(
-        random.Random(seed).sample(range(total), max(1, math.ceil(total * fraction)))
+    compounds = sorted(groups)
+    if not compounds:
+        raise ValueError("Validation dataset contains no compounds")
+    selected_compounds = random.Random(seed).sample(
+        compounds, max(1, math.ceil(len(compounds) * fraction))
     )
+    indices = sorted(index for smiles in selected_compounds for index in groups[smiles])
     if hasattr(pieces, "sample_subset"):
         return pieces.sample_subset(indices), indices
     selected = []
@@ -461,7 +476,9 @@ def train_reactions(
         branch_weight = settings["branch_weight"]
         negative_weight = settings["negative_weight"]
         for key in SPECTRUM_LOSS_KEYS:
-            settings[key] = prior.get(key, 1.0 if key == "intensity_exponent" else settings[key])
+            settings[key] = prior.get(
+                key, 1.0 if key == "intensity_exponent" else settings[key]
+            )
         spectrum_loss = SpectrumLossSettings(
             **{key: settings[key] for key in SPECTRUM_LOSS_KEYS}
         )
@@ -491,7 +508,11 @@ def train_reactions(
         val_dir,
         saved_model=model_config if resume or params.get("fine_tuning") else None,
     )
-    from .pattern_models import pattern_config, use_shared_dropout, apply_pattern_parameters
+    from .pattern_models import (
+        pattern_config,
+        use_shared_dropout,
+        apply_pattern_parameters,
+    )
     from fredis.domain.fragment import Fragmenter
 
     if pattern_parameters:
@@ -507,6 +528,7 @@ def train_reactions(
     }
     model_config["max_samples"] = max_samples
     from .configuration import write_training_configuration
+
     write_training_configuration(output, model_config, settings)
     startup_progress.update(1)
     startup_progress.set_description_str("CUDA model", refresh=True)
@@ -605,15 +627,33 @@ def train_reactions(
         global_step=global_step,
     )
     intermediate_pieces = []
+    intermediate_compounds = []
+    total_validation_compounds = 0
     if validation_interval_steps:
+        compound_groups = validation_compound_groups(datasets[1])
+        total_validation_compounds = len(compound_groups)
         intermediate_pieces, subset_indices = validation_subset(
-            datasets[1], validation_fraction, subset_seed
+            datasets[1],
+            validation_fraction,
+            subset_seed,
+            compound_groups=compound_groups,
+        )
+        selected_indices = set(subset_indices)
+        intermediate_compounds = sorted(
+            smiles
+            for smiles, indices in compound_groups.items()
+            if indices and indices[0] in selected_indices
         )
         (output / "intermediate_validation_subset.json").write_text(
             json.dumps(
                 {
                     "seed": subset_seed,
                     "fraction": validation_fraction,
+                    "selection_unit": "compound",
+                    "total_compounds": total_validation_compounds,
+                    "selected_compounds": len(intermediate_compounds),
+                    "compound_smiles": intermediate_compounds,
+                    "selected_samples": len(subset_indices),
                     "total_samples": dataset_report["validation"]["samples"],
                     "sample_indices": subset_indices,
                 },
@@ -774,6 +814,8 @@ def train_reactions(
             "validation_samples": sample_count,
             "total_validation_samples": dataset_report["validation"]["samples"],
             "validation_fraction": validation_fraction,
+            "validation_compounds": len(intermediate_compounds),
+            "total_validation_compounds": total_validation_compounds,
             "validation_batches": batch_count,
             "validation_seconds": time.perf_counter() - validation_started,
             "validation_loss": totals.pop("loss") / sample_count,
@@ -1291,19 +1333,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_mol_encoder_arguments(parser)
     from .pattern_models import PATTERN_PARAMETERS
+
     for key in PATTERN_PARAMETERS:
         parser.add_argument(
-            "--pattern-" + key.replace("_", "-"), action="append", metavar="ID=VALUE",
-            help="Set " + key + " for one new reaction pattern; repeat for other IDs. Pretrained reactions stay fixed.",
+            "--pattern-" + key.replace("_", "-"),
+            action="append",
+            metavar="ID=VALUE",
+            help="Set "
+            + key
+            + " for one new reaction pattern; repeat for other IDs. Pretrained reactions stay fixed.",
         )
     for flag, (_, _, kind, default) in MODEL_OPTIONS.items():
         parser.add_argument(
-            "--" + flag, type=kind, default=default,
-            help=MODEL_OPTION_HELP.get(flag)
+            "--" + flag, type=kind, default=default, help=MODEL_OPTION_HELP.get(flag)
         )
     for flag, (default, text) in SPECTRUM_LOSS_OPTIONS.items():
         parser.add_argument("--" + flag, type=float, default=default, help=text)
-    parser.add_argument("--dataset-dir", required=True, help="Preparation output containing train_structures, validation_structures and shared configuration.")
+    parser.add_argument(
+        "--dataset-dir",
+        required=True,
+        help="Preparation output containing train_structures, validation_structures and shared configuration.",
+    )
     parser.add_argument("--output-dir", required=True, type=output_directory)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -1364,7 +1414,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--validation-fraction",
         type=float,
         default=0.1,
-        help="Fraction of validation samples used for intermediate checks (0 < fraction <= 1; default: 0.1).",
+        help="Fraction of validation compounds used for intermediate checks; all eligible spectra of selected compounds are included (0 < fraction <= 1; default: 0.1).",
     )
     return parser
 
@@ -1372,10 +1422,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     from .pattern_models import parse_pattern_parameters
+
     pattern_parameters = parse_pattern_parameters(args)
     if args.resume and pattern_parameters:
         raise ValueError("Reaction architecture cannot change on Resume")
     from .sources import prepared_dataset_paths
+
     args.train_dir, args.val_dir = map(str, prepared_dataset_paths(args.dataset_dir))
     architecture = None
     if args.model_architecture or args.model_architecture_json:
@@ -1384,8 +1436,12 @@ def main(argv: list[str] | None = None) -> None:
         architecture = json.loads(
             args.model_architecture_json or Path(args.model_architecture).read_text()
         )
-        if architecture.get("pretrained_patterns") or architecture.get("model_config", architecture).get("fine_tuning"):
-            raise ValueError("Pretrained reactions must be selected during dataset preparation, not training")
+        if architecture.get("pretrained_patterns") or architecture.get(
+            "model_config", architecture
+        ).get("fine_tuning"):
+            raise ValueError(
+                "Pretrained reactions must be selected during dataset preparation, not training"
+            )
     output = Path(args.output_dir)
     confirm_output_overwrite(
         output,

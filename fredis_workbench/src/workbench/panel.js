@@ -124,7 +124,7 @@ const fields={
  warmupSteps:['Warmup optimizer steps',100,'Number of optimizer updates used to increase the learning rate gradually at training start.'],
  trainLogIntervalSteps:['Train metrics interval (optimizer steps, 0 disables)',100,'Optimizer updates between reports of mean training metrics. Set to 0 to disable interval reports.'],
  validationIntervalSteps:['Validation interval (optimizer steps, 0 disables)',0,'Optimizer updates between intermediate validations. Set to 0 for epoch-end validation only.'],
- validationFraction:['Intermediate validation fraction (0 < value ≤ 1)',0.1,'Fraction of validation data used in intermediate checks. Epoch-end validation uses the full set.'],
+ validationFraction:['Intermediate validation compound fraction (0 < value ≤ 1)',0.1,'Fraction of validation compounds used in intermediate checks. All eligible spectra of each selected compound are included. Epoch-end validation uses the full set.'],
  lrPatience:['LR reduction patience',3,'Number of validation checks without improvement before the learning rate is reduced.'],
  earlyStoppingPatience:['Early stopping patience (0 disables)',10,'Number of validation checks without improvement before training stops. Set to 0 to disable early stopping.'],
  minLr:['Minimum learning rate',0.000001,'Lower limit for learning rate reductions.'],

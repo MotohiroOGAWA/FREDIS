@@ -182,7 +182,7 @@ persisted field definitions and CSR references are in [the input schema](input/S
 | REACTION | [Pattern-owned encoders](#component-reaction) | [`ReactionInstanceEncoder`](specgen/components/reaction/reaction_instance_encoder.py) |
 | CONDITION | [Condition features](#component-condition) | [`AdductEmbeddingLayer`](specgen/components/condition/adduct_embedding.py) / [`CollisionEnergyFeatureLayer`](specgen/components/condition/collision_energy_feature.py) |
 | BRANCH | [Branch edge MLP](#component-branch) | [`SourceReactionFeatureModel.score_edges()`](specgen/source_reaction_feature_model.py) |
-| SELECT | [Inference selection](#component-selection) | [`_select_graph()`](specgen/source_anchored_spectrum_predictor.py) / [`execution_graph`](input/source_reaction_structure.py) |
+| SELECT | [Inference selection](#component-selection) | [`_Chemistry.search()`](specgen/incremental_generation.py) / [`execution_graph`](input/source_reaction_structure.py) |
 | INTENSITY | [Intensity model](#component-intensity) | [`CompetitiveSpectrumModel`](specgen/competitive_spectrum_model.py) |
 | FORMULA | [Formula aggregation](#component-formula) | [`_spectrum_loss()` / `merge_candidate_peaks()`](specgen/competitive_spectrum_model.py) |
 | EXPORT | [Predicted spectra](#component-export) | [`predict_batches()`](specgen/source_anchored_spectrum_predictor.py) / [MSDataset adapter](specgen/source_reaction_msdataset.py) |
@@ -783,36 +783,47 @@ Code: [canonical input](input/source_reaction_structure.py),
 
 ```mermaid
 flowchart TB
-    PREP["From PREP<br/>Compound edges, generating ReactionSets and pair relations"]
-    ROOT["Root per BranchGroup<br/>Source ID to Compound ID, empty reaction set"]
-    EXPAND["Build finite admissible histories<br/>Add one unused compatible reaction<br/>Require destination generating set"]
-    SCORE["From BRANCH<br/>Log-sigmoid score for each group-edge entry"]
-    QUEUE["Best-score traversal from root<br/>Accumulate edge log probabilities"]
-    LIMIT["Apply path threshold<br/>Apply unique-Compound budget per group"]
-    EDGE["Rebuild selected-edge CSR<br/>Keep original structural registry IDs"]
-    EXPLAIN["Filter each spectrum's explanation CSR<br/>Keep candidates of selected Compounds"]
-    NEXT["Next: INTENSITY<br/>Rebuild admissible histories from selected edges"]
-    PREP --> EXPAND
-    ROOT --> EXPAND --> QUEUE
-    SCORE --> QUEUE --> LIMIT --> EDGE --> EXPLAIN --> NEXT
+    PREP["Source graph, concrete reactions and pair relations<br/>Reuse saved training chemistry when available"]
+    ROOT["Root per BranchGroup<br/>Empty reaction history"]
+    EXPAND["Expand surviving histories by one compatible reaction"]
+    MATERIALIZE["Reuse known structures and canonical identities<br/>Materialize only missing immediate children"]
+    SCORE["Encode missing child graphs<br/>Score parent + child + reaction + main adduct"]
+    LIMIT["Apply cumulative path threshold<br/>Prune lowest-scoring unique compounds to budget"]
+    DEPTH["Continue surviving frontier<br/>until max reaction depth or no valid extension"]
+    NEXT["Selected graph and formula explanations<br/>to INTENSITY"]
+    PREP --> ROOT --> EXPAND --> MATERIALIZE --> SCORE --> LIMIT --> DEPTH
+    DEPTH -->|next depth| EXPAND
+    DEPTH -->|finished| NEXT
 ```
 
-| Interface | Shape / operation |
-|---|---|
-| Root mapping | `root_source_compound_index [N_group]` -> `SourceCompound.compound_index` -> Compound ID |
-| Admissible history identity | `(BranchGroup, Compound ID, sorted reaction set)`; derived at runtime |
-| Search path score | Sum of `logsigmoid(edge_logit)`; root score is 0 |
-| Selected `edge_ptr/index` | int64 CSR with `N_group` rows, referencing the original CompoundReactionGraph |
-| Selected spectrum explanations | int64 CSR with `N_spectrum` rows, referencing original FormulaExplanationData |
+Prediction starts with Source and concrete reactions, without exhaustive reaction
+combination enumeration or full fragment-tree preparation. Only immediate
+children of surviving histories need to be materialized: the trained edge MLP
+requires the child's molecular embedding. Repeated/conflicting/invalidating
+reactions cannot extend a history. Structure/graph/embedding caches are shared
+across main-adduct groups and CE conditions within a preparation call.
 
-A repeated reaction, conflict or invalidation blocks an extension. Reaching a
-Compound through a new valid reaction set retains another history without
-copying its molecular graph. A threshold of zero disables score pruning; otherwise
-scores are compared in log space. `max_fragment_nodes` counts unique Compounds,
-including the root, once per group. Accepted edges determine the final graph,
-and admissible histories are derived again for intensity computation. Selection
-runs under `no_grad`; label tensors are absent from prediction inputs.
-Training directly uses the prepared graph instead of this predicted selection.
+Search ranks compounds by their best cumulative path probability (sum of edge
+log-sigmoids). After each depth it removes the lowest-probability compounds until
+`max_fragment_nodes` is satisfied, counting Source. Budget saturation does not
+terminate search: the surviving frontier continues to the maximum reaction count.
+Ties prefer shallower compounds; disconnected histories are removed. Multiple
+compatible histories reaching one canonical compound share its molecular graph.
+
+`predict_prepared_batches()` restores concrete reactions from saved reaction
+types, source match/retention tensors and pair relations, without SMARTS matching.
+Saved generating reaction sets supply a chemistry cache of known compounds,
+canonical SMILES and molecular graphs; saved formula explanations cache ion
+annotations. Missing chemistry is generated on demand. Teacher-selected edges,
+labels, observed peaks and targets never restrict search. Regular prediction uses
+the same incremental search, matching Source reactions when no saved data is
+available. `prepare()` now executes model-guided selection and must be rerun when
+weights change; only chemistry can be reused across optimizer steps.
+
+Selected candidates use the same `SpectrumPredictionData` tables and spectrum
+model as training. Branch selection is CE-independent, runs under `no_grad`, and
+is shared by all CE records in a BranchGroup. Training continues to consume its
+prepared graph without running predicted pruning.
 
 **Next:** [INTENSITY](#component-intensity), using the same chemical registries
 and spectrum-condition interfaces as training.
@@ -1469,3 +1480,15 @@ Regression references: [condition-head and probability tests](../../tests/ml/rea
 [batch prediction tests](../../tests/ml/specgen/test_predict_source_msdataset.py).
 
 Old coupled Transition Head checkpoints are incompatible with the new banks and softmax definitions; retrain the model.
+
+### Intermediate validation sampling
+
+`validation_fraction` is a fraction of unique Source compounds, not spectra or
+sample chunks. A fixed seed selects `ceil(compound_count * fraction)` compounds
+(at least one) and includes every eligible spectrum of each selected compound,
+across CE/adduct conditions, files and chunks. Existing assignment-score filters
+still apply before this selection. Canonical Source SMILES in the manifest supply
+identities without tensor loading; older manifests are resolved from saved Source
+tables. `intermediate_validation_subset.json` records `selection_unit=compound`,
+total/selected compound counts, selected SMILES and flattened sample indices.
+Epoch-end validation continues to use the entire eligible validation dataset.
