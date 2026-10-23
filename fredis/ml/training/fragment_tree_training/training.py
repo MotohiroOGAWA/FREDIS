@@ -80,10 +80,11 @@ PROGRESS_WIDTH = 100
 PROGRESS_FORMAT = "{desc:<18} {percentage:3.0f}%|{bar:36}| {n_fmt:>5}/{total_fmt:<5} [{elapsed}<{remaining}]"
 
 
-def progress_bar(*, total, description, position, leave):
+def progress_bar(*, total, description, position, leave, initial=0):
     """Create one of the four fixed-position training progress bars."""
     return tqdm(
         total=total,
+        initial=initial,
         desc=description,
         position=position,
         leave=leave,
@@ -967,7 +968,8 @@ def train_reactions(
                 latest_validation="spectrum_validation/epoch_0.json",
             )
         epoch_progress = progress_bar(
-            total=epochs, description="Epoch", position=0, leave=True
+            total=start + epochs, initial=start,
+            description="Epoch", position=0, leave=True
         )
         early_stopping = EarlyStopping(
             early_stopping_patience, best=best, bad_epochs=bad_epochs

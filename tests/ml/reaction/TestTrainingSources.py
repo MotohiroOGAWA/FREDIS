@@ -31,6 +31,14 @@ class TestTrainingSources(unittest.TestCase):
         self.assertEqual(kwargs["position"], 1)
         self.assertIn("{bar:36}", kwargs["bar_format"])
 
+    def test_resumed_progress_starts_at_completed_epoch(self):
+        with patch.object(training, "tqdm") as tqdm:
+            training.progress_bar(
+                total=34, initial=4, description="Epoch", position=0, leave=True
+            )
+        self.assertEqual(tqdm.call_args.kwargs["initial"], 4)
+        self.assertEqual(tqdm.call_args.kwargs["total"], 34)
+
     def test_overwrite_removes_previous_run_leftovers(self):
         # metric_distributions.tsv is appended to across a run, and
         # spectrum_validation/*.json from a longer previous run is never
