@@ -70,7 +70,13 @@ async function readRun(directory) {
           series.get(key).set(step, value);
         };
         if (file === 'metric_distributions.tsv') add('distributions/' + row.split + '/' + row.metric, row.value);
-        else for (const key of headers) if (!['event', 'epoch', 'global_step', 'branch_id'].includes(key)) add('metrics/' + key, row[key]);
+        else for (const key of headers) {
+          if (['event', 'epoch', 'global_step', 'branch_id'].includes(key)) continue;
+          // Interval and epoch rows share train_* columns in the recorded TSV.
+          const name = row.event === 'train_step' && key.startsWith('train_') && !key.startsWith('train_window_')
+            ? 'train_window_' + key.slice('train_'.length) : key;
+          add('metrics/' + name, row[key]);
+        }
       }
     } finally { lines.close(); input.destroy(); }
   }

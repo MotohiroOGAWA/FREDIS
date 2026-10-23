@@ -43,8 +43,13 @@ const { readRun, groupSeries, html, script } = require('../src/features/training
     assert.equal(result.maxDepth, 3);
     assert.deepEqual(result.series.find(s => s.name === 'metrics/val_loss').points, [[10, 2]]);
     assert.deepEqual(result.series.find(s => s.name === 'metrics/train_loss').points, [[10, 3]]);
+    assert.deepEqual(result.series.find(s => s.name === 'metrics/train_window_loss').points, [[10, 3]]);
     assert.deepEqual(result.series.find(s => s.name === 'distributions/train/loss_q1').points, [[10, .5]]);
-    assert.equal(result.series.length, 3);
+    assert.equal(result.series.length, 4);
+    await fs.appendFile(path.join(dir, 'metrics.tsv'), '\nepoch_end\t1\t100\t1.5\t1\ntrain_step\t2\t110\t0.9\t\n');
+    const updated = await readRun(dir);
+    assert.deepEqual(updated.series.find(s => s.name === 'metrics/train_loss').points, [[10, 3], [100, 1.5]]);
+    assert.deepEqual(updated.series.find(s => s.name === 'metrics/train_window_loss').points, [[10, 3], [110, .9]]);
 
     // A training report is recognized by actually being a file with the
     // right schema, not by its extension -- so any filename works.
