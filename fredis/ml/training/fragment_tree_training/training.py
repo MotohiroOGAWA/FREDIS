@@ -233,7 +233,7 @@ def validation_subset(pieces, fraction: float, seed: int, *, compound_groups=Non
 
 
 def _validate_training_settings(settings: dict) -> SpectrumLossSettings:
-    """Validate optimizer, loss, filtering and validation options before CUDA setup."""
+    """Validate optimizer, loss, filtering and validation options before device setup."""
     if (
         settings["epochs"] < 1
         or settings["batch_size"] < 1
@@ -425,13 +425,15 @@ def train_reactions(
     write_training_report(output, status="initializing", settings=settings)
     spectrum_loss = _validate_training_settings(settings)
     device = torch.device(device)
-    if device.type != "cuda" or not torch.cuda.is_available():
-        raise ValueError(
-            "Fragment Tree Training requires CUDA; CPU training is not supported"
-        )
+    if device.type not in ("cpu", "cuda"):
+        raise ValueError("Fragment Tree Training supports cpu or cuda devices")
+    use_cuda = device.type == "cuda"
+    if use_cuda and not torch.cuda.is_available():
+        raise ValueError("CUDA was requested but is not available; use --device cpu")
     random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if use_cuda:
+        torch.cuda.manual_seed_all(seed)
     startup_progress = progress_bar(
         total=5, description="Startup", position=0, leave=True
     )
@@ -531,7 +533,9 @@ def train_reactions(
 
     write_training_configuration(output, model_config, settings)
     startup_progress.update(1)
-    startup_progress.set_description_str("CUDA model", refresh=True)
+    startup_progress.set_description_str(
+        "CUDA model" if use_cuda else "CPU model", refresh=True
+    )
     params = dict(model_config)
     generator = create_spectrum_generator(params).to(device)
     if not train_mol_encoder:
@@ -593,7 +597,7 @@ def train_reactions(
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         if checkpoint.get("torch_rng_state") is not None:
             torch.set_rng_state(checkpoint["torch_rng_state"])
-        if checkpoint.get("cuda_rng_state") is not None:
+        if use_cuda and checkpoint.get("cuda_rng_state") is not None:
             torch.cuda.set_rng_state_all(checkpoint["cuda_rng_state"])
         if checkpoint.get("python_rng_state") is not None:
             random.setstate(checkpoint["python_rng_state"])
@@ -616,7 +620,7 @@ def train_reactions(
     startup_progress.set_description_str("Ready", refresh=True)
     startup_progress.close()
     # Chemistry ends here; CPU tensor collation can continue per batch.
-    # Forward/backward, validation and compatibility masks use CUDA tensors.
+    # Forward/backward, validation and compatibility masks use the selected device.
     (output / "dataset_summary.json").write_text(json.dumps(dataset_report, indent=2))
     write_training_report(
         output,
@@ -875,7 +879,8 @@ def train_reactions(
         )
         for epoch in range(start, start + epochs):
             epoch_start = time.perf_counter()
-            torch.cuda.reset_peak_memory_stats(device)
+            if use_cuda:
+                torch.cuda.reset_peak_memory_stats(device)
             row = {"epoch": epoch + 1}
             gradient_values = []
             epoch_groups = [
@@ -1077,7 +1082,10 @@ def train_reactions(
             row["learning_rate"] = optimizer.param_groups[0]["lr"]
             row["gradient_norm"] = sum(gradient_values) / max(len(gradient_values), 1)
             row["epoch_seconds"] = time.perf_counter() - epoch_start
-            row["cuda_peak_memory_mb"] = torch.cuda.max_memory_allocated(device) / 2**20
+            if use_cuda:
+                row["cuda_peak_memory_mb"] = (
+                    torch.cuda.max_memory_allocated(device) / 2**20
+                )
             improved = early_stopping.update(row["validation_loss"])
             best = early_stopping.best
             bad_epochs = early_stopping.bad_epochs
@@ -1105,7 +1113,7 @@ def train_reactions(
                 best_validation_loss=best,
                 bad_epochs=bad_epochs,
                 torch_rng_state=torch.get_rng_state(),
-                cuda_rng_state=torch.cuda.get_rng_state_all(),
+                cuda_rng_state=torch.cuda.get_rng_state_all() if use_cuda else None,
                 python_rng_state=random.getstate(),
             )
             torch.save(saved, output / "last.pt")

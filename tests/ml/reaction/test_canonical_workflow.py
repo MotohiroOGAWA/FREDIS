@@ -338,8 +338,21 @@ def test_intensity_supervision_mask_excludes_unavailable_formula_targets():
     assert batch.target_mask.dtype == torch.bool and (~batch.target_mask).any()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Training CLI requires CUDA")
-def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(tmp_path):
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA unavailable"
+            ),
+        ),
+    ],
+)
+def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(
+    tmp_path, device, monkeypatch
+):
     from fredis.ml.training.fragment_tree_training.training import train_reactions
     from fredis.ml.specgen.predict_spectrum import load_generator
     from .TestReactionPipeline import chemistry
@@ -355,6 +368,19 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(tmp_path):
         (directory / "reaction_statistics.json").write_text(
             json.dumps({"chemistry_config": chemistry()})
         )
+    if device == "cpu":
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+        def unexpected_cuda(*args, **kwargs):
+            raise AssertionError("CPU training invoked a CUDA-only operation")
+
+        for name in (
+            "reset_peak_memory_stats",
+            "max_memory_allocated",
+            "get_rng_state_all",
+            "set_rng_state_all",
+        ):
+            monkeypatch.setattr(torch.cuda, name, unexpected_cuda)
     output = tmp_path / "model"
     train_reactions(
         model_config=config(),
@@ -363,7 +389,7 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(tmp_path):
         output_dir=output,
         epochs=1,
         batch_size=1,
-        device="cuda",
+        device=device,
         max_samples=2,
         warmup_steps=0,
         validation_interval_steps=1,
@@ -376,6 +402,25 @@ def test_training_epoch_checkpoint_reload_and_teacher_free_prediction(tmp_path):
     assert subset["compound_smiles"] == ["CC(N)O"]
     checkpoint = output / "last.pt"
     assert checkpoint.exists()
+    if device == "cpu":
+        saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        assert saved["cuda_rng_state"] is None
+        assert "cuda_peak_memory_mb" not in saved["history"][-1]
+        assert all(v.device.type == "cpu" for v in saved["model_state_dict"].values())
+        # A CUDA RNG entry in an older checkpoint must be ignored on CPU resume.
+        saved["cuda_rng_state"] = [torch.get_rng_state()]
+        torch.save(saved, checkpoint)
+        train_reactions(
+            model_config=config(),
+            train_dir=directories[0],
+            val_dir=directories[1],
+            output_dir=output,
+            epochs=1,
+            device="cpu",
+            resume=str(checkpoint),
+        )
+        resumed = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        assert resumed["epoch"] == 2 and resumed["cuda_rng_state"] is None
     generator = load_generator(
         model_path=str(checkpoint),
         params_path=None,
@@ -636,10 +681,15 @@ def test_prepared_compound_smiles_reused_on_transfer_and_reload(tmp_path):
     _, data = prepared()
     expected = data.compounds.smiles
     # Prepared identity metadata survives both device copies and serialization.
-    with patch.object(Compound, 'smiles', new_callable=PropertyMock, side_effect=AssertionError('Unexpected RDKit SMILES regeneration')):
-        copied = data.to('cpu')
+    with patch.object(
+        Compound,
+        "smiles",
+        new_callable=PropertyMock,
+        side_effect=AssertionError("Unexpected RDKit SMILES regeneration"),
+    ):
+        copied = data.to("cpu")
         assert copied.compounds.smiles == expected
-        file = tmp_path / 'prepared.preft.pt'
+        file = tmp_path / "prepared.preft.pt"
         copied.save(file)
         restored = SourceReactionStructure.load(file)
         assert restored.compounds.smiles == expected

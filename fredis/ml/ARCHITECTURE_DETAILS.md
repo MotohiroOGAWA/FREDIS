@@ -1492,3 +1492,11 @@ identities without tensor loading; older manifests are resolved from saved Sourc
 tables. `intermediate_validation_subset.json` records `selection_unit=compound`,
 total/selected compound counts, selected SMILES and flattened sample indices.
 Epoch-end validation continues to use the entire eligible validation dataset.
+
+### Training device selection
+
+Fragment-tree training accepts `--device cuda` (default) or `--device cpu`.
+Model tensors, forward/backward, optimizer state and spectrum validation use the
+selected device. CUDA availability is required only when CUDA is requested.
+CPU checkpoints store `cuda_rng_state=null` and omit CUDA peak-memory metrics;
+CPU resume ignores CUDA RNG state from a checkpoint created on a GPU.
