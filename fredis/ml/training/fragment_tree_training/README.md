@@ -131,3 +131,33 @@ not identical spectrum losses.
 Spectrum loss uses `--intensity-exponent` (default `0.5`, positive finite values only). Target intensities are raised to this power before normalization into cross-entropy weights; both predicted and target intensities are raised to this power for cosine similarity. Use `1` for the original objective. Prediction output intensities are unchanged. Resuming an older checkpoint without this setting retains exponent `1`.
 
 Reaction-path probabilities are propagated in log space. Transition and state probabilities use grouped log-softmax; incoming paths, execution histories, and formula-equivalent peaks are combined with logsumexp. Cross entropy consumes the merged log probability directly, without a probability floor. Precursor-excluded normalization also uses logsumexp. Cosine inputs are centered in log space before exponentiation; prediction outputs remain ordinary intensities.
+
+
+## Training report metrics
+
+`spectrum_loss` (also recorded as `intensity_loss`) is the sum of the
+with-precursor and without-precursor objectives. `cross_entropy_loss` and
+`cosine_loss` record their weighted contributions, so their sum equals
+`spectrum_loss`. All three have separate `_with_precursor` and
+`_without_precursor` charts. Raw cross-entropy and cosine diagnostics remain
+available separately.
+
+`samples`, `batches`, and `num_*` counts report means per batch iteration.
+`total_samples` and `total_batches` retain interval totals in Dataset;
+Throughput contains the per-iteration counts. `loop_seconds` averages batch
+preparation, forward evaluation, metric collection, and, during training,
+backward and optimizer work. It excludes report publishing and free-running
+validation. `epoch_seconds` continues to report the complete epoch duration.
+
+Free-running validation evaluates fragment-ion adduct and hydrogen-shift
+assignments conditional on an annotated fragment being generated. For each
+eligible non-precursor observed peak, select the highest-intensity predicted
+state among its annotated fragment identities, then compare its adduct and shift
+with the allowed annotations for that identity. Individual accuracies accept any
+allowed value; joint accuracy requires an allowed pair. Hydrogen-shift MAE uses
+the minimum absolute difference to an allowed shift. Missing fragments reduce
+`ion_assignment_coverage` and are excluded from conditional accuracy. Spectra
+with no eligible comparisons do not contribute to the accuracy distribution.
+These are annotation-consistency metrics, rather than uniquely established
+chemical ground truth. Flat, main-adduct, collision-energy, and depth series are
+saved in `metric_distributions.tsv` during subsequent validation runs.

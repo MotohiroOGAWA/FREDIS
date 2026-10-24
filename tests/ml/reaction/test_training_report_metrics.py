@@ -190,3 +190,95 @@ def test_fragment_depth_metrics_are_persisted_for_each_validation_step(tmp_path)
             saved = [row for row in rows if row['metric'] == f'{metric}@depth:{depth}_mean']
             assert [int(row['global_step']) for row in saved] == [10, 20]
             assert [float(row['value']) for row in saved] == [.4, .8]
+
+
+def test_ion_assignment_uses_top_state_and_preserves_ambiguous_pairs():
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        ion_assignment_metrics,
+    )
+
+    batch = SimpleNamespace(
+        canonical_data=None,
+        node_smiles=("C",),
+        state_sample_index=torch.tensor([0, 0]),
+        state_node_index=torch.tensor([0, 0]),
+        state_adduct_index=torch.tensor([0, 1]),
+        state_hydrogen_shift=torch.tensor([1, 1]),
+        ion_type_strs=("[M+H]+", "[M+Na]+"),
+    )
+    annotation = {
+        "peaks": [
+            {
+                "matches": [
+                    {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0},
+                    {"smiles": "C", "fragmentIonAdduct": "[M+Na]+", "hydrogenShift": 1},
+                ]
+            },
+            {
+                "matches": [
+                    {"smiles": "CC", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0}
+                ]
+            },
+            {
+                "precursor": True,
+                "matches": [
+                    {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 1}
+                ],
+            },
+        ]
+    }
+    scores = ion_assignment_metrics(batch, 0, annotation, torch.tensor([0.8, 0.2]))
+    assert scores["fragment_ion_adduct_accuracy"] == 1
+    assert scores["hydrogen_shift_accuracy"] == 1
+    assert scores["ion_assignment_joint_accuracy"] == 0
+    assert scores["hydrogen_shift_mae"] == 0
+    assert scores["ion_assignment_coverage"] == 0.5
+    # Re-ranking must change the result: do not choose the best label match.
+    scores = ion_assignment_metrics(batch, 0, annotation, torch.tensor([0.2, 0.8]))
+    assert scores["ion_assignment_joint_accuracy"] == 1
+    scores = ion_assignment_metrics(batch, 1, annotation, torch.tensor([0.8, 0.2]))
+    assert scores["ion_assignment_coverage"] == 0
+    assert scores["fragment_ion_adduct_accuracy"] is None
+
+
+def test_interval_counts_and_time_are_per_iteration():
+    row = _mean_training_interval(
+        totals={"loss": 10.0, "num_labelled_edges": 999.0},
+        batch_metrics={"num_labelled_edges": [10.0, 30.0], "loop_seconds": [0.2, 0.6]},
+        samples=8,
+        batches=2,
+        epoch=1,
+        global_step=2,
+        elapsed_seconds=5.0,
+    )
+    assert row["train/samples"] == 4
+    assert row["train/batches"] == 1
+    assert row["train/total_samples"] == 8
+    assert row["train/total_batches"] == 2
+    assert row["train/num_labelled_edges"] == 20
+    assert row["train/loop_seconds"] == pytest.approx(0.4)
+
+
+def test_resumed_metric_history_preserves_old_and_new_column_names(tmp_path):
+    _write_metric_artifacts(
+        tmp_path,
+        {
+            "history": [
+                {"epoch": 1, "global_step": 10, "train_samples": 100},
+                {
+                    "epoch": 2,
+                    "global_step": 20,
+                    "train/samples": 5,
+                    "train/total_samples": 100,
+                },
+            ]
+        },
+    )
+    rows = _read_metric_events(tmp_path / "metrics.tsv")
+    headers = (tmp_path / "metrics.tsv").read_text().splitlines()[0].split("\t")
+    assert len(headers) == len(set(headers))
+    assert rows[0]["train_samples"] == 100
+    assert rows[1]["train_samples"] == 5
+    assert rows[1]["train_total_samples"] == 100

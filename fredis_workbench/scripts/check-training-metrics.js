@@ -122,6 +122,22 @@ const { readRun, groupSeries, metricInfo, html, script } = require('../src/featu
       await assert.rejects(readValidation(validationFile), /incomplete/);
     } finally { rawFs.createReadStream = originalReadStream; }
 
+    // Read old totals as per-loop counts without changing the saved run, and
+    // derive additive loss components from historical means and configured weights.
+    await fs.writeFile(path.join(dir, 'metrics.tsv'),
+      'event\tepoch\tglobal_step\ttrain_samples\ttrain_batches\ttrain_total_samples\ttrain_total_batches\ttrain_intensity_loss\ttrain_spectrum_loss_with_precursor\ttrain_spectrum_loss_without_precursor\ttrain_transition_cross_entropy\ttrain_transition_cross_entropy_without_precursor\ttrain_cross_entropy_loss\n' +
+      'epoch_end\t1\t10\t100\t5\t\t\t10\t6\t4\t2\t1\t\n' +
+      'epoch_end\t2\t20\t20\t1\t100\t5\t8\t5\t3\t1.5\t1\t5\n');
+    await fs.writeFile(path.join(dir, 'fragment-tree.training-config.pft'), JSON.stringify({intensityLossWeight:2}));
+    const legacy = await readRun(dir);
+    const points = name => legacy.series.find(s=>s.name === 'metrics/train_' + name).points;
+    assert.deepEqual(points('samples'), [[10,20],[20,20]]);
+    assert.deepEqual(points('batches'), [[10,1],[20,1]]);
+    assert.deepEqual(points('total_samples'), [[10,100],[20,100]]);
+    assert.deepEqual(points('total_batches'), [[10,5],[20,5]]);
+    assert.deepEqual(points('spectrum_loss'), [[10,10],[20,8]]);
+    assert.deepEqual(points('cross_entropy_loss'), [[10,6],[20,5]]);
+    assert.deepEqual(points('cosine_loss'), [[10,4],[20,3]]);
     console.log('Training metrics parsing and webview syntax checks passed.');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

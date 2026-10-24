@@ -768,6 +768,9 @@ class CompetitiveSpectrumModel(nn.Module):
             "transition_cross_entropy_without_precursor": zero,
             "spectrum_cosine_without_precursor": zero,
         }
+        for name in ("spectrum_loss", "cross_entropy_loss", "cosine_loss"):
+            for suffix in ("", "_with_precursor", "_without_precursor"):
+                metrics[name + suffix] = zero
         if data.target_intensity is None:
             return normalized, zero, metrics
         target_peak = final_probability.new_zeros(peak_count).scatter_reduce_(
@@ -887,5 +890,18 @@ class CompetitiveSpectrumModel(nn.Module):
             full_spectrum_cosine=cosine,
             transition_cross_entropy_without_precursor=fragment_cross_entropy,
             spectrum_cosine_without_precursor=fragment_cosine,
+        )
+        full_ce = settings.intensity_loss_weight * cross_entropy
+        fragment_ce = settings.intensity_loss_weight * fragment_cross_entropy
+        full_cosine_loss = full_loss - full_ce
+        fragment_cosine_loss = fragment_loss - fragment_ce
+        metrics.update(
+            spectrum_loss=full_loss + fragment_loss,
+            cross_entropy_loss_with_precursor=full_ce,
+            cross_entropy_loss_without_precursor=fragment_ce,
+            cross_entropy_loss=full_ce + fragment_ce,
+            cosine_loss_with_precursor=full_cosine_loss,
+            cosine_loss_without_precursor=fragment_cosine_loss,
+            cosine_loss=full_cosine_loss + fragment_cosine_loss,
         )
         return normalized, full_loss + fragment_loss, metrics

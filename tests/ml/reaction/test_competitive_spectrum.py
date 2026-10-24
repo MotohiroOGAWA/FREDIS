@@ -539,6 +539,18 @@ def test_spectrum_losses_include_and_exclude_declared_precursor(precursor_adduct
         data, probability, sample, formulas, 1,
         SpectrumLossSettings(intensity_exponent=exponent),
     )
+    for suffix in ("", "_with_precursor", "_without_precursor"):
+        torch.testing.assert_close(
+            cosine_metrics["spectrum_loss" + suffix],
+            cosine_metrics["cross_entropy_loss" + suffix]
+            + cosine_metrics["cosine_loss" + suffix],
+        )
+    for name in ("spectrum_loss", "cross_entropy_loss", "cosine_loss"):
+        torch.testing.assert_close(
+            cosine_metrics[name],
+            cosine_metrics[name + "_with_precursor"]
+            + cosine_metrics[name + "_without_precursor"],
+        )
     pred = torch.tensor([0.9, 0.09, 0.01]).pow(exponent)
     truth = torch.tensor([100.0, 1.0, 1.0]).pow(exponent)
     expected_cosine = torch.nn.functional.cosine_similarity(pred, truth, dim=0)
@@ -912,3 +924,35 @@ def test_log_formula_merge_loss_does_not_clamp_small_probabilities():
     assert torch.isneginf(merged[[0, 2]]).all()
     merged[1].backward()
     assert torch.isfinite(values.grad).all()
+
+
+def test_validation_persists_ion_assignment_facets(tmp_path):
+    import csv
+    import json
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        validate_spectra,
+    )
+
+    torch.manual_seed(9)
+    generator = create_spectrum_generator(competitive_config()).eval()
+    data, _ = ReactionStructureBuilder(generator).build(
+        Compound.from_smiles("CC(O)N"),
+        [Adduct.parse("[M+H]+")],
+        [20.0],
+        [[18.033826, 44.049476]],
+        [[0.5, 1.0]],
+    )
+    validate_spectra(generator, [data], tmp_path, "epoch_1", global_step=1, epoch=1)
+    payload = json.loads((tmp_path / "spectrum_validation/epoch_1.json").read_text())
+    assert payload["spectra"]
+    assert "fragment_ion_adduct_accuracy" in payload["spectra"][0]
+    with (tmp_path / "metric_distributions.tsv").open() as stream:
+        rows = list(csv.DictReader(stream, delimiter="\t"))
+    metrics = {row["metric"] for row in rows}
+    assert "ion_assignment_coverage_mean" in metrics
+    assert any(
+        name.startswith("ion_assignment_coverage@main_adduct:") for name in metrics
+    )
+    assert any(
+        name.startswith("ion_assignment_coverage@collision_energy:") for name in metrics
+    )

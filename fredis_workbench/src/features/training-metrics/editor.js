@@ -23,6 +23,33 @@ async function validationResult(root, manifest) {
   return { file: path.relative(root, target), summary: value.summary || {}, representatives: value.representatives || {} };
 }
 
+function addLegacyLossSeries(series, intensityWeight) {
+  const add = (name, points) => {
+    if (!points.size) return;
+    const target = series.get(name) || new Map();
+    for (const [step,value] of points) if (!target.has(step)) target.set(step,value);
+    series.set(name, target);
+  };
+  const combine = (a, b, transform) => new Map([...a].filter(([step]) => b.has(step)).map(([step,value]) => [step,transform(value,b.get(step))]));
+  for (const split of ['train','train_window','validation','val']) {
+    const prefix = 'metrics/' + split + '_';
+    const total = series.get(prefix + 'intensity_loss');
+    if (total) add(prefix + 'spectrum_loss', total);
+    for (const suffix of ['with_precursor','without_precursor']) {
+      const ce = series.get(prefix + (suffix === 'with_precursor' ? 'transition_cross_entropy' : 'transition_cross_entropy_without_precursor'));
+      const loss = series.get(prefix + 'spectrum_loss_' + suffix);
+      if (!ce || !loss || !Number.isFinite(intensityWeight)) continue;
+      const weighted = new Map([...ce].map(([step,value]) => [step, value*intensityWeight]));
+      add(prefix + 'cross_entropy_loss_' + suffix, weighted);
+      add(prefix + 'cosine_loss_' + suffix, combine(loss, weighted, (a,b) => a-b));
+    }
+    for (const metric of ['cross_entropy_loss','cosine_loss']) {
+      const full = series.get(prefix + metric + '_with_precursor'), excluded = series.get(prefix + metric + '_without_precursor');
+      if (full && excluded) add(prefix + metric, combine(full, excluded, (a,b) => a+b));
+    }
+  }
+}
+
 async function readRun(directory) {
   let report;
   // Extension-agnostic: whether this path is a training-report file (any
@@ -62,24 +89,38 @@ async function readRun(directory) {
           series.get(key).set(step, value);
         };
         if (file === 'metric_distributions.tsv') add('distributions/' + row.split + '/' + row.metric, row.value);
-        else for (const key of headers) {
+        else {
+          for (const split of ['train','validation','val']) {
+            const count = Number(row[split + '_batches']);
+            if (count > 0 && !row[split + '_total_samples'] && row[split + '_samples']) {
+              row[split + '_total_samples'] = row[split + '_samples'];
+              row[split + '_total_batches'] = row[split + '_batches'];
+              row[split + '_samples'] = String(Number(row[split + '_samples']) / count);
+              row[split + '_batches'] = '1';
+            }
+          }
+          for (const key of Object.keys(row)) {
           if (['event', 'epoch', 'global_step', 'branch_id'].includes(key)) continue;
           // Interval and epoch rows share train_* columns in the recorded TSV.
           const name = row.event === 'train_step' && key.startsWith('train_') && !key.startsWith('train_window_')
             ? 'train_window_' + key.slice('train_'.length) : key;
           add('metrics/' + name, row[key]);
+          }
         }
       }
     } finally { lines.close(); input.destroy(); }
   }
   if (!files.length) throw new Error('No metrics.tsv or metric_distributions.tsv found. Select a training run directory.');
   let maxDepth = null;
+  let intensityWeight;
   try {
     const configPath = safeResolve(directory, report?.artifacts?.trainingConfiguration || TRAINING_CONFIG_NAME);
     const config = JSON.parse(await fs.promises.readFile(configPath, 'utf8'));
+    intensityWeight = Number(config.intensityLossWeight ?? config.intensity_loss_weight ?? 1);
     const value = config.modelConfig?.fragmenter_params?.fragment_ion_tree_builder?.max_reaction_count;
     if (Number.isInteger(value) && value >= 0) maxDepth = value;
   } catch {}
+  addLegacyLossSeries(series, intensityWeight);
   const validation = report ? await validationResult(directory, report) : null;
   return { directory, report, validation, files, maxDepth, series: [...series].sort(([a], [b]) => a.localeCompare(b)).map(([name, values]) => ({ name, points: [...values].sort((a, b) => a[0] - b[0]) })) };
 }
@@ -106,7 +147,8 @@ function groupSeries(series, maxDepth = null) {
     let base = (facet ? facet[1] : metric).replace(/(peak_(?:precision|recall)_top)(\d+)/g, (_, prefix, n) => prefix + n.padStart(2, '0'));
     const depth = dimension === 'depth' ? Number(category) : Number(base.match(/(?:^|_)depth_(\d+)$/)?.[1]);
     if (maxDepth !== null && Number.isFinite(depth) && depth > maxDepth) continue;
-    const precursor = base.endsWith('_without_precursor') ? 'withoutPrecursor' : 'withPrecursor';
+    const separatePrecursor = /^(spectrum_loss|cross_entropy_loss|cosine_loss|transition_cross_entropy)(_|$)/.test(base);
+    const precursor = !separatePrecursor && base.endsWith('_without_precursor') ? 'withoutPrecursor' : 'withPrecursor';
     if (precursor === 'withoutPrecursor') base = base.replace(/_without_precursor$/, '');
     const name = base + (dimension ? ' @' + dimension : '');
     if (!charts.has(name)) charts.set(name, { name, metric: base, dimension, sources: [], variants: { withPrecursor: [], withoutPrecursor: [] } });
@@ -117,8 +159,9 @@ function groupSeries(series, maxDepth = null) {
     if (!lane) { lane = { split, category, label: (dimension ? category + ' · ' : '') + split, stats: {} }; lanes.push(lane); }
     lane.stats[statistic] = source.points;
   }
+  const energyRank = category => /^low\b/i.test(category) ? 0 : /^high\b/i.test(category) ? 2 : /^(mid\b|[0-9])/i.test(category) ? 1 : 3;
   return [...charts.values()].sort((a,b) => a.name.localeCompare(b.name)).map(chart => {
-    for (const lanes of Object.values(chart.variants)) lanes.sort((a,b) => (chart.dimension === 'collision_energy' ? (({low:0,mid:1,high:2}[a.category.toLowerCase()] ?? 3) - ({low:0,mid:1,high:2}[b.category.toLowerCase()] ?? 3)) : 0) || a.category.localeCompare(b.category, undefined, {numeric:true}) || a.split.localeCompare(b.split));
+    for (const lanes of Object.values(chart.variants)) lanes.sort((a,b) => (chart.dimension === 'collision_energy' ? (energyRank(a.category) - energyRank(b.category)) : 0) || a.category.localeCompare(b.category, undefined, {numeric:true}) || a.split.localeCompare(b.split));
     return chart;
   });
 }
@@ -143,6 +186,7 @@ function html({ hidden = true, autoRefresh = true } = {}) {
 function metricInfo(metric, dimension = '') {
   const groups = [
     ['Spectrum similarity', /cosine_similarity|spectrum_cosine|assignment_score|spectrum_nonempty_fraction|teacher_spectrum/],
+    ['Ion assignment', /fragment_ion_adduct|hydrogen_shift|ion_assignment/],
     ['Peak assignment (top N)', /^peak_(recall|precision)_top\d+/],
     ['Loss', /loss|cross_entropy/],
     ['Training supervision', /num_(branch_groups|labelled_edges|positive_edges|weak_negative_edges|training_states)|branch_(positive|negative|recall)/],
@@ -150,7 +194,8 @@ function metricInfo(metric, dimension = '') {
     ['Ion states & transitions', /num_ion_states|num_fragment_transitions/],
     ['Fragment generation', /fragment_nodes|path_depth|duplicate_states/],
     ['Optimization', /^(learning_rate|gradient_norm)$/],
-    ['Dataset & throughput', /samples|batches|validation_fraction|interval_steps/],
+    ['Dataset', /total_|validation_fraction|compounds/],
+    ['Throughput', /samples|batches|interval_steps/],
     ['Performance & resources', /seconds|memory/],
   ];
   const descriptions = {
@@ -158,8 +203,9 @@ function metricInfo(metric, dimension = '') {
     branch_loss: 'Classification loss on reaction edges with supervision labels, using positive and negative examples to learn reaction selection.',
     branch_positive_loss: 'Classification loss on positive reaction edges.',
     branch_negative_loss: 'Classification loss on negative reaction edges.',
-    intensity_loss: 'Sum of spectrum_loss with precursor peaks and spectrum_loss without precursor peaks.',
+    intensity_loss: 'Alias of the total spectrum_loss: the sum of the with-precursor and without-precursor objectives.',
     spectrum_loss: 'intensity_loss_weight × [cross entropy + cosine_loss_weight × (1 − cosine)]. Exclude precursor switches the peaks used in this objective.',
+    transition_cross_entropy_without_precursor: 'Cross entropy on fragment peaks after excluding precursor peaks and renormalizing the predicted distribution. This is the unweighted diagnostic value; cross_entropy_loss includes intensity_loss_weight.',
     transition_cross_entropy: 'Cross entropy computed from predicted probabilities and normalized observed intensity weights. Lower is better.',
     full_spectrum_cosine: 'Cosine similarity of intensity distributions on training candidates, including precursor peaks. This uses a different candidate set from free-running spectrum evaluation.',
     spectrum_cosine_std: 'Standard deviation of cosine similarity between freely generated and observed spectra. Measures variation across spectra.',
@@ -177,12 +223,24 @@ function metricInfo(metric, dimension = '') {
     duplicate_states_removed: 'Number of duplicate states removed during generation.',
     learning_rate: 'Learning rate configured in the optimizer.',
     gradient_norm: 'Gradient norm recorded during training.',
+    loop_seconds: 'Mean elapsed time per batch iteration, including batch preparation, forward evaluation, metric collection, and backward/optimizer steps during training. Excludes free-running validation and report publishing.',
+    fragment_ion_adduct_accuracy: 'Conditional accuracy of the highest-intensity ion state for an annotated fragment: its adduct must belong to the allowed annotation set. Non-precursor peaks only; missing fragments are reflected in coverage.',
+    hydrogen_shift_accuracy: 'Conditional accuracy of the hydrogen shift for the selected ion state of an annotated fragment. Any annotated shift for that fragment is accepted. Non-precursor peaks only.',
+    ion_assignment_joint_accuracy: 'Conditional accuracy requiring the predicted (adduct, hydrogen shift) pair to occur together in the annotation set for the selected fragment. Non-precursor peaks only.',
+    hydrogen_shift_mae: 'Mean minimum absolute hydrogen-shift error against allowed annotations for the selected fragment. Lower is better. Non-precursor peaks only.',
+    ion_assignment_coverage: 'Fraction of eligible annotated non-precursor peaks for which a predicted state of an annotated fragment is available. Report alongside conditional ion-assignment accuracy.',
     interval_steps: 'Number of batch updates in this training log interval.',
     epoch_seconds: 'Elapsed time for the initial evaluation or one epoch, in seconds.',
     interval_seconds: 'Elapsed time for the training log interval, in seconds.',
     cuda_peak_memory_mb: 'Peak CUDA memory usage, in MB.',
   };
-  let description = descriptions[metric];
+  const objective = metric.match(/^(spectrum_loss|cross_entropy_loss|cosine_loss)(?:_(with|without)_precursor)?$/);
+  const objectiveDescriptions = {
+    spectrum_loss: 'Sum of the weighted cross entropy and cosine loss contributions.',
+    cross_entropy_loss: 'intensity_loss_weight × cross entropy. Uses normalized observed intensity weights and predicted probabilities. Lower is better.',
+    cosine_loss: 'intensity_loss_weight × cosine_loss_weight × (1 − cosine). Lower is better.',
+  };
+  let description = objective ? objectiveDescriptions[objective[1]] + (objective[2] ? (objective[2] === 'with' ? ' Includes precursor peaks.' : ' Excludes precursor peaks and renormalizes the fragment distribution.') : ' Sum of the with-precursor and without-precursor objectives.') : descriptions[metric];
   if (!description) {
     if (/cosine_similarity/.test(metric)) description = 'Sum of matched predicted–observed intensity products divided by the product of their vector norms. Peaks are matched one-to-one within the m/z tolerance; unmatched peaks remain in the denominator. Higher is better.';
     else if (/assignment_score/.test(metric)) description = 'Sum of observed intensities matched by predicted m/z values divided by the total observed intensity. Predicted intensities are not used. Higher is better.';
@@ -190,18 +248,29 @@ function metricInfo(metric, dimension = '') {
     else if (/^peak_precision_top/.test(metric)) description = 'Number of the top N predicted peaks matching assigned observed peaks, divided by N. Higher is better.';
     else if (/nonempty_fraction/.test(metric)) description = 'Fraction of spectra with at least one generated peak.';
     else if (/fragment_nodes/.test(metric)) description = 'Generated fragment node count. Unique counts exclude duplicates; mean counts are averaged across spectra.';
-    else if (/samples/.test(metric)) description = 'Number of spectra processed in the interval. This differs from molecule counts and labelled edge counts.';
-    else if (/batches/.test(metric)) description = 'Number of batches processed in the interval.';
+    else if (/total_/.test(metric)) description = 'Total count for the dataset or evaluation interval, as specified by the metric name.';
+    else if (/samples/.test(metric)) description = 'Mean number of spectra processed per batch iteration. Total dataset counts are shown separately.';
+    else if (/batches/.test(metric)) description = 'Mean number of batches per loop iteration (1 for a nonempty interval). Total batch counts are shown separately.';
     else if (/validation_fraction/.test(metric)) description = 'Fraction of data used for validation.';
     else if (/seconds/.test(metric)) description = 'Elapsed processing time, in seconds.';
     else if (/memory/.test(metric)) description = 'Memory usage during computation. The metric name specifies the unit.';
     else description = 'Value recorded in the training or validation log for ' + metric + '.';
   }
   const facet = {depth:'Evaluated using peaks at exactly depth N, rather than cumulatively through depth N. Observed peaks use their minimum explainable depth. Spectra with no observed peaks at that depth are excluded from aggregation.', main_adduct:'Aggregated separately for each main adduct.', collision_energy:'Aggregated by collision energy tertiles, ordered low → mid → high.'}[dimension];
+  if (/^num_/.test(metric)) description += ' Displayed as a mean per batch iteration.';
   return {group: groups.find(([, pattern]) => pattern.test(metric))?.[0] || 'Other', description: description + (facet ? '\n' + facet : '')};
 }
 
-function client(groupSeries, metricInfo) {
+function metricOrder(a, b) {
+  const groups = ['Spectrum similarity','Ion assignment','Peak assignment (top N)','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset','Throughput','Performance & resources','Other'];
+  const metrics = ['loss','branch_loss','branch_positive_loss','branch_negative_loss','spectrum_loss','spectrum_loss_with_precursor','spectrum_loss_without_precursor','cross_entropy_loss','cross_entropy_loss_with_precursor','cross_entropy_loss_without_precursor','cosine_loss','cosine_loss_with_precursor','cosine_loss_without_precursor','intensity_loss','transition_cross_entropy','transition_cross_entropy_without_precursor'];
+  const rank = chart => { const i = metrics.indexOf(chart.metric); return i < 0 ? metrics.length : i; };
+  const facet = chart => ({'':0, main_adduct:1, collision_energy:2, depth:3}[chart.dimension || ''] ?? 4);
+  const groupDiff = groups.indexOf(metricInfo(a.metric).group) - groups.indexOf(metricInfo(b.metric).group);
+  return groupDiff || rank(a) - rank(b) || facet(a) - facet(b) || a.metric.localeCompare(b.metric, undefined, {numeric:true}) || a.name.localeCompare(b.name, undefined, {numeric:true});
+}
+
+function client(groupSeries, metricInfo, metricOrder) {
   const el = id => document.getElementById(id);
   const state = vscode.getState() || {};
   let selected = state.metricsSelected || [], data = [], report = null, validation = null, request = 0, busy = false;
@@ -210,7 +279,7 @@ function client(groupSeries, metricInfo) {
   const splitColors={train:'#e76f51',train_window:'#f4a261',validation:'#3a86ff',intermediate_validation:'#2a9d8f',all:'#8b8f98'};
   const splitDashes={train:'',train_window:'4 2',validation:'',intermediate_validation:'6 3',all:''};
   const categoryColors=['#e76f51','#2a9d8f','#e9c46a','#264653','#8ab17d','#f4a261','#577590','#b56576','#6d597a','#ee6c4d'];
-  const GROUP_ORDER=['Spectrum similarity','Peak assignment (top N)','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset & throughput','Performance & resources','Other'];
+  const GROUP_ORDER=['Spectrum similarity','Ion assignment','Peak assignment (top N)','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset','Throughput','Performance & resources','Other'];
   const metricGroup=metric=>metricInfo(metric).group;
   const border='var(--border,rgba(128,128,128,.35))', accent='var(--accent,#36c5a2)';
   el('metricsDirectory').value = state.metricsDirectory || '';
@@ -232,7 +301,7 @@ function client(groupSeries, metricInfo) {
   };
   function updateChoices() {
     const previous = el('metricsChoice').value;
-    const matching = matchingCharts();
+    const matching = matchingCharts().sort(metricOrder);
     el('metricsChoice').replaceChildren();
     const byGroup = new Map();
     for (const chart of matching) { const group = metricGroup(chart.metric); if (!byGroup.has(group)) byGroup.set(group, []); byGroup.get(group).push(chart); }
@@ -273,10 +342,22 @@ function client(groupSeries, metricInfo) {
     if (availableWith && availableWithout) {
     const precursorLabel=document.createElement('label'),precursor=document.createElement('input');precursor.type='checkbox';precursor.checked=settings.withoutPrecursor;precursor.onchange=()=>{settings.withoutPrecursor=precursor.checked;save();refreshCard(name);};precursorLabel.append(precursor,document.createTextNode(' Exclude precursor'));controls.append(precursorLabel);
     }
+    let memoryUnit = settings.memoryUnit;
+    if (/memory_mb$/.test(chart.metric)) {
+      const peak = Object.values(chart.variants).reduce((maximum, lanes) => lanes.reduce((m, lane) => Object.values(lane.stats).reduce((n, points) => points.reduce((v, point) => Math.max(v, Math.abs(point[1])), n), m), maximum), 0);
+      if (!['MB','GB','TB'].includes(memoryUnit)) memoryUnit = peak >= 1024*1024 ? 'TB' : peak >= 1024 ? 'GB' : 'MB';
+      const unitLabel = document.createElement('label'); unitLabel.append(document.createTextNode('Unit '));
+      const unit = document.createElement('select');
+      for (const value of ['MB','GB','TB']) { const option = document.createElement('option'); option.value = option.textContent = value; unit.append(option); }
+      unit.value = memoryUnit; unit.onchange = () => {settings.memoryUnit=unit.value;save();refreshCard(name);};
+      unitLabel.append(unit); controls.append(unitLabel);
+      title.textContent = name.replace(/_mb$/, '') + ' (' + memoryUnit + ')';
+    }
     card.append(controls);
     const hidden = hiddenLanes.get(name) || new Set();
     hiddenLanes.set(name, hidden);
-    const allLanes = chart.variants[settings.withoutPrecursor?'withoutPrecursor':'withPrecursor'];
+    const memoryScale = memoryUnit ? ({MB:1,GB:1024,TB:1024*1024}[memoryUnit] || 1) : 1;
+    const allLanes = chart.variants[settings.withoutPrecursor?'withoutPrecursor':'withPrecursor'].map(lane => ({...lane, stats:Object.fromEntries(Object.entries(lane.stats).map(([stat,points]) => [stat,points.map(([step,value]) => [step,value/memoryScale])]))}));
     const lanes = allLanes.filter(lane => !hidden.has(lane.label));
     const categories=[...new Set(allLanes.map(lane=>lane.category))];
     const faceted = !!chart.dimension && categories.length>1;
@@ -310,7 +391,7 @@ function client(groupSeries, metricInfo) {
       for (let i = 0; i <= 4; i++) {
         const value = min + (max-min)*i/4;
         node('line', { x1:75, x2:575, y1:y(value), y2:y(value), stroke:'currentColor', opacity:'.15' });
-        node('text', { x:70, y:y(value)+4, fill:'currentColor', 'font-size':11, 'text-anchor':'end' }, value.toPrecision(4));
+        node('text', { x:70, y:y(value)+4, fill:'currentColor', 'font-size':11, 'text-anchor':'end' }, value.toPrecision(4) + (memoryUnit ? ' ' + memoryUnit : ''));
       }
       for (const lane of lanes) {
         const line = (values, opacity = 1, width = 2) => {
@@ -338,7 +419,7 @@ function client(groupSeries, metricInfo) {
         info.textContent = lanes.map(lane => {
           const values = visibleStats(lane).filter(stat=>lane.stats[stat]?.length).map(stat => { const samples=lane.stats[stat];
             let closest = samples[0]; for (const p of samples) if (Math.abs(p[0]-step)<Math.abs(closest[0]-step)) closest=p;
-            return stat+'='+closest[1].toPrecision(5)+' (step '+closest[0]+')';
+            return stat+'='+closest[1].toPrecision(5)+(memoryUnit?' '+memoryUnit:'')+' (step '+closest[0]+')';
           });
           return lane.label+': '+values.join(' · ');
         }).join('\n');
@@ -365,9 +446,7 @@ function client(groupSeries, metricInfo) {
     chartsByName = new Map(data.map(chart => [chart.name, chart]));
     const orderedSelected = [...selected].sort((a,b) => {
       const ca=chartsByName.get(a), cb=chartsByName.get(b);
-      const ga = ca ? GROUP_ORDER.indexOf(metricGroup(ca.metric)) : GROUP_ORDER.length;
-      const gb = cb ? GROUP_ORDER.indexOf(metricGroup(cb.metric)) : GROUP_ORDER.length;
-      return ga !== gb ? ga - gb : a.localeCompare(b);
+      return ca && cb ? metricOrder(ca, cb) : a.localeCompare(b);
     });
     const showGroups = new Set(orderedSelected.filter(name => chartsByName.has(name)).map(name => metricGroup(chartsByName.get(name).metric))).size > 1;
     let lastGroup = null;
@@ -473,5 +552,5 @@ function client(groupSeries, metricInfo) {
   render();
   renderSpectra();
 }
-function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ');'; }
-module.exports = { readRun, groupSeries, metricInfo, attach, html, script };
+function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ');'; }
+module.exports = { readRun, groupSeries, metricInfo, metricOrder, attach, html, script };

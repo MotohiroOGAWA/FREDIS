@@ -110,6 +110,11 @@ def _write_metric_artifacts(output: Path, report: dict) -> None:
             item["event"] != "train_step",
         )
     )
+    # Resumed history may use TSV underscores while new rows use metric paths.
+    # Normalize before collecting headers so mixed histories retain every value.
+    events = [
+        {key.replace("/", "_"): value for key, value in item.items()} for item in events
+    ]
     headers = list(dict.fromkeys(key for item in events for key in item)) or ["event"]
     text = "\t".join(key.replace("/", "_") for key in headers) + "\n"
     text += "\n".join(
@@ -166,8 +171,10 @@ def _mean_training_interval(
         "epoch": epoch,
         "global_step": global_step,
         "interval_steps": batches,
-        "train/samples": samples,
-        "train/batches": batches,
+        "train/samples": samples / max(batches, 1),
+        "train/batches": float(bool(batches)),
+        "train/total_samples": samples,
+        "train/total_batches": batches,
         "interval_seconds": elapsed_seconds,
         "train_loss": totals["loss"] / max(samples, 1),
     }
@@ -178,9 +185,13 @@ def _mean_training_interval(
             if key != "loss"
         }
     )
-    for key in ("gradient_norm", "learning_rate"):
+    for key in ("gradient_norm", "learning_rate", "loop_seconds") + tuple(
+        k for k in batch_metrics if k.startswith("num_")
+    ):
         values = batch_metrics.get(key, [])
-        row[key] = sum(values) / max(len(values), 1)
+        row[
+            "train/" + key if key.startswith("num_") or key == "loop_seconds" else key
+        ] = sum(values) / max(len(values), 1)
     return row
 
 
@@ -731,9 +742,11 @@ def train_reactions(
 
     def grouped_batches(pieces, groups):
         for group in groups:
-            yield SourceReactionStructure.from_structures(
+            loop_started = time.perf_counter()
+            data = SourceReactionStructure.from_structures(
                 [pieces[index] for index in group]
             )
+            yield data, loop_started
 
     def metric_values(result):
         return {"loss": result.loss, **result.metrics}
@@ -789,7 +802,7 @@ def train_reactions(
         try:
             model.eval()
             with torch.no_grad():
-                for data in grouped_batches(intermediate_pieces, groups):
+                for data, loop_started in grouped_batches(intermediate_pieces, groups):
                     data = data.to(device)
                     result = model(data)
                     for key, value in metric_values(result).items():
@@ -800,6 +813,11 @@ def train_reactions(
                             )
                         totals[key] = totals.get(key, 0.0) + scalar * data.num_samples
                         batch_metrics.setdefault(key, []).append(scalar)
+                    batch_metrics.setdefault("loop_seconds", []).append(
+                        time.perf_counter() - loop_started
+                    )
+                    batch_metrics.setdefault("samples", []).append(data.num_samples)
+                    batch_metrics.setdefault("batches", []).append(1.0)
                     sample_count += data.num_samples
                     batch_count += 1
                     del result, data, value
@@ -809,18 +827,24 @@ def train_reactions(
         row = {
             "epoch": epoch,
             "global_step": global_step,
-            "validation_samples": sample_count,
+            "validation_samples": sample_count / max(batch_count, 1),
             "total_validation_samples": dataset_report["validation"]["samples"],
             "validation_fraction": validation_fraction,
             "validation_compounds": len(intermediate_compounds),
             "total_validation_compounds": total_validation_compounds,
-            "validation_batches": batch_count,
+            "validation_batches": float(bool(batch_count)),
+            "validation_total_batches": batch_count,
             "validation_seconds": time.perf_counter() - validation_started,
             "validation_loss": totals.pop("loss") / sample_count,
         }
         row.update(
             {"validation/" + key: value / sample_count for key, value in totals.items()}
         )
+        for key in ("loop_seconds",) + tuple(
+            k for k in batch_metrics if k.startswith("num_")
+        ):
+            values = batch_metrics.get(key, [])
+            row["validation/" + key] = sum(values) / max(len(values), 1)
         append_metric_distributions(
             output, global_step, "intermediate_validation", batch_metrics, epoch=epoch
         )
@@ -877,7 +901,7 @@ def train_reactions(
         try:
             model.eval()
             with torch.no_grad():
-                for data in grouped_batches(datasets[1], groups):
+                for data, loop_started in grouped_batches(datasets[1], groups):
                     data = data.to(device)
                     result = model(data)
                     for key, value in metric_values(result).items():
@@ -888,6 +912,11 @@ def train_reactions(
                             )
                         totals[key] = totals.get(key, 0.0) + scalar * data.num_samples
                         batches_metrics.setdefault(key, []).append(scalar)
+                    batches_metrics.setdefault("loop_seconds", []).append(
+                        time.perf_counter() - loop_started
+                    )
+                    batches_metrics.setdefault("samples", []).append(data.num_samples)
+                    batches_metrics.setdefault("batches", []).append(1.0)
                     count += data.num_samples
                     del result, data, value
                     bar.update(1)
@@ -895,12 +924,19 @@ def train_reactions(
                 "epoch": 0,
                 "global_step": 0,
                 "validation_loss": totals.pop("loss") / count,
-                "validation/samples": count,
-                "validation/batches": len(groups),
+                "validation/samples": count / max(len(groups), 1),
+                "validation/batches": float(bool(groups)),
+                "validation/total_samples": count,
+                "validation/total_batches": len(groups),
             }
             row.update(
                 {"validation/" + key: value / count for key, value in totals.items()}
             )
+            for key in ("loop_seconds",) + tuple(
+                k for k in batches_metrics if k.startswith("num_")
+            ):
+                values = batches_metrics.get(key, [])
+                row["validation/" + key] = sum(values) / max(len(values), 1)
             append_metric_distributions(
                 output, 0, "validation", batches_metrics, epoch=0
             )
@@ -989,7 +1025,7 @@ def train_reactions(
                 batch_count = 0
                 batch_metrics = {}
                 with torch.set_grad_enabled(name == "train"):
-                    for data in grouped_batches(pieces, groups):
+                    for data, loop_started in grouped_batches(pieces, groups):
                         stages = (
                             ("prepare", "forward", "backward", "optimizer", "metrics")
                             if name == "train"
@@ -1071,6 +1107,22 @@ def train_reactions(
                             elif key == "full_spectrum_cosine":
                                 live["cos"] = f"{scalar:.3f}"
                         iteration_progress[name].set_postfix(live, refresh=False)
+                        loop_seconds = time.perf_counter() - loop_started
+                        batch_metrics.setdefault("loop_seconds", []).append(
+                            loop_seconds
+                        )
+                        batch_metrics.setdefault("samples", []).append(data.num_samples)
+                        batch_metrics.setdefault("batches", []).append(1.0)
+                        if name == "train" and train_log_interval_steps:
+                            train_window_batch_metrics.setdefault(
+                                "loop_seconds", []
+                            ).append(loop_seconds)
+                            train_window_batch_metrics.setdefault("samples", []).append(
+                                data.num_samples
+                            )
+                            train_window_batch_metrics.setdefault("batches", []).append(
+                                1.0
+                            )
                         sample_count += data.num_samples
                         batch_count += 1
                         if name == "train" and train_log_interval_steps:
@@ -1099,8 +1151,13 @@ def train_reactions(
                         for key, value in totals.items()
                     }
                 )
-                row[name + "/samples"] = sample_count
-                row[name + "/batches"] = batch_count
+                row[name + "/total_samples"] = sample_count
+                row[name + "/total_batches"] = batch_count
+                for key in ("samples", "batches", "loop_seconds") + tuple(
+                    k for k in batch_metrics if k.startswith("num_")
+                ):
+                    values = batch_metrics.get(key, [])
+                    row[name + "/" + key] = sum(values) / max(len(values), 1)
                 append_metric_distributions(
                     output, global_step, name, batch_metrics, epoch=epoch + 1
                 )

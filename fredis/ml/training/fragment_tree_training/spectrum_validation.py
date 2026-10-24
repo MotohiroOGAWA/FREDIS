@@ -203,6 +203,62 @@ def _original_depths(data, sample, annotation, tolerance):
     return result
 
 
+def ion_assignment_metrics(batch, sample, annotation, intensities):
+    """Evaluate the top ion state conditional on an annotated fragment identity.
+
+    Ambiguous annotations remain sets of allowed (fragment, adduct, shift)
+    tuples. Missing fragments affect coverage, not conditional accuracy.
+    """
+    names = (
+        "fragment_ion_adduct_accuracy",
+        "hydrogen_shift_accuracy",
+        "ion_assignment_joint_accuracy",
+        "hydrogen_shift_mae",
+    )
+    values = {name: [] for name in names}
+    core = batch.canonical_data
+    candidates = {}
+    for row in torch.nonzero(batch.state_sample_index == sample).flatten().tolist():
+        node = int(batch.state_node_index[row])
+        smiles = (
+            core.compounds.smiles[node] if core is not None else batch.node_smiles[node]
+        )
+        candidate = (
+            float(intensities[row]),
+            batch.ion_type_strs[int(batch.state_adduct_index[row])],
+            int(batch.state_hydrogen_shift[row]),
+        )
+        if smiles not in candidates or candidate[0] > candidates[smiles][0]:
+            candidates[smiles] = candidate
+    eligible = evaluated = 0
+    for peak in annotation["peaks"]:
+        if peak.get("precursor"):
+            continue
+        allowed = {
+            (m["smiles"], m["fragmentIonAdduct"], int(m["hydrogenShift"]))
+            for m in peak.get("matches", ())
+            if all(k in m for k in ("smiles", "fragmentIonAdduct", "hydrogenShift"))
+        }
+        if not allowed:
+            continue
+        eligible += 1
+        available = {smiles for smiles, _, _ in allowed if smiles in candidates}
+        if not available:
+            continue
+        # Select one state before checking its labels; never pick the best label match.
+        smiles = max(sorted(available), key=lambda key: candidates[key][0])
+        _, adduct, shift = candidates[smiles]
+        labels = {(a, h) for sm, a, h in allowed if sm == smiles}
+        evaluated += 1
+        values[names[0]].append(float(any(a == adduct for a, _ in labels)))
+        values[names[1]].append(float(any(h == shift for _, h in labels)))
+        values[names[2]].append(float((adduct, shift) in labels))
+        values[names[3]].append(min(abs(shift - h) for _, h in labels))
+    result = {name: sum(v) / len(v) if v else None for name, v in values.items()}
+    result["ion_assignment_coverage"] = evaluated / eligible if eligible else None
+    return result
+
+
 def _ce_categories(records):
     """Assign low/mid/high CE using empirical tertile boundaries."""
     energies = np.asarray(
@@ -316,6 +372,11 @@ def _report_metrics(records):
         "cosine_similarity_without_precursor",
         "assignment_score",
         "assignment_score_without_precursor",
+        "fragment_ion_adduct_accuracy",
+        "hydrogen_shift_accuracy",
+        "ion_assignment_joint_accuracy",
+        "hydrogen_shift_mae",
+        "ion_assignment_coverage",
     )
     # Top-N recall/precision are already a coarse, whole-spectrum ranking; a
     # per-depth split of a handful of candidates isn't meaningful, so they get
@@ -502,6 +563,23 @@ def validate_spectra(
                             "observed_peak_count": len(target),
                             "generated_peak_count": len(predicted),
                         }
+                        depth_metrics[str(depth)].update(
+                            ion_assignment_metrics(
+                                output.spectrum_batch,
+                                sample,
+                                {
+                                    **annotation,
+                                    "peaks": [
+                                        peak
+                                        for peak, assigned_depth in zip(
+                                            annotation["peaks"], original_depth
+                                        )
+                                        if assigned_depth == depth
+                                    ],
+                                },
+                                output.spectra.intensity,
+                            )
+                        )
                     branch_group = int(data.sample_branch_group_index[sample])
                     core = output.spectrum_batch.canonical_data
                     group = int(core.sample_branch_group_index[sample])
@@ -532,6 +610,12 @@ def validate_spectra(
                     )
                     records.append(
                         dict(
+                            **ion_assignment_metrics(
+                                output.spectrum_batch,
+                                sample,
+                                annotation,
+                                output.spectra.intensity,
+                            ),
                             piece_index=piece_index,
                             sample_index=input_index,
                             adduct=annotation["adduct"],
