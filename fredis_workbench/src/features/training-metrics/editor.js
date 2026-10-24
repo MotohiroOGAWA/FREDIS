@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const msentityViewer = require('./msentity-viewer');
 const TRAINING_CONFIG_NAME = 'fragment-tree' + require('../../file-formats').format('training-config').suffix;
 
 function safeResolve(root, relative) {
@@ -305,6 +306,11 @@ function attach(panel) {
       const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: false });
       if (picked?.[0]) panel.webview.postMessage({ type: 'metricsPicked', directory: picked[0].fsPath });
     }
+    if (message.type === 'metricsSpectrumAction') {
+      try {await msentityViewer.handleAction(vscode,message.action);}
+      catch(error) {vscode.window.showErrorMessage(error.message);}
+      return;
+    }
     if (message.type === 'metricsValidation') {
       try {
         if (!loadedDirectory || loadedRequest !== message.request) throw new Error('Load the current training run first.');
@@ -422,9 +428,10 @@ function metricOrder(a, b) {
   return groupDiff || rank(a) - rank(b) || facet(a) - facet(b) || a.metric.localeCompare(b.metric, undefined, {numeric:true}) || a.name.localeCompare(b.name, undefined, {numeric:true});
 }
 
-function client(groupSeries, metricInfo, metricOrder, representativePoints) {
+function client(groupSeries, metricInfo, metricOrder, representativePoints, msentityAssets, installMsentityViewer, comparisonPayload) {
   const el = id => document.getElementById(id);
   const state = vscode.getState() || {};
+  const spectrumViewer=installMsentityViewer(msentityAssets,vscode);
   let selected = state.metricsSelected || [], data = [], report = null, validation = null, request = 0, busy = false;
   let lazy = false, chartRequest = 0, maxDepth = null;
   const loadedCharts = new Set(), pendingCharts = new Map(), chartErrors = new Map();
@@ -659,9 +666,10 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints) {
     const plotBox=el('representativeScatter'),spectrumBox=el('representativeSpectra');
     for (const box of [plotBox,spectrumBox]) {box.setAttribute('aria-busy',String(epochLoading));box.inert=epochLoading;box.style.opacity=epochLoading?'.55':'';}
     if (epochLoading) {el('representativeStatus').textContent='Loading epoch '+selectedEpoch+'…';return;}
-    plotBox.replaceChildren();spectrumBox.replaceChildren();
+    plotBox.replaceChildren();
     const points=representativePoints(validation?.representatives);
-    if (!points.length) {el('representativeStatus').textContent=report?'No validation spectrum artifact is available yet.':'Load a training report to see representative spectra.';return;}
+    if (!points.length) {spectrumBox.hidden=true;el('representativeStatus').textContent=report?'No validation spectrum artifact is available yet.':'Load a training report to see representative spectra.';return;}
+    spectrumBox.hidden=false;
     if (!points.some(point=>point.key===selectedSpectrumKey)) selectedSpectrumKey=points[0].key;
     const include=el('representativePrecursor').checked,suffix=include?'':'_without_precursor';
     const number=value=>value==null||!Number.isFinite(Number(value))?'unavailable':Number(value).toFixed(4);
@@ -691,19 +699,19 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints) {
     const picker=document.createElement('select');picker.id='representativePoint';picker.style.cssText='width:100%;min-width:0;max-width:100%';pickerLabel.style.display='block';
     points.forEach((point,index)=>{const option=document.createElement('option');option.value=point.key;option.textContent=(index+1)+' · '+point.selections.join(' / ');picker.append(option);});picker.value=selectedSpectrumKey;picker.onchange=()=>choose(picker.value);pickerLabel.append(picker);plotBox.append(pickerLabel);
     const point=points.find(point=>point.key===selectedSpectrumKey),record=point.record;
-    const card=document.createElement('article');card.style.cssText='border:1px solid '+border+';border-radius:9px;padding:12px';
-    const title=document.createElement('strong');title.style.cssText='display:block;height:1.5em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';title.textContent='Assignment '+number(record['assignment_score'+suffix])+' · Cosine '+number(record['cosine_similarity'+suffix])+' · '+(include?'with':'without')+' precursor scores';card.append(title);
-    const generated=peaks(record,'generated'),original=record.original_peaks||[],all=[...generated,...original];
-    const mirrorWidth=Math.max(320,(spectrumBox.clientWidth||680)-26);
-    const maximum=Math.max(...all.map(p=>Number(p.mz)),1),gmax=Math.max(...generated.map(p=>Number(p.intensity)),1e-8),omax=Math.max(...original.map(p=>Number(p.intensity)),1e-8),massX=mz=>42+Number(mz)/maximum*(mirrorWidth-54);
-    const mirror=document.createElementNS('http://www.w3.org/2000/svg','svg');mirror.setAttribute('viewBox','0 0 '+mirrorWidth+' 240');mirror.style.cssText='display:block;width:100%;height:240px';mirror.setAttribute('role','img');mirror.setAttribute('aria-label','Selected generated and observed mirror spectrum');
-    svgNode(mirror,'line',{x1:42,x2:mirrorWidth-12,y1:120,y2:120,stroke:'currentColor'});
-    for(const peak of generated) svgNode(mirror,'line',{x1:massX(peak.mz),x2:massX(peak.mz),y1:120,y2:120-88*peak.intensity/gmax,stroke:peak.precursor?'#f0883e':'#58a6ff','stroke-width':2});
-    for(const peak of original) svgNode(mirror,'line',{x1:massX(peak.mz),x2:massX(peak.mz),y1:120,y2:120+88*peak.intensity/omax,stroke:peak.precursor?'#f0883e':'#3fb950','stroke-width':2});
-    svgNode(mirror,'text',{x:45,y:18,fill:'#58a6ff','font-size':11},'Generated');svgNode(mirror,'text',{x:45,y:228,fill:'#3fb950','font-size':11},'Observed');svgNode(mirror,'text',{x:mirrorWidth-12,y:138,fill:'currentColor','font-size':10,'text-anchor':'end'},maximum.toFixed(2)+' m/z');card.append(mirror);
-    const meta=document.createElement('p');meta.className='muted';meta.style.cssText='height:1.5em;white-space:nowrap;overflow:auto';meta.textContent=(record.main_adduct||record.adduct||'')+' · '+record.collision_energy+' eV · '+generated.length+' / '+original.length+' peaks';card.append(meta);
-    const smiles=document.createElement('p');smiles.style.cssText='height:2.8em;overflow:auto;overflow-wrap:anywhere';smiles.textContent='SMILES: '+(record.smiles||record.SMILES||'Unavailable in this legacy artifact.');card.append(smiles);
-    const reasons=document.createElement('p');reasons.className='muted';reasons.style.cssText='height:2.8em;overflow:auto';reasons.textContent='Selected by: '+point.selections.join(' / ');card.append(reasons);spectrumBox.append(card);
+    let card=spectrumBox.querySelector('article');
+    if(!card){
+      card=document.createElement('article');card.style.cssText='border:1px solid '+border+';border-radius:9px;padding:12px;min-width:0';
+      const mount=document.createElement('div');mount.dataset.msentityMount='';
+      const details=document.createElement('div');details.dataset.spectrumDetails='';
+      card.append(mount,details);spectrumBox.replaceChildren(card);
+    }
+    const details=card.querySelector('[data-spectrum-details]');details.replaceChildren();
+    spectrumViewer.update(card.querySelector('[data-msentity-mount]'),comparisonPayload(record,validation.file+':'+point.key));
+    const title=document.createElement('strong');title.style.cssText='display:block;height:1.5em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';title.textContent='Saved assignment '+number(record['assignment_score'+suffix])+' · Saved cosine '+number(record['cosine_similarity'+suffix])+' · '+(include?'with':'without')+' precursor scores';details.append(title);
+    const note=document.createElement('p');note.className='muted';note.style.cssText='height:2.8em;overflow:auto';note.textContent='Saved validation scores drive the scatter plot. The msentity Similarity control independently recalculates similarity using its selected method and Da tolerance.';details.append(note);
+    const smiles=document.createElement('p');smiles.style.cssText='height:2.8em;overflow:auto;overflow-wrap:anywhere';smiles.textContent='SMILES: '+(record.smiles||record.SMILES||'Unavailable in this legacy artifact.');details.append(smiles);
+    const reasons=document.createElement('p');reasons.className='muted';reasons.style.cssText='height:2.8em;overflow:auto';reasons.textContent='Selected by: '+point.selections.join(' / ');details.append(reasons);
     el('representativeStatus').textContent=validation.file+' · '+points.length+' representative spectra · '+(validation.msdsFile||'legacy JSON');
   }
   if (typeof ResizeObserver !== 'undefined') {
@@ -770,5 +778,5 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints) {
   render();
   renderSpectra();
 }
-function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ',' + representativePoints.toString() + ');'; }
+function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ',' + representativePoints.toString() + ',' + JSON.stringify(msentityViewer.assets()).replace(/</g,'\\u003c') + ',' + msentityViewer.installMsentityViewer.toString() + ',' + msentityViewer.comparisonPayload.toString() + ');'; }
 module.exports = { validationResult, representativePoints, readRun, readCharts, readProgressMetrics, groupSeries, metricInfo, metricOrder, attach, html, script };

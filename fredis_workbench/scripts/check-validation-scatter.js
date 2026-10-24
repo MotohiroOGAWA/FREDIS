@@ -39,17 +39,17 @@ const {html,script,representativePoints,validationResult}=require('../src/featur
     const initialScatter=document.querySelector('#representativeScatter > svg');
     assert.equal(initialScatter.style.height,'300px');assert.equal(initialScatter.style.maxWidth,'');
     assert.equal(initialScatter.getAttribute('viewBox'),'0 0 1200 300');
-    assert.equal(document.querySelector('#representativeSpectra svg').style.height,'240px');
+    assert.equal(document.querySelector('#validationMsentityFrame').style.height,'540px');
     assert.ok(circles().every(node=>Number(node.getAttribute('r'))<=4));assert.equal(document.getElementById('representativeEpoch').value,'2');
     circles().find(node=>node.dataset.spectrumKey==='11').dispatchEvent(new window.Event('click'));
     assert.match(document.getElementById('representativeSpectra').textContent,/SMILES: CCO/);
-    const lineCount=document.querySelectorAll('#representativeSpectra svg line').length;
+    const viewerBefore=document.querySelector('#validationMsentityFrame');
     document.getElementById('representativePrecursor').checked=false;document.getElementById('representativePrecursor').dispatchEvent(new window.Event('change'));
     const after=circles().map(node=>[node.dataset.spectrumKey,node.getAttribute('cx'),node.getAttribute('cy')]);
     assert.deepEqual(after.map(p=>p[0]),before.map(p=>p[0]),'score mode must retain every representative');
     assert.notDeepEqual(after,before,'coordinates must change');
     assert.equal(document.getElementById('representativePoint').value,'11','selection must stay stable');
-    assert.equal(document.querySelectorAll('#representativeSpectra svg line').length,lineCount,'score mode must not hide precursor peaks');
+    assert.strictEqual(document.querySelector('#validationMsentityFrame'),viewerBefore,'score mode must retain the msentity viewer and its zoom state');
     assert.equal(posted.length,0,'score mode must not load a different subset');
     assert.equal(circles().find(node=>node.dataset.spectrumKey==='13').getAttribute('fill'),'none','missing scores must keep a selectable point');
     const stableScatter=document.querySelector('#representativeScatter > svg'),stableSpectrum=document.querySelector('#representativeSpectra article');
@@ -67,7 +67,7 @@ const {html,script,representativePoints,validationResult}=require('../src/featur
     assert.equal(number.value,'0');assert.equal(slider.value,'0');assert.match(document.getElementById('representativeStatus').textContent,/epoch_0/);
     assert.equal(circles().length,4);
     assert.equal(document.querySelector('#representativeScatter > svg').style.height,'300px');
-    assert.equal(document.querySelector('#representativeSpectra svg').style.height,'240px');
+    assert.equal(document.querySelector('#validationMsentityFrame').style.height,'540px');
     assert.equal(document.getElementById('representativeScatter').getAttribute('aria-busy'),'false');
     console.log('Validation scatter: union, score-only toggle, click selection, SMILES, epoch controls, and stale replies passed.');
   }finally{dom?.window.close();fs.rmSync(root,{recursive:true,force:true});}

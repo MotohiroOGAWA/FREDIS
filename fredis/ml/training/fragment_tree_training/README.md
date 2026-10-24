@@ -220,3 +220,16 @@ selection, and recovers Source SMILES from the matching prepared validation
 manifest. It writes `.msds` files and compact previews for subsequent epoch
 switching. Older artifacts that saved fewer representatives retain those
 examples; missing historical examples are not fabricated.
+
+
+The selected representative is displayed by the unmodified msentity
+`spectrum.js` and `spectrum.css`, loaded from
+`fredis/libs/msentity/vscode-extension/media/` in a source checkout. Packaged
+Workbench builds bundle those same assets. The iframe keeps the upstream
+mirror comparison, zoom, peak tables, metadata, and SVG/PNG/TSV/CSV export
+controls isolated from the report styles. The Peaks table stays on the right;
+the iframe fits its complete content without an internal scrollbar. Saved validation scores are labelled separately from msentity's
+interactive similarity calculation, which uses its own method and Da tolerance.
+Updating the msentity assets changes this display after the Workbench is
+reloaded (or rebuilt for a packaged installation); protocol changes may require
+updating the small comparison adapter.
