@@ -14,15 +14,14 @@ const {html,script,representativePoints,validationResult}=require('../src/featur
   let dom;
   try{
     fs.mkdirSync(path.join(root,'spectrum_validation'));
-    for(const epoch of [0,2]) {
-      fs.writeFileSync(path.join(root,`spectrum_validation/epoch_${epoch}.json`),'{}');
-      fs.writeFileSync(path.join(root,`spectrum_validation/epoch_${epoch}.summary.json`),JSON.stringify({summary:{samples:100},representatives}));
-      fs.writeFileSync(path.join(root,`spectrum_validation/epoch_${epoch}.msds`),'dataset placeholder');
-    }
+    const result=require('child_process').spawnSync('python',['-c',
+      'import json,sys; from pathlib import Path; from fredis.ml.training.fragment_tree_training.validation_storage import save_validation_msdataset; p=json.load(sys.stdin); [save_validation_msdataset(p["records"],p["representatives"],Path(p["root"])/"spectrum_validation"/f"epoch_{epoch}.msds",epoch=epoch,global_step=epoch*10,summary={"samples":100}) for epoch in [0,2]]'],
+      {cwd:path.resolve(__dirname,'../..'),input:JSON.stringify({root,records,representatives}),encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
     const manifest={latestValidation:'spectrum_validation/epoch_2.json'};
     const validation=await validationResult(root,manifest);
     assert.deepEqual(validation.epochs,[0,2]);assert.equal(validation.epoch,2);assert.equal(validation.msdsFile,'spectrum_validation/epoch_2.msds');
-    assert.equal((await validationResult(root,manifest,0)).file,'spectrum_validation/epoch_0.json');
+    assert.equal((await validationResult(root,manifest,0)).file,'spectrum_validation/epoch_0.msds');
     await assert.rejects(validationResult(root,manifest,1),/No validation artifact/);
     await assert.rejects(validationResult(root,manifest,-1),/No validation artifact/);
     dom=new JSDOM(html({hidden:false}),{runScripts:'outside-only'});

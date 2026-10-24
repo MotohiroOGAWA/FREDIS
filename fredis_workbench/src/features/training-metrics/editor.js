@@ -16,7 +16,7 @@ async function validationResult(root, manifest = {}, requestedEpoch = null) {
   if(!directory)throw new Error('Invalid validation directory.');
   let files=[];
   try {files=await fs.promises.readdir(directory);}catch(error){if(error.code!=='ENOENT')throw error;}
-  const labels=[...new Set(files.map(file=>file.match(/^((?:epoch|step)_\d+)\.(?:json|summary\.json)$/)?.[1]).filter(Boolean))];
+  const labels=[...new Set(files.map(file=>file.match(/^((?:epoch|step)_\d+)\.(?:json|msds)$/)?.[1]).filter(Boolean))];
   let epochBoundaries=[];
   if(labels.some(label=>label.startsWith('step_'))) {
     const index=await metricIndex(root,manifest);
@@ -45,11 +45,11 @@ async function validationResult(root, manifest = {}, requestedEpoch = null) {
     selected=checkpoints.find(item=>item.key===latest)||checkpoints.at(-1);
   }
   if(!selected)return null;
-  const target=path.join(directory,selected.key+'.json');
+  const target=path.join(directory,selected.key+(files.includes(selected.key+'.msds')?'.msds':'.json'));
   const value=await require('./validation-reader').readValidation(target);
   return {file:path.relative(root,target),epoch:selected.epoch,key:selected.key,estimated:selected.estimated,
     epochs:[...new Set(checkpoints.map(item=>item.epoch))],checkpoints,epochBoundaries,axisMode,
-    msdsFile:fs.existsSync(target.replace(/\.json$/,'.msds'))?path.relative(root,target.replace(/\.json$/,'.msds')):null,
+    msdsFile:target.endsWith('.msds')?path.relative(root,target):null,
     summary:value.summary||{},representatives:value.representatives||{}};
 }
 

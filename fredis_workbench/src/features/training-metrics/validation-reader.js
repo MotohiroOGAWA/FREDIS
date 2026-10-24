@@ -88,19 +88,21 @@ async function scan(filename, requested = null) {
 }
 
 async function readValidation(filename) {
-  // New writers publish a compact sidecar last. Older runs use the streaming
-  // path, including files larger than V8's maximum string length.
-  const sidecar = filename.replace(/\.json$/, '.summary.json');
-  let source = filename, compact = false;
-  try {
-    const [small, full] = await Promise.all([fs.promises.stat(sidecar), fs.promises.stat(filename)]);
-    if (small.mtimeMs >= full.mtimeMs) { source = sidecar; compact = true; }
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const msds = filename.replace(/\.json$/, '.msds');
+  let source = filename;
+  try { await fs.promises.stat(msds); source = msds; }
+  catch(error) { if(error.code !== 'ENOENT') throw error; }
   const stat = await fs.promises.stat(source);
   const version = `${stat.size}:${stat.mtimeMs}`;
   if (cache.get(source)?.version === version) return cache.get(source).value;
   let value;
-  if (compact) value = JSON.parse(await fs.promises.readFile(source, 'utf8'));
+  if (source.endsWith('.msds')) {
+    let python = 'python';
+    try { python = require('vscode').workspace.getConfiguration('fredis').get('pythonPath', 'python'); } catch {}
+    const {stdout} = await require('util').promisify(require('child_process').execFile)(python,
+      [require('path').join(__dirname, 'read_validation.py'), source], {maxBuffer:MAX_VALUE_BYTES});
+    value = JSON.parse(stdout);
+  }
   else {
     let parsed = await scan(filename);
     const wanted = representativeIndices(parsed.representatives);

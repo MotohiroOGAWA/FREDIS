@@ -11,7 +11,7 @@ from fredis.libs.msentity.msentity import MSDataset, PeakSeries
 
 
 def save_validation_msdataset(
-    records, representatives, path, *, epoch=None, global_step=None
+    records, representatives, path, *, epoch=None, global_step=None, summary=None
 ):
     metadata, peaks, peak_metadata, offsets = [], [], [], [0]
     selections = {index: [] for index in range(len(records))}
@@ -71,7 +71,17 @@ def save_validation_msdataset(
         columns=frame.columns.tolist(),
         description="FREDIS validation quantile representatives: paired generated and observed spectra",
         attributes={
-            "selection": "Union of with/without precursor × assignment/cosine × q10/q25/q50/q75/q90"
+            "selection": "Union of with/without precursor × assignment/cosine × q10/q25/q50/q75/q90",
+            "validation_summary": json.dumps(summary or {}),
+            "validation_representatives": json.dumps(
+                {
+                    metric: {
+                        level: {k: v for k, v in item.items() if k != "spectrum"}
+                        for level, item in levels.items()
+                    }
+                    for metric, levels in representatives.items()
+                }
+            ),
         },
     )
     path = Path(path)
@@ -82,6 +92,56 @@ def save_validation_msdataset(
     finally:
         temporary.unlink(missing_ok=True)
     return path
+
+
+def read_validation_msdataset(path):
+    """Read paired representative spectra and their selection metadata from MSDS."""
+    dataset = MSDataset.load(str(path))
+    records = {}
+    selected = {}
+    for position, row in dataset.metadata.iterrows():
+        record = json.loads(row.to_json())
+        index = int(record["RepresentativeIndex"])
+        target = records.setdefault(index, dict(record))
+        spectrum = dataset.peaks[position]
+        peaks = []
+        metadata = spectrum.metadata
+        for offset, (mz, intensity) in enumerate(zip(spectrum.mz, spectrum.intensity)):
+            extra = (
+                json.loads(metadata.iloc[offset].to_json())
+                if metadata is not None
+                else {}
+            )
+            if extra.get("depth") == -1:
+                extra["depth"] = None
+            peaks.append({**extra, "mz": float(mz), "intensity": float(intensity)})
+        target[
+            (
+                "generated_peaks"
+                if record["SpectrumRole"] == "generated"
+                else "original_peaks"
+            )
+        ] = peaks
+        selected[index] = json.loads(record.get("SelectedBy") or "[]")
+    representatives = json.loads(
+        dataset.attributes.get("validation_representatives", "{}")
+    )
+    if not representatives:
+        for index, choices in selected.items():
+            for choice in choices:
+                metric, level = choice.rsplit(":", 1)
+                level = "median" if level == "q50" else level
+                representatives.setdefault(metric, {})[level] = {
+                    "spectrum_index": index,
+                    "value": records[index].get(metric),
+                }
+    for levels in representatives.values():
+        for item in levels.values():
+            item["spectrum"] = records[int(item["spectrum_index"])]
+    return {
+        "summary": json.loads(dataset.attributes.get("validation_summary", "{}")),
+        "representatives": representatives,
+    }
 
 
 def export_legacy_preview(preview, path, *, run_directory=None):
@@ -169,20 +229,13 @@ def export_legacy_preview(preview, path, *, run_directory=None):
     if not records:
         raise ValueError("No representative spectra in preview")
     save_validation_msdataset(
-        records, representatives, path, epoch=epoch, global_step=step
+        records,
+        representatives,
+        path,
+        epoch=epoch,
+        global_step=step,
+        summary=preview.get("summary", {}),
     )
-    result = {
-        **preview,
-        "schema": "fredis.spectrum-validation-summary",
-        "epoch": epoch,
-        "global_step": step,
-        "msds_file": Path(path).name,
-        "representatives": representatives,
-    }
-    sidecar = Path(path).with_suffix(".summary.json")
-    temporary = sidecar.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(result))
-    temporary.replace(sidecar)
     return {
         "file": str(path),
         "spectra": len(records),

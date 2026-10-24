@@ -116,7 +116,7 @@ const { readRun, groupSeries, metricInfo, html, script } = require('../src/featu
       const compactFile = validationFile.replace('.json','.summary.json');
       await fs.writeFile(compactFile, JSON.stringify(compact));
       const future = new Date(Date.now()+2000); await fs.utimes(compactFile,future,future);
-      assert.deepEqual(await readValidation(validationFile), compact);
+      assert.strictEqual(await readValidation(validationFile), reordered);
       await fs.rm(compactFile);
       await fs.writeFile(validationFile, '{"spectra":[{"unfinished":');
       await assert.rejects(readValidation(validationFile), /incomplete/);

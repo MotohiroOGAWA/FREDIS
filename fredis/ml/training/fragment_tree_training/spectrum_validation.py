@@ -802,31 +802,13 @@ def validate_spectra(
         target_dir / f"{label}.msds",
         epoch=epoch,
         global_step=global_step,
+        summary=summary,
     )
     payload.update(epoch=epoch, global_step=global_step, msds_file=f"{label}.msds")
     result_path = target_dir / f"{label}.json"
     temporary_result = result_path.with_suffix(".json.tmp")
     temporary_result.write_text(json.dumps(payload))
     temporary_result.replace(result_path)
-    # The UI needs only representative spectra, not the potentially multi-GB array.
-    preview = {
-        "schema": "fredis.spectrum-validation-summary",
-        "epoch": epoch,
-        "global_step": global_step,
-        "msds_file": f"{label}.msds",
-        "summary": summary,
-        "representatives": {
-            metric: {
-                quantile: {**item, "spectrum": saved_spectra[item["spectrum_index"]]}
-                for quantile, item in entries.items()
-            }
-            for metric, entries in payload["representatives"].items()
-        },
-    }
-    preview_path = target_dir / f"{label}.summary.json"
-    temporary = preview_path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(preview))
-    temporary.replace(preview_path)
     if global_step is not None:
         split = (
             "validation" if label.startswith("epoch_") else "intermediate_validation"
