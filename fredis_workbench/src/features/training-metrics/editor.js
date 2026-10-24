@@ -333,7 +333,7 @@ function attach(panel) {
   });
 }
 function html({ hidden = true, autoRefresh = true } = {}) {
-  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section><h2>Representative validation spectra</h2><div class="actions"><label>Epoch <input id="representativeEpoch" type="number" min="0" step="1" style="width:100px"></label><input id="representativeEpochSlider" type="range" min="0" step="1" aria-label="Validation epoch" style="min-width:200px"><label><input id="representativePrecursor" type="checkbox" checked> Use scores with precursor</label><span id="representativeStatus" class="muted"></span></div><p class="muted">The plot contains the union of assignment-score and cosine representatives at q10, q25, q50, q75, and q90, selected both with and without precursor peaks. Changing the checkbox changes coordinates only.</p><div id="representativeScatter"></div><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
+  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section id="representativeValidation" style="min-width:0;overflow-anchor:none"><h2>Representative validation spectra</h2><div class="actions"><label>Epoch <input id="representativeEpoch" type="number" min="0" step="1" style="width:100px"></label><input id="representativeEpochSlider" type="range" min="0" step="1" aria-label="Validation epoch" style="min-width:200px"><label><input id="representativePrecursor" type="checkbox" checked> Use scores with precursor</label></div><p id="representativeStatus" class="muted" style="height:2.6em;margin:6px 0;overflow:auto"></p><p class="muted">The plot contains the union of assignment-score and cosine representatives at q10, q25, q50, q75, and q90, selected both with and without precursor peaks. Changing the checkbox changes coordinates only.</p><div id="representativeScatter"></div><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
 }
 function metricInfo(metric, dimension = '') {
   const groups = [
@@ -657,51 +657,58 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints) {
     const epochInput=el('representativeEpoch'),slider=el('representativeEpochSlider');
     for(const control of [epochInput,slider]) {control.disabled=!epochs.length;control.min=epochs[0]??0;control.max=epochs.at(-1)??0;control.step=1;control.value=selectedEpoch??validation?.epoch??epochs.at(-1)??0;}
     const plotBox=el('representativeScatter'),spectrumBox=el('representativeSpectra');
-    plotBox.replaceChildren();spectrumBox.replaceChildren();
+    for (const box of [plotBox,spectrumBox]) {box.setAttribute('aria-busy',String(epochLoading));box.inert=epochLoading;box.style.opacity=epochLoading?'.55':'';}
     if (epochLoading) {el('representativeStatus').textContent='Loading epoch '+selectedEpoch+'…';return;}
+    plotBox.replaceChildren();spectrumBox.replaceChildren();
     const points=representativePoints(validation?.representatives);
     if (!points.length) {el('representativeStatus').textContent=report?'No validation spectrum artifact is available yet.':'Load a training report to see representative spectra.';return;}
     if (!points.some(point=>point.key===selectedSpectrumKey)) selectedSpectrumKey=points[0].key;
     const include=el('representativePrecursor').checked,suffix=include?'':'_without_precursor';
     const number=value=>value==null||!Number.isFinite(Number(value))?'unavailable':Number(value).toFixed(4);
     const choose=key=>{selectedSpectrumKey=key;save();renderSpectra();};
-    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 680 360');svg.style.cssText='width:100%;max-width:900px;display:block';svg.setAttribute('role','img');svg.setAttribute('aria-label','Assignment score versus cosine similarity');
-    const x=value=>65+Math.max(0,Math.min(1,Number(value)||0))*590,y=value=>300-Math.max(0,Math.min(1,Number(value)||0))*260;
+    const scatterWidth=Math.max(320,plotBox.clientWidth||680);
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 '+scatterWidth+' 300');svg.style.cssText='width:100%;height:300px;display:block';svg.setAttribute('role','img');svg.setAttribute('aria-label','Assignment score versus cosine similarity');
+    const x=value=>55+Math.max(0,Math.min(1,Number(value)||0))*(scatterWidth-71),y=value=>250-Math.max(0,Math.min(1,Number(value)||0))*220;
     for(let tick=0;tick<=5;tick++) {const value=tick/5;
-      svgNode(svg,'line',{x1:x(value),x2:x(value),y1:40,y2:300,stroke:'currentColor',opacity:'.15'});
-      svgNode(svg,'line',{x1:65,x2:655,y1:y(value),y2:y(value),stroke:'currentColor',opacity:'.15'});
-      svgNode(svg,'text',{x:x(value),y:320,'text-anchor':'middle',fill:'currentColor','font-size':12},value.toFixed(1));
-      svgNode(svg,'text',{x:55,y:y(value)+4,'text-anchor':'end',fill:'currentColor','font-size':12},value.toFixed(1));
+      svgNode(svg,'line',{x1:x(value),x2:x(value),y1:30,y2:250,stroke:'currentColor',opacity:'.15'});
+      svgNode(svg,'line',{x1:55,x2:scatterWidth-16,y1:y(value),y2:y(value),stroke:'currentColor',opacity:'.15'});
+      svgNode(svg,'text',{x:x(value),y:270,'text-anchor':'middle',fill:'currentColor','font-size':12},value.toFixed(1));
+      svgNode(svg,'text',{x:45,y:y(value)+4,'text-anchor':'end',fill:'currentColor','font-size':12},value.toFixed(1));
     }
-    svgNode(svg,'text',{x:360,y:350,'text-anchor':'middle',fill:'currentColor','font-size':14},'Assignment score');
-    svgNode(svg,'text',{transform:'translate(18 170) rotate(-90)','text-anchor':'middle',fill:'currentColor','font-size':14},'Cosine similarity');
+    svgNode(svg,'text',{x:(scatterWidth+39)/2,y:294,'text-anchor':'middle',fill:'currentColor','font-size':14},'Assignment score');
+    svgNode(svg,'text',{transform:'translate(16 140) rotate(-90)','text-anchor':'middle',fill:'currentColor','font-size':14},'Cosine similarity');
     for(const point of points) {
       const a=point.record['assignment_score'+suffix],c=point.record['cosine_similarity'+suffix];
       const missing=a==null||c==null||!Number.isFinite(Number(a))||!Number.isFinite(Number(c));
       const label='Assignment '+number(a)+' · Cosine '+number(c)+' · '+point.selections.join(', ');
-      const circle=svgNode(svg,'circle',{cx:x(a),cy:y(c),r:point.key===selectedSpectrumKey?7:5,fill:missing?'none':point.key===selectedSpectrumKey?'#f0883e':'#58a6ff',stroke:point.key===selectedSpectrumKey?'#f0883e':'#58a6ff','stroke-width':2,'stroke-dasharray':missing?'2 2':'',tabindex:0,role:'button','aria-label':label,'data-spectrum-key':point.key});
+      const circle=svgNode(svg,'circle',{cx:x(a),cy:y(c),r:point.key===selectedSpectrumKey?4:2.5,fill:missing?'none':point.key===selectedSpectrumKey?'#f0883e':'#58a6ff',stroke:point.key===selectedSpectrumKey?'#f0883e':'#58a6ff','stroke-width':1.25,'stroke-dasharray':missing?'2 2':'',tabindex:0,role:'button','aria-label':label,'data-spectrum-key':point.key});
       circle.style.cursor='pointer';svgNode(circle,'title',{},label+(missing?' · Unavailable coordinates shown at the axis edge.':''));
       circle.onclick=()=>choose(point.key);circle.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();choose(point.key);}};
     }
     plotBox.append(svg);
     const hint=document.createElement('p');hint.className='muted';hint.textContent='Click a point to show its generated/observed spectrum. All quantile representatives remain in the plot when score mode changes. Hollow points have unavailable scores and are placed at the axis edge.';plotBox.append(hint);
     const pickerLabel=document.createElement('label');pickerLabel.append(document.createTextNode('Spectrum (also resolves overlapping points) '));
-    const picker=document.createElement('select');picker.id='representativePoint';picker.style.maxWidth='100%';
+    const picker=document.createElement('select');picker.id='representativePoint';picker.style.cssText='width:100%;min-width:0;max-width:100%';pickerLabel.style.display='block';
     points.forEach((point,index)=>{const option=document.createElement('option');option.value=point.key;option.textContent=(index+1)+' · '+point.selections.join(' / ');picker.append(option);});picker.value=selectedSpectrumKey;picker.onchange=()=>choose(picker.value);pickerLabel.append(picker);plotBox.append(pickerLabel);
     const point=points.find(point=>point.key===selectedSpectrumKey),record=point.record;
     const card=document.createElement('article');card.style.cssText='border:1px solid '+border+';border-radius:9px;padding:12px';
-    const title=document.createElement('strong');title.textContent='Assignment '+number(record['assignment_score'+suffix])+' · Cosine '+number(record['cosine_similarity'+suffix])+' · '+(include?'with':'without')+' precursor scores';card.append(title);
+    const title=document.createElement('strong');title.style.cssText='display:block;height:1.5em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';title.textContent='Assignment '+number(record['assignment_score'+suffix])+' · Cosine '+number(record['cosine_similarity'+suffix])+' · '+(include?'with':'without')+' precursor scores';card.append(title);
     const generated=peaks(record,'generated'),original=record.original_peaks||[],all=[...generated,...original];
-    const maximum=Math.max(...all.map(p=>Number(p.mz)),1),gmax=Math.max(...generated.map(p=>Number(p.intensity)),1e-8),omax=Math.max(...original.map(p=>Number(p.intensity)),1e-8),massX=mz=>42+Number(mz)/maximum*516;
-    const mirror=document.createElementNS('http://www.w3.org/2000/svg','svg');mirror.setAttribute('viewBox','0 0 570 270');mirror.style.cssText='display:block;width:100%';mirror.setAttribute('role','img');mirror.setAttribute('aria-label','Selected generated and observed mirror spectrum');
-    svgNode(mirror,'line',{x1:42,x2:558,y1:130,y2:130,stroke:'currentColor'});
-    for(const peak of generated) svgNode(mirror,'line',{x1:massX(peak.mz),x2:massX(peak.mz),y1:130,y2:130-105*peak.intensity/gmax,stroke:peak.precursor?'#f0883e':'#58a6ff','stroke-width':2});
-    for(const peak of original) svgNode(mirror,'line',{x1:massX(peak.mz),x2:massX(peak.mz),y1:130,y2:130+105*peak.intensity/omax,stroke:peak.precursor?'#f0883e':'#3fb950','stroke-width':2});
-    svgNode(mirror,'text',{x:45,y:18,fill:'#58a6ff','font-size':11},'Generated');svgNode(mirror,'text',{x:45,y:258,fill:'#3fb950','font-size':11},'Observed');svgNode(mirror,'text',{x:558,y:148,fill:'currentColor','font-size':10,'text-anchor':'end'},maximum.toFixed(2)+' m/z');card.append(mirror);
-    const meta=document.createElement('p');meta.className='muted';meta.textContent=(record.main_adduct||record.adduct||'')+' · '+record.collision_energy+' eV · '+generated.length+' / '+original.length+' peaks';card.append(meta);
-    const smiles=document.createElement('p');smiles.style.overflowWrap='anywhere';smiles.textContent='SMILES: '+(record.smiles||record.SMILES||'Unavailable in this legacy artifact.');card.append(smiles);
-    const reasons=document.createElement('p');reasons.className='muted';reasons.textContent='Selected by: '+point.selections.join(' / ');card.append(reasons);spectrumBox.append(card);
+    const mirrorWidth=Math.max(320,(spectrumBox.clientWidth||680)-26);
+    const maximum=Math.max(...all.map(p=>Number(p.mz)),1),gmax=Math.max(...generated.map(p=>Number(p.intensity)),1e-8),omax=Math.max(...original.map(p=>Number(p.intensity)),1e-8),massX=mz=>42+Number(mz)/maximum*(mirrorWidth-54);
+    const mirror=document.createElementNS('http://www.w3.org/2000/svg','svg');mirror.setAttribute('viewBox','0 0 '+mirrorWidth+' 240');mirror.style.cssText='display:block;width:100%;height:240px';mirror.setAttribute('role','img');mirror.setAttribute('aria-label','Selected generated and observed mirror spectrum');
+    svgNode(mirror,'line',{x1:42,x2:mirrorWidth-12,y1:120,y2:120,stroke:'currentColor'});
+    for(const peak of generated) svgNode(mirror,'line',{x1:massX(peak.mz),x2:massX(peak.mz),y1:120,y2:120-88*peak.intensity/gmax,stroke:peak.precursor?'#f0883e':'#58a6ff','stroke-width':2});
+    for(const peak of original) svgNode(mirror,'line',{x1:massX(peak.mz),x2:massX(peak.mz),y1:120,y2:120+88*peak.intensity/omax,stroke:peak.precursor?'#f0883e':'#3fb950','stroke-width':2});
+    svgNode(mirror,'text',{x:45,y:18,fill:'#58a6ff','font-size':11},'Generated');svgNode(mirror,'text',{x:45,y:228,fill:'#3fb950','font-size':11},'Observed');svgNode(mirror,'text',{x:mirrorWidth-12,y:138,fill:'currentColor','font-size':10,'text-anchor':'end'},maximum.toFixed(2)+' m/z');card.append(mirror);
+    const meta=document.createElement('p');meta.className='muted';meta.style.cssText='height:1.5em;white-space:nowrap;overflow:auto';meta.textContent=(record.main_adduct||record.adduct||'')+' · '+record.collision_energy+' eV · '+generated.length+' / '+original.length+' peaks';card.append(meta);
+    const smiles=document.createElement('p');smiles.style.cssText='height:2.8em;overflow:auto;overflow-wrap:anywhere';smiles.textContent='SMILES: '+(record.smiles||record.SMILES||'Unavailable in this legacy artifact.');card.append(smiles);
+    const reasons=document.createElement('p');reasons.className='muted';reasons.style.cssText='height:2.8em;overflow:auto';reasons.textContent='Selected by: '+point.selections.join(' / ');card.append(reasons);spectrumBox.append(card);
     el('representativeStatus').textContent=validation.file+' · '+points.length+' representative spectra · '+(validation.msdsFile||'legacy JSON');
+  }
+  if (typeof ResizeObserver !== 'undefined') {
+    let lastWidth=0;
+    new ResizeObserver(entries=>{const width=entries[0].contentRect.width;if(Math.abs(width-lastWidth)>1){lastWidth=width;if(validation&&!epochLoading)renderSpectra();}}).observe(el('representativeScatter'));
   }
   el('metricsFilter').oninput = updateChoices;
   el('metricsAddAll').onclick = () => {
@@ -723,7 +730,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints) {
     if (message.type === 'metricsValidationData') {
       if (message.request!==request || message.validationRequest!==validationRequest) return;
       epochLoading=false;
-      if (message.error) {el('representativeStatus').textContent=message.error;return;}
+      if (message.error) {renderSpectra();el('representativeStatus').textContent=message.error;return;}
       validation=message.data;selectedEpoch=validation.epoch;save();renderSpectra();
       window.dispatchEvent(new CustomEvent('trainingValidationRendered'));return;
     }
