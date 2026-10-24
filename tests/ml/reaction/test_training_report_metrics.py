@@ -147,3 +147,46 @@ def test_report_keeps_depth_and_adduct_time_series_separate():
     assert report['cosine_similarity@main_adduct:[M+Na]+'] == [.4]
     assert report['cosine_similarity@depth:1'] == [.8, .4]
     assert report['cosine_similarity@depth:2'] == [.4, .2]
+
+
+def test_fragment_depth_metrics_are_persisted_for_each_validation_step(tmp_path):
+    import csv
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        _original_depths, append_metric_distributions,
+    )
+
+    # Current annotations refer to compounds via nodeIds. Exercise graph traversal,
+    # assignment lookup, aggregation, and the on-disk time series together.
+    batch = SimpleNamespace(
+        canonical_data=None,
+        decoded=SimpleNamespace(
+            node_sample_index=torch.tensor([0, 0, 0, 0]),
+            edge_index=torch.tensor([[0, 1, 2], [1, 2, 3]]),
+        ),
+        state_sample_index=torch.tensor([0, 0, 0, 0]),
+        state_node_index=torch.tensor([0, 1, 2, 3]),
+        state_mz=torch.tensor([400., 300., 200., 100.]),
+    )
+    annotation = {'precursorMz': 400., 'peaks': [
+        {'precursor': True},
+        *[{'matches': [{'nodeIds': [node]}]} for node in (1, 2, 3)],
+    ]}
+    depths = _original_depths(SimpleNamespace(spectrum_batch=batch), 0,
+                              annotation, DaTolerance(.01))
+    assert depths == [0, 1, 2, 3]
+    for step, score in [(10, .4), (20, .8)]:
+        records = [{'collision_energy_bin': 'low', 'main_adduct': '[M+H]+',
+                    'depth_metrics': {str(depth): {
+                        'cosine_similarity': score,
+                        'assignment_score': score,
+                    } for depth in depths}}]
+        append_metric_distributions(tmp_path, step, 'validation', _report_metrics(records))
+    with (tmp_path / 'metric_distributions.tsv').open() as stream:
+        rows = list(csv.DictReader(stream, delimiter='\t'))
+    for depth in (1, 2, 3):
+        for metric in ('cosine_similarity', 'assignment_score'):
+            saved = [row for row in rows if row['metric'] == f'{metric}@depth:{depth}_mean']
+            assert [int(row['global_step']) for row in saved] == [10, 20]
+            assert [float(row['value']) for row in saved] == [.4, .8]

@@ -213,7 +213,10 @@ function client(groupSeries) {
     const controls=document.createElement('div');controls.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0';
     const modeLabel=document.createElement('label');modeLabel.append(document.createTextNode('Display '));const mode=document.createElement('select');
     for(const [value,labelText] of [['mean','Mean'],['median','Median'],['distribution','Distribution']]){const option=document.createElement('option');option.value=value;option.textContent=labelText;mode.append(option);}mode.value=settings.mode;mode.onchange=()=>{settings.mode=mode.value;save();refreshCard(name);};modeLabel.append(mode);controls.append(modeLabel);
-    const precursorLabel=document.createElement('label'),precursor=document.createElement('input');precursor.type='checkbox';precursor.checked=settings.withoutPrecursor;precursor.disabled=!availableWith||!availableWithout;precursor.onchange=()=>{settings.withoutPrecursor=precursor.checked;save();refreshCard(name);};precursorLabel.append(precursor,document.createTextNode(' Exclude precursor'));controls.append(precursorLabel);card.append(controls);
+    if (availableWith && availableWithout) {
+    const precursorLabel=document.createElement('label'),precursor=document.createElement('input');precursor.type='checkbox';precursor.checked=settings.withoutPrecursor;precursor.onchange=()=>{settings.withoutPrecursor=precursor.checked;save();refreshCard(name);};precursorLabel.append(precursor,document.createTextNode(' Exclude precursor'));controls.append(precursorLabel);
+    }
+    card.append(controls);
     const hidden = hiddenLanes.get(name) || new Set();
     hiddenLanes.set(name, hidden);
     const allLanes = chart.variants[settings.withoutPrecursor?'withoutPrecursor':'withPrecursor'];
