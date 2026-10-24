@@ -233,3 +233,18 @@ interactive similarity calculation, which uses its own method and Da tolerance.
 Updating the msentity assets changes this display after the Workbench is
 reloaded (or rebuilt for a packaged installation); protocol changes may require
 updating the small comparison adapter.
+
+
+Time-series chart X coordinates use display-only fractional epochs. Between
+completed epoch boundaries `(step_N, N)` and `(step_Nplus1, N+1)`, the position is
+`N + (step - step_N) / (step_Nplus1 - step_N)`. The original step values remain
+unchanged in storage. Indexed runs read a small scalar partition for boundary
+metadata rather than loading all chart files. An unfinished epoch uses the
+latest completed interval as an explicitly marked estimate; the next completed
+boundary corrects the positions. Before any completed interval exists, pending
+step positions wait for the first boundary.
+
+The validation-spectrum number input and slider also include intermediate
+`step_N` artifacts at their fractional epoch positions. The Validation selector
+can distinguish artifacts that share an epoch coordinate. No fractional epoch
+values are written into metrics or spectrum files.

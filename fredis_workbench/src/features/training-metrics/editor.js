@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const msentityViewer = require('./msentity-viewer');
+const {createEpochAxis}=require('./epoch-axis');
 const TRAINING_CONFIG_NAME = 'fragment-tree' + require('../../file-formats').format('training-config').suffix;
 
 function safeResolve(root, relative) {
@@ -11,27 +12,44 @@ function safeResolve(root, relative) {
 }
 
 async function validationResult(root, manifest = {}, requestedEpoch = null) {
-  const directory = safeResolve(root, manifest.artifacts?.validationDirectory || 'spectrum_validation');
-  if (!directory) throw new Error('Invalid validation directory.');
-  let files = [];
-  try {files = await fs.promises.readdir(directory);} catch (error) {if(error.code!=='ENOENT')throw error;}
-  const epochs = [...new Set(files.map(file=>file.match(/^epoch_(\d+)\.(?:json|summary\.json)$/)?.[1]).filter(value=>value!==undefined).map(Number))].sort((a,b)=>a-b);
-  let target;
-  if (requestedEpoch !== null) {
-    if (!Number.isInteger(requestedEpoch) || !epochs.includes(requestedEpoch)) throw new Error('No validation artifact for this epoch.');
-    target = path.join(directory, 'epoch_' + requestedEpoch + '.json');
-  } else {
-    target = safeResolve(root, manifest.latestValidation);
-    if (target?.endsWith('.msds')) target=target.replace(/\.msds$/,'.json');
-    if (epochs.length && target && !/^epoch_\d+\.json$/.test(path.basename(target))) target=null;
-    if (!target || !fs.existsSync(target)) target = epochs.length ? path.join(directory,'epoch_'+epochs.at(-1)+'.json') : null;
+  const directory=safeResolve(root,manifest.artifacts?.validationDirectory||'spectrum_validation');
+  if(!directory)throw new Error('Invalid validation directory.');
+  let files=[];
+  try {files=await fs.promises.readdir(directory);}catch(error){if(error.code!=='ENOENT')throw error;}
+  const labels=[...new Set(files.map(file=>file.match(/^((?:epoch|step)_\d+)\.(?:json|summary\.json)$/)?.[1]).filter(Boolean))];
+  let epochBoundaries=[];
+  if(labels.some(label=>label.startsWith('step_'))) {
+    const index=await metricIndex(root,manifest);
+    if(index)epochBoundaries=await readEpochBoundaries(root,index);
+    else {
+      const filename=path.join(root,'metrics.tsv');let headers;
+      try {for await(const line of completeMetricLines(filename)){
+        const cells=line.split('\t');if(!headers){headers=cells;continue;}if(cells.length!==headers.length)continue;
+        const row=Object.fromEntries(headers.map((key,i)=>[key,cells[i]]));
+        if((row.event==='epoch_end'||!row.event)&&row.epoch?.trim()&&row.global_step?.trim())epochBoundaries.push({step:Number(row.global_step),epoch:Number(row.epoch)});
+      }}catch(error){if(error.code!=='ENOENT')throw error;}
+    }
   }
-  if (!target) return null;
-  const value = await require('./validation-reader').readValidation(target);
-  const epoch = Number(path.basename(target).match(/^epoch_(\d+)\./)?.[1]);
-  return {file:path.relative(root,target),epoch:Number.isInteger(epoch)?epoch:null,epochs,
+  const axis=createEpochAxis(epochBoundaries);
+  const checkpoints=labels.map(key=>{
+    const [kind,number]=key.split('_'),step=kind==='step'?Number(number):null;
+    return {key,epoch:kind==='epoch'?Number(number):axis.at(step),step,estimated:step!==null&&axis.estimated(step)};
+  }).filter(item=>item.epoch!==null).sort((a,b)=>a.epoch-b.epoch||Number(b.key.startsWith('epoch_'))-Number(a.key.startsWith('epoch_')));
+  let selected;
+  if(requestedEpoch!==null){
+    selected=checkpoints.find(item=>typeof requestedEpoch==='string'?item.key===requestedEpoch:Math.abs(item.epoch-requestedEpoch)<1e-9);
+    if(!selected)throw new Error('No validation artifact for this epoch.');
+  }else{
+    const latest=path.basename(manifest.latestValidation||'').replace(/\.(json|msds)$/,'');
+    selected=checkpoints.find(item=>item.key===latest)||checkpoints.at(-1);
+  }
+  if(!selected)return null;
+  const target=path.join(directory,selected.key+'.json');
+  const value=await require('./validation-reader').readValidation(target);
+  return {file:path.relative(root,target),epoch:selected.epoch,key:selected.key,estimated:selected.estimated,
+    epochs:[...new Set(checkpoints.map(item=>item.epoch))],checkpoints,epochBoundaries,
     msdsFile:fs.existsSync(target.replace(/\.json$/,'.msds'))?path.relative(root,target.replace(/\.json$/,'.msds')):null,
-    summary:value.summary || {},representatives:value.representatives || {}};
+    summary:value.summary||{},representatives:value.representatives||{}};
 }
 
 function representativePoints(representatives) {
@@ -130,6 +148,21 @@ async function* completeMetricLines(filename) {
   } finally {input.destroy();}
 }
 
+async function readEpochBoundaries(directory,index,cache) {
+  const entry=['metrics/epoch_seconds','metrics/validation_loss','metrics/val_loss','metrics/train_loss'].map(name=>index.series.find(item=>item.name===name)).find(Boolean);
+  if(!entry)return [];
+  if(cache?.has(entry.file))return cache.get(entry.file);
+  const boundaries=new Map();let headers;
+  for await(const line of completeMetricLines(safeResolve(directory,entry.file))) {
+    const cells=line.split('\t');if(!headers){headers=cells;continue;}if(cells.length!==headers.length)continue;
+    const row=Object.fromEntries(headers.map((name,i)=>[name,cells[i]]));
+    if(row.event!=='epoch_end'||!row.epoch?.trim()||!row.global_step?.trim())continue;
+    const epoch=Number(row.epoch),step=Number(row.global_step);
+    if(Number.isFinite(epoch)&&Number.isFinite(step))boundaries.set(step,{step,epoch});
+  }
+  return [...boundaries.values()].sort((a,b)=>a.step-b.step);
+}
+
 async function readCharts(directory, names, report) {
   if (!Array.isArray(names) || names.some(name=>typeof name !== 'string')) throw new Error('Invalid chart selection.');
   const index = await metricIndex(directory, report);
@@ -140,20 +173,24 @@ async function readCharts(directory, names, report) {
   const entries = index.series.filter(entry=>sources.has(entry.name));
   const files = [...new Set(entries.map(entry=>entry.file))];
   const series = new Map(entries.map(entry=>[entry.name,new Map()]));
+  const boundaryCache=new Map();
   // Bound open streams while reading only files belonging to selected charts.
   for (const file of files) {
+    const boundaries=[];boundaryCache.set(file,boundaries);
     let headers;
     for await (const line of completeMetricLines(safeResolve(directory,file))) {
       const cells = line.split('\t');
       if (!headers) {headers=cells;continue;}
       if (cells.length !== headers.length) continue;
       const row = Object.fromEntries(headers.map((key,i)=>[key,cells[i]]));
+      if(row.event==='epoch_end'&&row.epoch?.trim()&&row.global_step?.trim()&&Number.isFinite(Number(row.epoch))&&Number.isFinite(Number(row.global_step)))boundaries.push({step:Number(row.global_step),epoch:Number(row.epoch)});
       if (!series.has(row.series) || !row.value?.trim() || !row.global_step?.trim()) continue;
       const step=Number(row.global_step),value=Number(row.value);
       if (Number.isFinite(step) && Number.isFinite(value)) series.get(row.series).set(step,value);
     }
   }
-  return {directory,files,series:[...series].map(([name,points])=>({name,points:[...points].sort((a,b)=>a[0]-b[0])}))};
+  const epochBoundaries=await readEpochBoundaries(directory,index,boundaryCache);
+  return {directory,files,epochBoundaries,series:[...series].map(([name,points])=>({name,points:[...points].sort((a,b)=>a[0]-b[0])}))};
 }
 
 async function readProgressMetrics(directory) {
@@ -199,6 +236,7 @@ async function readRun(directory) {
   const indexed = await indexedRun(directory, report);
   if (indexed) return indexed;
   const series = new Map();
+  const epochBoundaries=[];
   const files = [];
   for (const file of ['metrics.tsv', 'metric_distributions.tsv']) {
     const filename = path.join(directory, file);
@@ -214,6 +252,7 @@ async function readRun(directory) {
         if (cells.length !== headers.length) continue; // A live writer may leave an incomplete final row.
         const row = Object.fromEntries(headers.map((key, i) => [key, cells[i]]));
         const step = Number(row.global_step);
+        if(file==='metrics.tsv'&&(row.event==='epoch_end'||!row.event)&&row.global_step?.trim()&&Number.isFinite(step)&&row.epoch?.trim()&&Number.isFinite(Number(row.epoch)))epochBoundaries.push({step,epoch:Number(row.epoch)});
         if (!row.global_step || !Number.isFinite(step)) continue;
         const add = (key, raw) => {
           const value = Number(raw);
@@ -255,7 +294,7 @@ async function readRun(directory) {
   } catch {}
   addLegacyLossSeries(series, intensityWeight);
   const validation = report ? await validationResult(directory, report) : null;
-  return { directory, report, validation, files, maxDepth, series: [...series].sort(([a], [b]) => a.localeCompare(b)).map(([name, values]) => ({ name, points: [...values].sort((a, b) => a[0] - b[0]) })) };
+  return { directory, report, validation, files, maxDepth, epochBoundaries, series: [...series].sort(([a], [b]) => a.localeCompare(b)).map(([name, values]) => ({ name, points: [...values].sort((a, b) => a[0] - b[0]) })) };
 }
 // Keep grouping independent of the webview so recorded naming conventions are testable.
 function groupSeries(series, maxDepth = null) {
@@ -314,7 +353,7 @@ function attach(panel) {
     if (message.type === 'metricsValidation') {
       try {
         if (!loadedDirectory || loadedRequest !== message.request) throw new Error('Load the current training run first.');
-        const data=await validationResult(loadedDirectory,loadedReport,message.epoch);
+        const data=await validationResult(loadedDirectory,loadedReport,message.validationKey ?? message.epoch);
         panel.webview.postMessage({type:'metricsValidationData',request:message.request,validationRequest:message.validationRequest,data});
       } catch(error) {panel.webview.postMessage({type:'metricsValidationData',request:message.request,validationRequest:message.validationRequest,error:error.message});}
       return;
@@ -339,7 +378,7 @@ function attach(panel) {
   });
 }
 function html({ hidden = true, autoRefresh = true } = {}) {
-  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section id="representativeValidation" style="min-width:0;overflow-anchor:none"><h2>Representative validation spectra</h2><div class="actions"><label>Epoch <input id="representativeEpoch" type="number" min="0" step="1" style="width:100px"></label><input id="representativeEpochSlider" type="range" min="0" step="1" aria-label="Validation epoch" style="min-width:200px"><label><input id="representativePrecursor" type="checkbox" checked> Use scores with precursor</label></div><p id="representativeStatus" class="muted" style="height:2.6em;margin:6px 0;overflow:auto"></p><p class="muted">The plot contains the union of assignment-score and cosine representatives at q10, q25, q50, q75, and q90, selected both with and without precursor peaks. Changing the checkbox changes coordinates only.</p><div id="representativeScatter"></div><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
+  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section id="representativeValidation" style="min-width:0;overflow-anchor:none"><h2>Representative validation spectra</h2><div class="actions"><label>Epoch <input id="representativeEpoch" type="number" min="0" step="any" style="width:100px"></label><input id="representativeEpochSlider" type="range" min="0" step="any" aria-label="Validation epoch" style="min-width:200px"><label>Validation <select id="representativeCheckpoint" style="max-width:260px"></select></label><label><input id="representativePrecursor" type="checkbox" checked> Use scores with precursor</label></div><p id="representativeStatus" class="muted" style="height:2.6em;margin:6px 0;overflow:auto"></p><p class="muted">The plot contains the union of assignment-score and cosine representatives at q10, q25, q50, q75, and q90, selected both with and without precursor peaks. Changing the checkbox changes coordinates only.</p><div id="representativeScatter"></div><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
 }
 function metricInfo(metric, dimension = '') {
   const groups = [
@@ -428,12 +467,13 @@ function metricOrder(a, b) {
   return groupDiff || rank(a) - rank(b) || facet(a) - facet(b) || a.metric.localeCompare(b.metric, undefined, {numeric:true}) || a.name.localeCompare(b.name, undefined, {numeric:true});
 }
 
-function client(groupSeries, metricInfo, metricOrder, representativePoints, msentityAssets, installMsentityViewer, comparisonPayload) {
+function client(groupSeries, metricInfo, metricOrder, representativePoints, msentityAssets, installMsentityViewer, comparisonPayload, createEpochAxis) {
   const el = id => document.getElementById(id);
   const state = vscode.getState() || {};
   const spectrumViewer=installMsentityViewer(msentityAssets,vscode);
   let selected = state.metricsSelected || [], data = [], report = null, validation = null, request = 0, busy = false;
   let lazy = false, chartRequest = 0, maxDepth = null;
+  let epochBoundaries=[],epochAxis=createEpochAxis([]);
   const loadedCharts = new Set(), pendingCharts = new Map(), chartErrors = new Map();
   function requestSelectedCharts() {
     if (!lazy || busy) return;
@@ -453,11 +493,12 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
   const border='var(--border,rgba(128,128,128,.35))', accent='var(--accent,#36c5a2)';
   el('metricsDirectory').value = state.metricsDirectory || '';
   el('metricsLayout').value = state.metricsLayout === 'vertical' ? 'vertical' : 'grid';
+  let selectedValidationKey=state.representativeValidationKey ?? null;
   let selectedEpoch=state.representativeEpoch ?? null, selectedSpectrumKey=state.representativePoint ?? null, validationRequest=0, epochTimer=null, epochLoading=false;
   if (typeof state.representativePrecursor === 'boolean') el('representativePrecursor').checked = state.representativePrecursor;
   const applyLayout = () => { el('metricsCharts').style.gridTemplateColumns = el('metricsLayout').value === 'vertical' ? 'minmax(0, 1fr)' : 'repeat(auto-fit,minmax(min(100%,440px),1fr))'; };
   applyLayout();
-  const save = () => vscode.setState({ ...(vscode.getState() || {}), metricsSelected: selected, metricsCardSettings:Object.fromEntries(cardSettings), metricsLayout: el('metricsLayout').value, metricsDirectory: el('metricsDirectory').value, representativePrecursor: el('representativePrecursor').checked, representativeEpoch:selectedEpoch, representativePoint:selectedSpectrumKey });
+  const save = () => vscode.setState({ ...(vscode.getState() || {}), metricsSelected: selected, metricsCardSettings:Object.fromEntries(cardSettings), metricsLayout: el('metricsLayout').value, metricsDirectory: el('metricsDirectory').value, representativePrecursor: el('representativePrecursor').checked, representativeEpoch:selectedEpoch, representativeValidationKey:selectedValidationKey, representativePoint:selectedSpectrumKey });
   function svgNode(svg, tag, attributes, text) { const node=document.createElementNS('http://www.w3.org/2000/svg',tag); for(const [key,value] of Object.entries(attributes))node.setAttribute(key,value); if(text!==undefined)node.textContent=text; svg.append(node); return node; }
   function load() {
     if (busy) return;
@@ -550,16 +591,16 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     card.append(legend);
     if (settings.mode === 'distribution') { const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = 'Light band: q10–q90 · Dark band: q25–q75 · Line: median'; card.append(hint); }
     const visibleStats=lane=>settings.mode==='distribution'?['q10','q25','median','q75','q90']:settings.mode==='median'?['median','value']:['mean','value'];
-    const points = lanes.flatMap(lane => visibleStats(lane).flatMap(stat=>lane.stats[stat]||[]));
-    if (!points.length) { const p = document.createElement('p'); p.textContent = 'No measurements available to display.'; card.append(p); }
+    const points = lanes.flatMap(lane => visibleStats(lane).flatMap(stat=>lane.stats[stat]||[])).filter(point=>epochAxis.at(point[0])!==null);
+    if (!points.length) { const p = document.createElement('p'); p.textContent = epochBoundaries.length?'No measurements available to display.':'Epoch positions become available after the first completed epoch.'; card.append(p); }
     else {
       const ns = 'http://www.w3.org/2000/svg';
       const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 600 260'); svg.style.width = '100%'; svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', name);
       const node = (tag, attrs, text) => { const n = document.createElementNS(ns, tag); for (const [k,v] of Object.entries(attrs)) n.setAttribute(k,v); if (text !== undefined) n.textContent = text; svg.append(n); return n; };
       let min = Infinity, max = -Infinity, first = Infinity, last = -Infinity;
-      for (const [step, value] of points) { min = Math.min(min, value); max = Math.max(max, value); first = Math.min(first, step); last = Math.max(last, step); }
+      for (const [step, value] of points) { min = Math.min(min, value); max = Math.max(max, value); first = Math.min(first, epochAxis.at(step)); last = Math.max(last, epochAxis.at(step)); }
       if (min === max) { min -= Math.abs(min) * .05 || 1; max += Math.abs(max) * .05 || 1; }
-      const x = step => 75 + (step - first) / (last - first || 1) * 500;
+      const x = step => 75 + (epochAxis.at(step) - first) / (last - first || 1) * 500;
       const y = value => 215 - (value - min) / (max - min) * 190;
       const coords = values => values.map(p => x(p[0])+','+y(p[1])).join(' ');
       for (let i = 0; i <= 4; i++) {
@@ -569,13 +610,14 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
       }
       for (const lane of lanes) {
         const line = (values, opacity = 1, width = 2) => {
+          values=values?.filter(point=>epochAxis.at(point[0])!==null);
           if (!values?.length) return;
           node('polyline', { points:coords(values), fill:'none', stroke:color(lane), 'stroke-width':width, 'stroke-dasharray':dash(lane), opacity });
           if (values.length === 1) node('circle', { cx:x(values[0][0]), cy:y(values[0][1]), r:3, fill:color(lane), opacity });
         };
         const band = (lower, upper, opacity) => {
           const upperMap = new Map(upper || []);
-          const paired = (lower || []).filter(p => upperMap.has(p[0]));
+          const paired = (lower || []).filter(p => upperMap.has(p[0])&&epochAxis.at(p[0])!==null);
           if (paired.length === 1) node('line', { x1:x(paired[0][0]), x2:x(paired[0][0]), y1:y(paired[0][1]), y2:y(upperMap.get(paired[0][0])), stroke:color(lane), 'stroke-width':8, opacity });
           else if (paired.length) node('polygon', { points:coords(paired)+' '+coords(paired.map(p => [p[0], upperMap.get(p[0])]).reverse()), fill:color(lane), opacity });
         };
@@ -585,15 +627,16 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
           line(lane.stats.median);
         } else line(lane.stats[settings.mode] || lane.stats.value);
       }
-      node('text', { x:75, y:240, fill:'currentColor', 'font-size':12 }, String(first));
-      node('text', { x:575, y:240, fill:'currentColor', 'font-size':12, 'text-anchor':'end' }, String(last));
-      const info = document.createElement('p'); info.className = 'muted'; info.style.whiteSpace = 'pre-line'; info.textContent = (faceted ? 'Color: category · Dashed: intermediate validation' : 'Color: split') + ' · Hover to inspect';
+      node('text', { x:75, y:240, fill:'currentColor', 'font-size':12 }, epochAxis.format(first));
+      node('text', { x:575, y:240, fill:'currentColor', 'font-size':12, 'text-anchor':'end' }, epochAxis.format(last));
+      node('text',{x:325,y:257,fill:'currentColor','font-size':12,'text-anchor':'middle'},'Epoch');
+      const info = document.createElement('p'); info.className = 'muted'; info.style.whiteSpace = 'pre-line'; info.textContent = (faceted ? 'Color: category · Dashed: intermediate validation' : 'Color: split') + ' · Hover to inspect' + (points.some(point=>epochAxis.estimated(point[0]))?' · Current-epoch positions are estimated until its end step is recorded.':'');
       svg.onmousemove = event => {
-        const rect = svg.getBoundingClientRect(); const step = first + ((event.clientX-rect.left)/rect.width*600-75)/500*(last-first);
+        const rect = svg.getBoundingClientRect(); const epoch = first + ((event.clientX-rect.left)/rect.width*600-75)/500*(last-first);
         info.textContent = lanes.map(lane => {
-          const values = visibleStats(lane).filter(stat=>lane.stats[stat]?.length).map(stat => { const samples=lane.stats[stat];
-            let closest = samples[0]; for (const p of samples) if (Math.abs(p[0]-step)<Math.abs(closest[0]-step)) closest=p;
-            return stat+'='+closest[1].toPrecision(5)+(memoryUnit?' '+memoryUnit:'')+' (step '+closest[0]+')';
+          const values = visibleStats(lane).filter(stat=>lane.stats[stat]?.some(point=>epochAxis.at(point[0])!==null)).map(stat => { const samples=lane.stats[stat].filter(point=>epochAxis.at(point[0])!==null);
+            let closest = samples[0]; for (const p of samples) if (Math.abs(epochAxis.at(p[0])-epoch)<Math.abs(epochAxis.at(closest[0])-epoch)) closest=p;
+            return stat+'='+closest[1].toPrecision(5)+(memoryUnit?' '+memoryUnit:'')+' (epoch '+epochAxis.format(epochAxis.at(closest[0]))+(epochAxis.estimated(closest[0])?' estimated':'')+')';
           });
           return lane.label+': '+values.join(' · ');
         }).join('\n');
@@ -647,22 +690,27 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     }
   }
   function peaks(record, kind) { const values=record[kind+'_peaks']; if(values) return values; return (record[kind+'_mz']||[]).map((mz,index)=>({mz,intensity:record[kind+'_intensity'][index],precursor:false})); }
-  function requestEpoch(value, immediate = false) {
-    const epochs=validation?.epochs || [];
-    if (!epochs.length || String(value).trim()==='' || !Number.isFinite(Number(value))) return;
-    const epoch=epochs.reduce((best,current)=>Math.abs(current-value)<Math.abs(best-value)?current:best,epochs[0]);
-    selectedEpoch=epoch;el('representativeEpoch').value=epoch;el('representativeEpochSlider').value=epoch;save();
-    clearTimeout(epochTimer);
-    const token=++validationRequest;
-    if (epoch===validation.epoch) {epochLoading=false;renderSpectra();return;}
+  const validationCheckpoints=()=>validation?.checkpoints || (validation?.epochs||[]).map(epoch=>({key:'epoch_'+epoch,epoch}));
+  function requestEpoch(value, immediate=false, key=null) {
+    const checkpoints=validationCheckpoints();
+    if(!checkpoints.length||String(value).trim()===''||!Number.isFinite(Number(value)))return;
+    const point=key?checkpoints.find(item=>item.key===key):checkpoints.reduce((best,current)=>Math.abs(current.epoch-value)<Math.abs(best.epoch-value)?current:best,checkpoints[0]);
+    if(!point)return;
+    selectedEpoch=point.epoch;selectedValidationKey=point.key;
+    el('representativeEpoch').value=point.epoch;el('representativeEpochSlider').value=point.epoch;save();
+    clearTimeout(epochTimer);const token=++validationRequest;
+    if(point.key===(validation.key||'epoch_'+validation.epoch)){epochLoading=false;renderSpectra();return;}
     epochLoading=true;renderSpectra();
-    const send=()=>vscode.postMessage({type:'metricsValidation',request,validationRequest:token,epoch});
-    if (immediate) send(); else epochTimer=setTimeout(send,150);
+    const send=()=>vscode.postMessage({type:'metricsValidation',request,validationRequest:token,epoch:point.epoch,validationKey:point.key});
+    if(immediate)send();else epochTimer=setTimeout(send,150);
   }
   function renderSpectra() {
     const epochs=validation?.epochs || [];
     const epochInput=el('representativeEpoch'),slider=el('representativeEpochSlider');
-    for(const control of [epochInput,slider]) {control.disabled=!epochs.length;control.min=epochs[0]??0;control.max=epochs.at(-1)??0;control.step=1;control.value=selectedEpoch??validation?.epoch??epochs.at(-1)??0;}
+    for(const control of [epochInput,slider]) {control.disabled=!epochs.length;control.min=epochs[0]??0;control.max=epochs.at(-1)??0;control.step='any';control.value=selectedEpoch??validation?.epoch??epochs.at(-1)??0;}
+    const checkpointSelect=el('representativeCheckpoint');checkpointSelect.replaceChildren();
+    for(const point of validationCheckpoints()){const option=document.createElement('option');option.value=point.key;option.textContent='Epoch '+epochAxis.format(point.epoch)+(point.estimated?' (estimated)':'')+' · '+point.key;checkpointSelect.append(option);}
+    checkpointSelect.value=selectedValidationKey||validation?.key||'epoch_'+validation?.epoch;checkpointSelect.disabled=!validationCheckpoints().length;
     const plotBox=el('representativeScatter'),spectrumBox=el('representativeSpectra');
     for (const box of [plotBox,spectrumBox]) {box.setAttribute('aria-busy',String(epochLoading));box.inert=epochLoading;box.style.opacity=epochLoading?'.55':'';}
     if (epochLoading) {el('representativeStatus').textContent='Loading epoch '+selectedEpoch+'…';return;}
@@ -712,7 +760,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     const note=document.createElement('p');note.className='muted';note.style.cssText='height:2.8em;overflow:auto';note.textContent='Saved validation scores drive the scatter plot. The msentity Similarity control independently recalculates similarity using its selected method and Da tolerance.';details.append(note);
     const smiles=document.createElement('p');smiles.style.cssText='height:2.8em;overflow:auto;overflow-wrap:anywhere';smiles.textContent='SMILES: '+(record.smiles||record.SMILES||'Unavailable in this legacy artifact.');details.append(smiles);
     const reasons=document.createElement('p');reasons.className='muted';reasons.style.cssText='height:2.8em;overflow:auto';reasons.textContent='Selected by: '+point.selections.join(' / ');details.append(reasons);
-    el('representativeStatus').textContent=validation.file+' · '+points.length+' representative spectra · '+(validation.msdsFile||'legacy JSON');
+    el('representativeStatus').textContent='Epoch '+epochAxis.format(validation.epoch)+(validation.estimated?' (estimated)':'')+' · '+validation.file+' · '+points.length+' representative spectra · '+(validation.msdsFile||'legacy JSON');
   }
   if (typeof ResizeObserver !== 'undefined') {
     let lastWidth=0;
@@ -732,6 +780,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
   el('representativeEpoch').onchange=()=>requestEpoch(el('representativeEpoch').value,true);
   el('representativeEpochSlider').oninput=()=>requestEpoch(el('representativeEpochSlider').value);
   el('representativeEpochSlider').onchange=()=>requestEpoch(el('representativeEpochSlider').value,true);
+  el('representativeCheckpoint').onchange=()=>requestEpoch(selectedEpoch??0,true,el('representativeCheckpoint').value);
   el('representativePrecursor').addEventListener('change', () => { save(); renderSpectra(); });
   window.addEventListener('message', async ({ data: message }) => {
     if (message.type === 'metricsPicked') { el('metricsDirectory').value = message.directory; save(); }
@@ -739,12 +788,14 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
       if (message.request!==request || message.validationRequest!==validationRequest) return;
       epochLoading=false;
       if (message.error) {renderSpectra();el('representativeStatus').textContent=message.error;return;}
-      validation=message.data;selectedEpoch=validation.epoch;save();renderSpectra();
+      validation=message.data;selectedEpoch=validation.epoch;selectedValidationKey=validation.key||'epoch_'+validation.epoch;save();renderSpectra();
       window.dispatchEvent(new CustomEvent('trainingValidationRendered'));return;
     }
     if (message.type === 'metricsChartsData') {
       if (message.request !== request || !pendingCharts.has(message.chartRequest)) return;
       const names = pendingCharts.get(message.chartRequest);pendingCharts.delete(message.chartRequest);
+      const boundariesChanged=!!message.data?.epochBoundaries&&JSON.stringify(message.data.epochBoundaries)!==JSON.stringify(epochBoundaries);
+      if(message.data?.epochBoundaries){epochBoundaries=message.data.epochBoundaries;epochAxis=createEpochAxis(epochBoundaries);}
       const charts = new Map(groupSeries(message.data?.series || [], maxDepth).map(chart=>[chart.name,chart]));
       for (const name of names) {
         loadedCharts.add(name);
@@ -752,17 +803,20 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
         else if (charts.has(name)) {data=data.map(chart=>chart.name===name?charts.get(name):chart);chartsByName.set(name,charts.get(name));}
         if (selected.includes(name)) refreshCard(name);
       }
+      if(boundariesChanged)for(const name of selected)if(!names.includes(name))refreshCard(name);
       window.dispatchEvent(new CustomEvent('trainingMetricChartsRendered'));
       return;
     }
     if (message.type !== 'metricsData' || message.request !== request) return;
     lazy=!!message.data?.lazy;maxDepth=message.data?.maxDepth ?? null;loadedCharts.clear();pendingCharts.clear();chartErrors.clear();
     busy = false; el('metricsLoad').disabled = false;
+    epochBoundaries=message.data?.epochBoundaries||[];epochAxis=createEpochAxis(epochBoundaries);
     data = groupSeries(message.data?.series || [],message.data?.maxDepth ?? null);
     report = message.data?.report || null;
     validationRequest++;clearTimeout(epochTimer);epochLoading=false;
     validation = message.data?.validation || null;
-    if (!validation?.epochs?.includes(selectedEpoch)) selectedEpoch=validation?.epoch??null;
+    const savedCheckpoint=validationCheckpoints().find(item=>item.key===selectedValidationKey)||validationCheckpoints().find(item=>item.epoch===selectedEpoch);
+    selectedEpoch=savedCheckpoint?.epoch??validation?.epoch??null;selectedValidationKey=savedCheckpoint?.key??validation?.key??null;
     if (!message.error) {
       selected = [...new Set(selected.map(name => data.find(chart => chart.name===name||chart.sources.includes(name))?.name || name.replace(/^(mean|distribution|metrics)\//,'')))].filter(name=>data.some(chart=>chart.name===name));
       save();
@@ -771,12 +825,12 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     updateChoices();
     await render();
     renderSpectra();
-    if (selectedEpoch!=null && selectedEpoch!==validation?.epoch) requestEpoch(selectedEpoch,true);
+    if(selectedEpoch!=null&&selectedValidationKey!==(validation?.key||'epoch_'+validation?.epoch))requestEpoch(selectedEpoch,true,selectedValidationKey);
     window.dispatchEvent(new CustomEvent('trainingMetricsRendered'));
   });
   setInterval(() => { if (el('metricsAuto')?.checked && !el('metricsApp').hidden && el('metricsDirectory').value.trim()) load(); }, 15000);
   render();
   renderSpectra();
 }
-function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ',' + representativePoints.toString() + ',' + JSON.stringify(msentityViewer.assets()).replace(/</g,'\\u003c') + ',' + msentityViewer.installMsentityViewer.toString() + ',' + msentityViewer.comparisonPayload.toString() + ');'; }
-module.exports = { validationResult, representativePoints, readRun, readCharts, readProgressMetrics, groupSeries, metricInfo, metricOrder, attach, html, script };
+function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ',' + representativePoints.toString() + ',' + JSON.stringify(msentityViewer.assets()).replace(/</g,'\\u003c') + ',' + msentityViewer.installMsentityViewer.toString() + ',' + msentityViewer.comparisonPayload.toString() + ',' + createEpochAxis.toString() + ');'; }
+module.exports = { readEpochBoundaries, validationResult, representativePoints, readRun, readCharts, readProgressMetrics, groupSeries, metricInfo, metricOrder, attach, html, script };

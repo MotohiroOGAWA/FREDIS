@@ -23,7 +23,7 @@ const {html, script, metricOrder, groupSeries, metricInfo} = require('../src/fea
   window.setInterval = () => 0;
   window.eval(script());
   const rendered = new Promise(resolve=>window.addEventListener('trainingMetricsRendered',resolve,{once:true}));
-  window.dispatchEvent(new window.MessageEvent('message',{data:{type:'metricsData',request:0,data:{directory:'/test',series}}}));
+  window.dispatchEvent(new window.MessageEvent('message',{data:{type:'metricsData',request:0,data:{directory:'/test',epochBoundaries:[{step:0,epoch:0},{step:2,epoch:1}],series}}}));
   await rendered;
   const document = window.document;
   const cards = () => [...document.querySelectorAll('#metricsCharts > section')];

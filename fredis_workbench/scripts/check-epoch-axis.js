@@ -1,0 +1,41 @@
+const assert=require('assert/strict');const fs=require('fs');const os=require('os');const path=require('path');const {JSDOM}=require('jsdom');
+const {createEpochAxis}=require('../src/features/training-metrics/epoch-axis');
+const {readRun,readCharts,validationResult,html,script}=require('../src/features/training-metrics/editor');
+(async()=>{
+  const boundaries=[{step:0,epoch:0},{step:100,epoch:1},{step:250,epoch:2}];const axis=createEpochAxis(boundaries);
+  assert.equal(axis.at(0),0);assert.equal(axis.at(50),.5);assert.equal(axis.at(100),1);assert.equal(axis.at(175),1.5);assert.equal(axis.at(250),2);
+  assert.equal(axis.at(325),2.5);assert.equal(axis.estimated(325),true);assert.equal(axis.estimated(175),false);assert.equal(createEpochAxis([]).at(50),null);
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-epoch-axis-'));let dom;
+  try{
+    fs.mkdirSync(path.join(root,'spectrum_validation'));
+    const scalar='event\tepoch\tglobal_step\ttrain_loss\n'+'epoch_end\t0\t0\t3\n'+'train_step\t1\t50\t2\n'+'epoch_end\t1\t100\t1\n'+'epoch_end\t2\t250\t0.5\n';
+    fs.writeFileSync(path.join(root,'metrics.tsv'),scalar);
+    const record={smiles:'CCO',assignment_score:.4,cosine_similarity:.7,generated_peaks:[],original_peaks:[]};
+    for(const label of ['epoch_0','epoch_1','step_175','epoch_2'])fs.writeFileSync(path.join(root,'spectrum_validation',label+'.json'),JSON.stringify({summary:{samples:1},representatives:{cosine_similarity:{q10:{spectrum_index:0,value:.7}}},spectra:[record]}));
+    const validation=await validationResult(root,{},'step_175');
+    assert.equal(validation.epoch,1.5);assert.equal(validation.key,'step_175');assert.deepEqual(validation.epochs,[0,1,1.5,2]);
+    assert.equal((await validationResult(root,{},1.5)).file,'spectrum_validation/step_175.json');
+    const run=await readRun(root);assert.ok(run.epochBoundaries.some(b=>b.step===250&&b.epoch===2));
+    assert.deepEqual(run.series.find(s=>s.name==='metrics/train_window_loss').points,[[50,2]],'raw steps must remain unchanged');
+    assert.equal(fs.readFileSync(path.join(root,'metrics.tsv'),'utf8'),scalar);
+    dom=new JSDOM(html({hidden:false}),{runScripts:'outside-only'});const {window}=dom,document=window.document;let posted=[],state={metricsSelected:['loss']};
+    window.vscode={getState:()=>state,setState:v=>{state=v;},postMessage:m=>posted.push(m)};window.setInterval=()=>0;window.eval(script());
+    const send=data=>window.dispatchEvent(new window.MessageEvent('message',{data}));
+    const rendered=new Promise(resolve=>window.addEventListener('trainingMetricsRendered',resolve,{once:true}));
+    const points=[[50,2],[100,3],[175,4],[250,1]],snapshot=JSON.stringify(points);
+    send({type:'metricsData',request:0,data:{directory:root,epochBoundaries:boundaries,validation,series:[{name:'metrics/train_loss',points}]}});await rendered;
+    const line=document.querySelector('#metricsCharts polyline');const xs=line.getAttribute('points').split(' ').map(p=>Number(p.split(',')[0]));
+    assert.ok(Math.abs(xs[1]-xs[0]-(xs[2]-xs[1]))<1e-8,'equal fractional-epoch spans must have equal pixel widths');
+    assert.equal(JSON.stringify(points),snapshot);assert.match(document.getElementById('metricsCharts').textContent,/Epoch/);
+    const plot=document.querySelector('#metricsCharts svg[role="img"]');plot.getBoundingClientRect=()=>({left:0,width:600});plot.dispatchEvent(new window.MouseEvent('mousemove',{clientX:408}));
+    assert.match(document.getElementById('metricsCharts').textContent,/epoch 1\.5/);assert.doesNotMatch(document.getElementById('metricsCharts').textContent,/\(step /);
+    const number=document.getElementById('representativeEpoch');assert.equal(number.value,'1.5');assert.equal(number.step,'any');
+    number.value=1;number.dispatchEvent(new window.Event('change'));number.value=1.5;number.dispatchEvent(new window.Event('change'));
+    // Current step checkpoint is restored without requesting a different file.
+    document.getElementById('representativeCheckpoint').value='epoch_2';document.getElementById('representativeCheckpoint').dispatchEvent(new window.Event('change'));
+    const request=posted.at(-1);assert.equal(request.validationKey,'epoch_2');
+    send({type:'metricsValidationData',request:0,validationRequest:request.validationRequest,data:await validationResult(root,{},'epoch_2')});
+    number.value=1.5;number.dispatchEvent(new window.Event('change'));assert.equal(posted.at(-1).validationKey,'step_175');
+    console.log('Fractional epoch interpolation, raw step retention, chart geometry/hover, and intermediate spectrum selection passed.');
+  }finally{dom?.window.close();fs.rmSync(root,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exitCode=1;});
