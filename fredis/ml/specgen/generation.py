@@ -18,7 +18,7 @@ class GenerationSettings:
         path probabilities and continue expanding survivors to the depth limit.
     peak_intensity_threshold:
         Relative intensity cutoff: validation always removes peaks at or below it;
-        prediction output applies it only when explicitly enabled.
+        single and batch prediction expose a separate output cutoff defaulting to 0.
     """
 
     branch_path_threshold: float = 0.0

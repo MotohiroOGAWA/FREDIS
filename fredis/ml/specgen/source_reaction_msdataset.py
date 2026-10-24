@@ -132,7 +132,7 @@ def predict_source_msdataset(
     precursor_mz_column: str,
     instrument_column: str | None,
     include_formula_annotation: bool = True,
-    filter_low_intensity_peaks: bool = False,
+    peak_intensity_threshold: float = 0.0,
     num_workers: int = 1,
     chunk_size: int = 1,
     keep_temp: bool = False,
@@ -141,6 +141,8 @@ def predict_source_msdataset(
     prepare_desc: str = "Preparing molecules",
     predict_desc: str = "Predicting spectra",
 ) -> tuple[object, pd.DataFrame]:
+    if not 0 <= peak_intensity_threshold <= 1:
+        raise ValueError("Peak intensity threshold must be between 0 and 1.")
     total = len(dataset)
     smiles_values = dataset[smiles_column].tolist()
     adduct_values = dataset[adduct_type_column].tolist()
@@ -318,7 +320,7 @@ def predict_source_msdataset(
         packs.append(current)
 
     spectra_by_position: dict[int, GeneratedMassSpectrum] = {}
-    intensity_threshold = generator.generation.peak_intensity_threshold
+    intensity_threshold = peak_intensity_threshold
 
     def split_rows(rows: list[int]) -> tuple[list[int], list[int]]:
         """Prefer keeping same-compound rows together while isolating errors."""
@@ -370,10 +372,7 @@ def predict_source_msdataset(
                             prediction.intensity.detach().cpu().tolist(),
                             prediction.confidence.detach().cpu().tolist(),
                         ):
-                            if (
-                                filter_low_intensity_peaks
-                                and intensity <= intensity_threshold
-                            ):
+                            if intensity <= intensity_threshold:
                                 continue
                             position = rows[output.sample_input_index[sample]]
                             local_spectra[position].peaks.append(

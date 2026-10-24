@@ -321,7 +321,7 @@ def test_prediction_prepare_reuses_worker_relations(monkeypatch):
         torch.testing.assert_close(getattr(actual.reactions, name), getattr(expected.reactions, name))
 
 
-def test_prediction_intensity_filter_is_opt_in_and_excludes_boundary():
+def test_prediction_intensity_threshold_defaults_to_zero_and_excludes_boundary():
     from dataclasses import replace
 
     torch.manual_seed(9)
@@ -347,7 +347,7 @@ def test_prediction_intensity_filter_is_opt_in_and_excludes_boundary():
     assert failures.empty
     assert len(unfiltered.peaks.intensity) == len(baseline.peaks.intensity)
     filtered, failures = predict_source_msdataset(
-        dataset, generator, filter_low_intensity_peaks=True, **kwargs
+        dataset, generator, peak_intensity_threshold=cutoff, **kwargs
     )
     assert failures.empty
     assert len(filtered.peaks.intensity) == 0

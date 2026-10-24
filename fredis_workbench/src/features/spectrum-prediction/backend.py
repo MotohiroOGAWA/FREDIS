@@ -206,6 +206,9 @@ def list_adducts(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def predict(request: dict[str, Any]) -> dict[str, Any]:
+    intensity_threshold = float(request.get("peakIntensityThreshold", 0))
+    if not 0 <= intensity_threshold <= 1:
+        raise ValueError("Peak intensity threshold must be between 0 and 1.")
     smiles = str(request.get("smiles", "")).strip()
     if not smiles:
         raise ValueError("SMILES is required.")
@@ -258,11 +261,6 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
 
     if not result.spectra.mz.numel():
         raise ValueError("The model did not produce any peaks for this input.")
-    intensity_threshold = (
-        generator.generation.peak_intensity_threshold
-        if request.get("filterLowIntensityPeaks", False)
-        else None
-    )
     node_indices = result.spectrum_batch.state_node_index.detach().cpu().tolist()
     node_smiles = result.spectrum_batch.node_smiles
     core = result.spectrum_batch.canonical_data
@@ -294,7 +292,7 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
                     result.spectra.confidence.detach().cpu().tolist(),
                 )
             )
-            # Keep all valid peaks unless output filtering is explicitly enabled.
+            # Apply the user-selected relative intensity cutoff.
             if (intensity_threshold is None or intensity > intensity_threshold)
             and bool((formula_row[:-1] >= 0).all())
             and mz > 0

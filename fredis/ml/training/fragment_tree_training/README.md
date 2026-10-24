@@ -270,8 +270,9 @@ Top-1 ion-assignment accuracy considers only states contributing to retained
 peaks; filtered fragments reduce coverage rather than conditional accuracy.
 Hydrogen-shift MAE is no longer recorded or offered as a chart.
 
-Single and batch prediction keep low-intensity peaks by default. Enable
-"Remove peaks at or below the model peak intensity threshold" in Workbench or
-pass `--filter-low-intensity-peaks` on the prediction CLI to remove them. The
-Python dataset API exposes `filter_low_intensity_peaks=False`. This choice is
-saved in prediction configuration and does not change validation filtering.
+Single and batch prediction expose a separate numeric peak intensity threshold,
+with default 0, independent of the saved model's validation threshold. Set
+"Peak intensity threshold" in Workbench, `--peak-intensity-threshold` on the
+prediction CLI, or `peak_intensity_threshold=0.0` in the Python dataset API.
+Peaks at or below that value are removed. The value is saved in prediction
+configuration and does not change training or validation settings.
