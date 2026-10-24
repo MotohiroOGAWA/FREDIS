@@ -43,9 +43,9 @@ def write_training_report(
         "datasets": datasets or {},
         "artifacts": {
             "trainingConfiguration": CONFIG_NAME,
-            "metrics": "metrics.tsv",
-            "distributions": "metric_distributions.tsv",
-            "intermediateValidation": "intermediate_validation.tsv",
+            "metricIndex": "metrics/index.json",
+            "metrics": "metrics/scalars",
+            "distributions": "metrics/distributions",
             "validationDirectory": "spectrum_validation",
             "bestCheckpoint": "best.pt",
             "lastCheckpoint": "last.pt",

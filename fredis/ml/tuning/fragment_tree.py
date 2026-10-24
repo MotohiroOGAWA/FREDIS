@@ -13,6 +13,28 @@ RESULT_NAME = "fragment-tree.tuning.pft"
 
 
 def validation_history(directory):
+    from ..training.fragment_tree_training.metric_store import (
+        INDEX_NAME,
+        iter_series_rows,
+        read_scalar_events,
+    )
+
+    if (Path(directory) / INDEX_NAME).exists():
+        history = [
+            {key: value for key, value in event.items() if key != "event"}
+            for event in read_scalar_events(directory)
+            if event.get("event") == "epoch_end"
+        ]
+        indexed = {(row.get("epoch"), row.get("global_step")): row for row in history}
+        for item in iter_series_rows(directory, "distributions/validation/"):
+            try:
+                row = indexed.get((float(item["epoch"]), float(item["global_step"])))
+                value = float(item["value"])
+            except (ValueError, KeyError):
+                continue
+            if row is not None and math.isfinite(value):
+                row["validation_" + item["series"].split("/", 2)[2]] = value
+        return history
     file = Path(directory) / "metrics.tsv"
     if not file.exists():
         return []

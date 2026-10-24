@@ -83,7 +83,7 @@ def test_report_quantiles_and_pft_manifest(tmp_path):
     assert payload['schema'] == 'fredis.training-report'
     assert payload['kind'] == 'training-result'
     assert payload['completedEpochs'] == 2
-    assert payload['artifacts']['metrics'] == 'metrics.tsv'
+    assert payload["artifacts"]["metricIndex"] == "metrics/index.json"
     assert 'metricsJson' not in payload['artifacts']
 
 
@@ -103,7 +103,9 @@ def test_live_train_and_epoch_metrics_round_trip_through_tsv(tmp_path):
     assert [row['event'] for row in rows] == ['train_step', 'epoch_end']
     assert rows[0]['global_step'] == 100
     assert rows[0]['train_loss'] == pytest.approx(2.5)
-    assert rows[0]['train_samples'] == 400
+    assert rows[0]["train_samples"] == 4
+    assert rows[0]["train_total_samples"] == 400
+    assert not (tmp_path / "metrics.tsv").exists()
     assert not (tmp_path / 'metrics.json').exists()
 
 
@@ -183,11 +185,20 @@ def test_fragment_depth_metrics_are_persisted_for_each_validation_step(tmp_path)
                         'assignment_score': score,
                     } for depth in depths}}]
         append_metric_distributions(tmp_path, step, 'validation', _report_metrics(records))
-    with (tmp_path / 'metric_distributions.tsv').open() as stream:
-        rows = list(csv.DictReader(stream, delimiter='\t'))
+    catalog = json.loads((tmp_path / "metrics/index.json").read_text())
+    rows = []
+    for filename in {entry["file"] for entry in catalog["series"]}:
+        with (tmp_path / filename).open() as stream:
+            rows.extend(csv.DictReader(stream, delimiter="\t"))
+    assert not (tmp_path / "metric_distributions.tsv").exists()
     for depth in (1, 2, 3):
         for metric in ('cosine_similarity', 'assignment_score'):
-            saved = [row for row in rows if row['metric'] == f'{metric}@depth:{depth}_mean']
+            saved = [
+                row
+                for row in rows
+                if row["series"]
+                == f"distributions/validation/{metric}@depth:{depth}_mean"
+            ]
             assert [int(row['global_step']) for row in saved] == [10, 20]
             assert [float(row['value']) for row in saved] == [.4, .8]
 
@@ -277,8 +288,8 @@ def test_resumed_metric_history_preserves_old_and_new_column_names(tmp_path):
         },
     )
     rows = _read_metric_events(tmp_path / "metrics.tsv")
-    headers = (tmp_path / "metrics.tsv").read_text().splitlines()[0].split("\t")
-    assert len(headers) == len(set(headers))
+    catalog = json.loads((tmp_path / "metrics/index.json").read_text())
+    assert len(catalog["series"]) == len({entry["name"] for entry in catalog["series"]})
     assert rows[0]["train_samples"] == 100
     assert rows[1]["train_samples"] == 5
     assert rows[1]["train_total_samples"] == 100

@@ -25,7 +25,7 @@ def confirm_output_overwrite(
     output: Path, *, overwrite: bool, resume, protected_paths=()
 ) -> None:
     """A fresh run into a non-empty output directory used to silently mix in
-    a previous run's leftovers: metric_distributions.tsv is appended to (not
+    a previous run's leftovers: metric distribution partitions are appended to (not
     replaced), and spectrum_validation/*.json from a longer or differently
     configured previous run is never cleaned up on its own. So confirming an
     overwrite here also clears the directory (mirroring the data-preparation
@@ -97,13 +97,17 @@ def progress_bar(*, total, description, position, leave, initial=0):
 
 
 def _write_metric_artifacts(output: Path, report: dict) -> None:
-    """Atomically publish one live TSV containing step and epoch rows."""
+    """Publish scalar histories as atomic per-chart TSV snapshots."""
     events = [
         {"event": "train_step", **item} for item in report.get("train_step_history", [])
     ]
     if report.get("initial_validation") is not None:
         events.append({"event": "epoch_end", **report["initial_validation"]})
     events.extend({"event": "epoch_end", **item} for item in report.get("history", []))
+    events.extend(
+        {"event": "intermediate_validation", **item}
+        for item in report.get("intermediate_validation_history", [])
+    )
     events.sort(
         key=lambda item: (
             int(item.get("global_step", 0)),
@@ -115,22 +119,20 @@ def _write_metric_artifacts(output: Path, report: dict) -> None:
     events = [
         {key.replace("/", "_"): value for key, value in item.items()} for item in events
     ]
-    headers = list(dict.fromkeys(key for item in events for key in item)) or ["event"]
-    text = "\t".join(key.replace("/", "_") for key in headers) + "\n"
-    text += "\n".join(
-        "\t".join(str(item.get(key, "")) for key in headers) for item in events
-    )
-    if events:
-        text += "\n"
-    temporary = output / "metrics.tsv.tmp"
-    temporary.write_text(text)
-    temporary.replace(output / "metrics.tsv")
+    from .metric_store import normalize_legacy_scalar, scalar_rows, write_series_rows
+
+    weight = report.get("training", {}).get("intensity_loss_weight")
+    events = [normalize_legacy_scalar(item, weight) for item in events]
+    write_series_rows(output, scalar_rows(events), replace=True)
+
 
 
 def _read_metric_events(path: Path) -> list[dict]:
     """Read complete TSV rows, tolerating an interrupted live final row."""
-    if not path.is_file():
-        return []
+    if (path.parent / "metrics/index.json").is_file() or not path.is_file():
+        from .metric_store import read_scalar_events
+
+        return read_scalar_events(path.parent)
     lines = path.read_text().splitlines()
     if not lines:
         return []
@@ -867,20 +869,18 @@ def train_reactions(
         )
         row["validation_seconds"] = time.perf_counter() - validation_started
         intermediate_history.append(row)
-        headers = list(
-            dict.fromkeys(key for item in intermediate_history for key in item)
+        from .metric_store import scalar_rows, write_series_rows
+
+        write_series_rows(
+            output,
+            scalar_rows(
+                [
+                    {"event": "intermediate_validation", **item}
+                    for item in intermediate_history
+                ]
+            ),
+            replace=True,
         )
-        temporary = output / "intermediate_validation.tsv.tmp"
-        temporary.write_text(
-            "\t".join(headers)
-            + "\n"
-            + "\n".join(
-                "\t".join(str(item.get(key, "")) for key in headers)
-                for item in intermediate_history
-            )
-            + "\n"
-        )
-        temporary.replace(output / "intermediate_validation.tsv")
 
     def evaluate_initial_model():
         """Plot an epoch-zero reference without changing training or stopping state."""

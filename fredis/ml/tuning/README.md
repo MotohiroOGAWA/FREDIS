@@ -39,7 +39,8 @@ trial fails. Do not reuse an existing search output directory.
 `fragment-tree.tuning.pft` is a `fredis.tuning-result` JSON document.
 It records trial configurations, CLI arguments, status, timestamps, exit codes,
 and **all numeric completed-epoch validation observations**, not just the selected
-score. It also merges the per-epoch `metric_distributions.tsv` observations, preserving
+score. It also merges per-epoch observations from `metrics/distributions/` (or legacy
+`metric_distributions.tsv` logs), preserving
 validation cosine Q1 (q25), Q3 (q75), median, mean and other recorded distributions.
 For every statistic it saves maximum and final-epoch values; loss statistics
 also retain minimum values. Maxima are calculated independently for each

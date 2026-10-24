@@ -946,9 +946,8 @@ def test_validation_persists_ion_assignment_facets(tmp_path):
     payload = json.loads((tmp_path / "spectrum_validation/epoch_1.json").read_text())
     assert payload["spectra"]
     assert "fragment_ion_adduct_accuracy" in payload["spectra"][0]
-    with (tmp_path / "metric_distributions.tsv").open() as stream:
-        rows = list(csv.DictReader(stream, delimiter="\t"))
-    metrics = {row["metric"] for row in rows}
+    catalog = json.loads((tmp_path / "metrics/index.json").read_text())
+    metrics = {entry["name"].split("/", 2)[2] for entry in catalog["series"]}
     assert "ion_assignment_coverage_mean" in metrics
     assert any(
         name.startswith("ion_assignment_coverage@main_adduct:") for name in metrics

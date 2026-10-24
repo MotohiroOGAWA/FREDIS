@@ -339,7 +339,7 @@ def _compact_spectra(records):
 
 
 def append_metric_distributions(output_dir, global_step, split, metrics, *, epoch=None):
-    """Append q10/q25/median/q75/q90/mean series to the live TSV."""
+    """Append q10/q25/median/q75/q90/mean series to per-chart TSV files."""
     rows = []
     for metric, values in metrics.items():
         stats = distribution(values)
@@ -357,12 +357,16 @@ def append_metric_distributions(output_dir, global_step, split, metrics, *, epoc
             )
     if not rows:
         return
-    target = Path(output_dir) / "metric_distributions.tsv"
-    with target.open("a") as stream:
-        if target.stat().st_size == 0:
-            stream.write("global_step\tepoch\tsplit\tmetric\tvalue\n")
-        for step, item_epoch, item_split, metric, value in rows:
-            stream.write(f"{step}\t{item_epoch}\t{item_split}\t{metric}\t{value}\n")
+    from .metric_store import write_series_rows
+
+    write_series_rows(
+        output_dir,
+        (
+            (f"distributions/{item_split}/{metric}", step, item_epoch, "", value)
+            for step, item_epoch, item_split, metric, value in rows
+        ),
+    )
+
 
 
 def _report_metrics(records):

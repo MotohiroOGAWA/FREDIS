@@ -160,4 +160,32 @@ the minimum absolute difference to an allowed shift. Missing fragments reduce
 with no eligible comparisons do not contribute to the accuracy distribution.
 These are annotation-consistency metrics, rather than uniquely established
 chemical ground truth. Flat, main-adduct, collision-energy, and depth series are
-saved in `metric_distributions.tsv` during subsequent validation runs.
+saved in per-chart files under `metrics/distributions/` during subsequent validation runs.
+
+
+## Per-chart metric storage
+
+`metrics/index.json` contains the available series names and their file paths.
+Scalar histories live in `metrics/scalars/`; distribution histories live in
+`metrics/distributions/`. A partition contains one chart metric and facet
+(e.g. cosine similarity by depth), including its splits, categories, and
+statistics. Precursor variants that share a chart share a partition; the
+separate with/without-precursor loss charts use separate partitions.
+
+The result viewer initially reads only the catalog and report metadata. It
+loads chart files when a chart is selected, reuses them when changing display
+controls, and reloads only selected charts on refresh. Training progress and
+hyperparameter tuning also support the partitioned format.
+
+Existing TSV runs remain readable. To split one without modifying its original
+TSV files, run from the application directory:
+
+```bash
+python -m fredis.ml.training.fragment_tree_training.metric_store /path/to/run
+```
+
+Migration records the original file sizes and timestamps. If an old training
+process subsequently changes those files, the viewer falls back to the live
+legacy logs instead of showing a stale converted snapshot. Migration preserves
+historical values and reconstructs the weighted loss components when the
+training configuration is available.

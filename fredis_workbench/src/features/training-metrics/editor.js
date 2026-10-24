@@ -50,6 +50,111 @@ function addLegacyLossSeries(series, intensityWeight) {
   }
 }
 
+async function metricIndex(directory, report) {
+  const filename = safeResolve(directory, report?.artifacts?.metricIndex || 'metrics/index.json');
+  if (!filename) throw new Error('Invalid metric index path.');
+  let index;
+  try { index = JSON.parse(await fs.promises.readFile(filename, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (index.schema !== 'fredis.metric-index' || !Array.isArray(index.series)) throw new Error('Unsupported metric index.');
+  // A legacy process can still be appending to the original logs after migration.
+  // Fall back to those live logs instead of displaying an outdated snapshot.
+  for (const source of index.legacySources || []) {
+    const target = safeResolve(directory, source.file);
+    if (!target) throw new Error('Invalid legacy metric path.');
+    try {
+      const stat = await fs.promises.stat(target);
+      if (stat.size !== source.size || Math.abs(stat.mtimeMs - source.mtimeMs) > 1) return null;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  for (const entry of index.series) {
+    if (typeof entry.name !== 'string' || typeof entry.file !== 'string' || !safeResolve(directory, entry.file)) throw new Error('Invalid metric catalog entry.');
+  }
+  return index;
+}
+
+async function indexedRun(directory, report) {
+  const index = await metricIndex(directory, report);
+  if (!index) return null;
+  let maxDepth = null;
+  try {
+    const target = safeResolve(directory, report?.artifacts?.trainingConfiguration || TRAINING_CONFIG_NAME);
+    const config = JSON.parse(await fs.promises.readFile(target, 'utf8'));
+    const value = config.modelConfig?.fragmenter_params?.fragment_ion_tree_builder?.max_reaction_count;
+    if (Number.isInteger(value) && value >= 0) maxDepth = value;
+  } catch {}
+  return {directory,report,maxDepth,lazy:true,files:['metrics/index.json'],
+    validation:report ? await validationResult(directory, report) : null,
+    series:index.series.map(entry=>({name:entry.name,points:[]}))};
+}
+
+async function* completeMetricLines(filename) {
+  const input = fs.createReadStream(filename, {encoding:'utf8'});
+  let pending = '';
+  try {
+    for await (const chunk of input) {
+      pending += chunk;
+      let end;
+      while ((end = pending.indexOf('\n')) >= 0) {
+        yield pending.slice(0,end).replace(/\r$/, '');
+        pending = pending.slice(end+1);
+      }
+    }
+    // An unfinished final row is left for the next refresh.
+  } finally {input.destroy();}
+}
+
+async function readCharts(directory, names, report) {
+  if (!Array.isArray(names) || names.some(name=>typeof name !== 'string')) throw new Error('Invalid chart selection.');
+  const index = await metricIndex(directory, report);
+  if (!index) throw new Error('Metrics changed. Refresh the training report to reload the catalog.');
+  const catalog = groupSeries(index.series.map(entry=>({name:entry.name,points:[]})));
+  const requested = new Set(names);
+  const sources = new Set(catalog.filter(chart=>requested.has(chart.name)).flatMap(chart=>chart.sources));
+  const entries = index.series.filter(entry=>sources.has(entry.name));
+  const files = [...new Set(entries.map(entry=>entry.file))];
+  const series = new Map(entries.map(entry=>[entry.name,new Map()]));
+  // Bound open streams while reading only files belonging to selected charts.
+  for (const file of files) {
+    let headers;
+    for await (const line of completeMetricLines(safeResolve(directory,file))) {
+      const cells = line.split('\t');
+      if (!headers) {headers=cells;continue;}
+      if (cells.length !== headers.length) continue;
+      const row = Object.fromEntries(headers.map((key,i)=>[key,cells[i]]));
+      if (!series.has(row.series) || !row.value?.trim() || !row.global_step?.trim()) continue;
+      const step=Number(row.global_step),value=Number(row.value);
+      if (Number.isFinite(step) && Number.isFinite(value)) series.get(row.series).set(step,value);
+    }
+  }
+  return {directory,files,series:[...series].map(([name,points])=>({name,points:[...points].sort((a,b)=>a[0]-b[0])}))};
+}
+
+async function readProgressMetrics(directory) {
+  const index = await metricIndex(directory);
+  if (!index) return null;
+  const entries = index.series.filter(entry=>/^metrics\/(train_window|train|validation|val|intermediate_validation)_loss$/.test(entry.name));
+  const wanted = new Set(entries.map(entry=>entry.name)), events = new Map();
+  for (const filename of new Set(entries.map(entry=>entry.file))) {
+    let headers;
+    for await (const line of completeMetricLines(safeResolve(directory,filename))) {
+      const cells=line.split('\t');
+      if (!headers) {headers=cells;continue;}
+      if (cells.length !== headers.length) continue;
+      const row=Object.fromEntries(headers.map((key,i)=>[key,cells[i]]));
+      if (!wanted.has(row.series) || !row.value?.trim()) continue;
+      const value=Number(row.value),step=Number(row.global_step),epoch=Number(row.epoch);
+      if (![value,step,epoch].every(Number.isFinite)) continue;
+      const key=JSON.stringify([row.event,step,epoch]);
+      if (!events.has(key)) events.set(key,{event:row.event,global_step:step,epoch});
+      const name=row.series.replace(/^metrics\//,'').replace(/^train_window_/,'train_').replace(/^intermediate_validation_/,'validation_');
+      events.get(key)[name]=value;
+    }
+  }
+  const rows=[...events.values()].sort((a,b)=>a.global_step-b.global_step || a.epoch-b.epoch);
+  return {rows:rows.filter(row=>row.event!=='intermediate_validation'),intermediateRows:rows.filter(row=>row.event==='intermediate_validation')};
+}
+
 async function readRun(directory) {
   let report;
   // Extension-agnostic: whether this path is a training-report file (any
@@ -65,6 +170,8 @@ async function readRun(directory) {
     report = parsed;
     directory = path.dirname(directory);
   }
+  const indexed = await indexedRun(directory, report);
+  if (indexed) return indexed;
   const series = new Map();
   const files = [];
   for (const file of ['metrics.tsv', 'metric_distributions.tsv']) {
@@ -136,7 +243,7 @@ function groupSeries(series, maxDepth = null) {
       statistic = ({q1:'q25',q3:'q75',min:'q10',max:'q90'})[statistic] || statistic;
     } else {
       metric = source.name.replace(/^metrics\//, '');
-      const match = metric.match(/^(train_window|train|validation|val)_(.*)$/);
+      const match = metric.match(/^(intermediate_validation|train_window|train|validation|val)_(.*)$/);
       split = match ? match[1] : 'all';
       if (match) metric = match[2];
     }
@@ -167,21 +274,33 @@ function groupSeries(series, maxDepth = null) {
 }
 function attach(panel) {
   const vscode = require('vscode');
+  let loadedDirectory = null, loadedRequest = null, loadedReport = null;
   panel.webview.onDidReceiveMessage(async message => {
     if (message.type === 'metricsPick') {
       const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: false });
       if (picked?.[0]) panel.webview.postMessage({ type: 'metricsPicked', directory: picked[0].fsPath });
     }
+    if (message.type === 'metricsCharts') {
+      try {
+        if (!loadedDirectory || loadedRequest !== message.request) throw new Error('Load the current training run first.');
+        const data = await readCharts(loadedDirectory, message.names, loadedReport);
+        panel.webview.postMessage({type:'metricsChartsData', request:message.request, chartRequest:message.chartRequest, data});
+      } catch (error) {panel.webview.postMessage({type:'metricsChartsData', request:message.request, chartRequest:message.chartRequest, error:error.message});}
+      return;
+    }
     if (message.type !== 'metricsLoad') return;
     try {
       if (typeof message.directory !== 'string' || !path.isAbsolute(message.directory.trim())) throw new Error('Enter an absolute path to the training run or result.training.pft.');
+      loadedRequest = message.request; loadedDirectory = null;
       const data = await readRun(message.directory.trim());
+      if (loadedRequest !== message.request) return;
+      loadedDirectory = data.directory; loadedReport = data.report;
       panel.webview.postMessage({ type: 'metricsData', request: message.request, data });
     } catch (error) { panel.webview.postMessage({ type: 'metricsData', request: message.request, error: error.message }); }
   });
 }
 function html({ hidden = true, autoRefresh = true } = {}) {
-  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section><h2>Representative validation spectra</h2><div class="actions"><label>Rank by <select id="representativeMetric"><option value="cosine_similarity">Cosine similarity</option><option value="assignment_score">Assignment score (m/z coverage)</option></select></label><label><input id="representativePrecursor" type="checkbox" checked> Include precursor</label><span id="representativeStatus" class="muted"></span></div><p class="muted">Representatives are selected separately by cosine similarity or assignment score, calculated with or without precursor peaks. Compare generated (top) and observed (bottom) spectra at q10, q25, median (q50), q75, and q90. Available once a result.training.pft report with spectrum validation is loaded.</p><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
+  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section><h2>Representative validation spectra</h2><div class="actions"><label>Rank by <select id="representativeMetric"><option value="cosine_similarity">Cosine similarity</option><option value="assignment_score">Assignment score (m/z coverage)</option></select></label><label><input id="representativePrecursor" type="checkbox" checked> Include precursor</label><span id="representativeStatus" class="muted"></span></div><p class="muted">Representatives are selected separately by cosine similarity or assignment score, calculated with or without precursor peaks. Compare generated (top) and observed (bottom) spectra at q10, q25, median (q50), q75, and q90. Available once a result.training.pft report with spectrum validation is loaded.</p><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
 }
 function metricInfo(metric, dimension = '') {
   const groups = [
@@ -274,6 +393,16 @@ function client(groupSeries, metricInfo, metricOrder) {
   const el = id => document.getElementById(id);
   const state = vscode.getState() || {};
   let selected = state.metricsSelected || [], data = [], report = null, validation = null, request = 0, busy = false;
+  let lazy = false, chartRequest = 0, maxDepth = null;
+  const loadedCharts = new Set(), pendingCharts = new Map(), chartErrors = new Map();
+  function requestSelectedCharts() {
+    if (!lazy || busy) return;
+    const pending = new Set([...pendingCharts.values()].flat());
+    const names = selected.filter(name => !loadedCharts.has(name) && !pending.has(name) && data.some(chart=>chart.name===name));
+    if (!names.length) return;
+    const id = ++chartRequest; pendingCharts.set(id,names);
+    vscode.postMessage({type:'metricsCharts',request,chartRequest:id,names});
+  }
   const cardSettings = new Map(Object.entries(state.metricsCardSettings || {}));
   const hiddenLanes = new Map();
   const splitColors={train:'#e76f51',train_window:'#f4a261',validation:'#3a86ff',intermediate_validation:'#2a9d8f',all:'#8b8f98'};
@@ -331,6 +460,11 @@ function client(groupSeries, metricInfo, metricOrder) {
     const helpText = document.createElement('p'); helpText.className = 'muted'; helpText.style.whiteSpace = 'pre-line';
     helpText.textContent = metricInfo(chart.metric, chart.dimension).description;
     help.append(helpSummary, helpText); card.append(help);
+    if (lazy && (!loadedCharts.has(name) || chartErrors.has(name))) {
+      const status = document.createElement('p');status.className='muted';status.textContent=chartErrors.get(name) || 'Loading chart…';card.append(status);
+      if (chartErrors.has(name)) {const retry=document.createElement('button');retry.textContent='Retry';retry.onclick=()=>{loadedCharts.delete(name);chartErrors.delete(name);render();};card.append(retry);}
+      return card;
+    }
     const availableWith = chart.variants.withPrecursor.length > 0, availableWithout = chart.variants.withoutPrecursor.length > 0;
     const settings = { mode:'mean', withoutPrecursor:!availableWith && availableWithout, ...(cardSettings.get(name) || {}) };
     if (settings.withoutPrecursor && !availableWithout) settings.withoutPrecursor=false;
@@ -439,6 +573,7 @@ function client(groupSeries, metricInfo, metricOrder) {
     cardElements.set(name, updated);
   }
   async function render() {
+    requestSelectedCharts();
     const version = ++renderVersion;
     let rendered = 0;
     el('metricsCharts').replaceChildren();
@@ -533,7 +668,21 @@ function client(groupSeries, metricInfo, metricOrder) {
   el('representativePrecursor').addEventListener('change', () => { save(); renderSpectra(); });
   window.addEventListener('message', async ({ data: message }) => {
     if (message.type === 'metricsPicked') { el('metricsDirectory').value = message.directory; save(); }
+    if (message.type === 'metricsChartsData') {
+      if (message.request !== request || !pendingCharts.has(message.chartRequest)) return;
+      const names = pendingCharts.get(message.chartRequest);pendingCharts.delete(message.chartRequest);
+      const charts = new Map(groupSeries(message.data?.series || [], maxDepth).map(chart=>[chart.name,chart]));
+      for (const name of names) {
+        loadedCharts.add(name);
+        if (message.error) chartErrors.set(name,message.error);
+        else if (charts.has(name)) {data=data.map(chart=>chart.name===name?charts.get(name):chart);chartsByName.set(name,charts.get(name));}
+        if (selected.includes(name)) refreshCard(name);
+      }
+      window.dispatchEvent(new CustomEvent('trainingMetricChartsRendered'));
+      return;
+    }
     if (message.type !== 'metricsData' || message.request !== request) return;
+    lazy=!!message.data?.lazy;maxDepth=message.data?.maxDepth ?? null;loadedCharts.clear();pendingCharts.clear();chartErrors.clear();
     busy = false; el('metricsLoad').disabled = false;
     data = groupSeries(message.data?.series || [],message.data?.maxDepth ?? null);
     report = message.data?.report || null;
@@ -553,4 +702,4 @@ function client(groupSeries, metricInfo, metricOrder) {
   renderSpectra();
 }
 function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ');'; }
-module.exports = { readRun, groupSeries, metricInfo, metricOrder, attach, html, script };
+module.exports = { readRun, readCharts, readProgressMetrics, groupSeries, metricInfo, metricOrder, attach, html, script };
