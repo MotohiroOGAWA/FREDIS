@@ -10,6 +10,7 @@ const {html, script, metricOrder, groupSeries, metricInfo} = require('../src/fea
   series.push({name:'metrics/cuda_peak_memory_mb',points:[[1,30720],[2,20480]]});
   series.push({name:'metrics/train_samples',points:[[1,8]]});
   series.push({name:'metrics/train_total_samples',points:[[1,80]]});
+  series.push({name:'metrics/train_window_loss',points:[[1,4],[2,3]]});
   const charts = groupSeries(series);
   assert.deepEqual(charts.filter(c => metricInfo(c.metric).group === 'Loss').sort(metricOrder).slice(0,4).map(c=>c.metric), ['loss','branch_loss','branch_positive_loss','branch_negative_loss']);
   assert.deepEqual(charts.filter(c=>c.dimension).sort(metricOrder).map(c=>c.dimension), ['main_adduct','collision_energy','depth']);
@@ -36,6 +37,13 @@ const {html, script, metricOrder, groupSeries, metricInfo} = require('../src/fea
     assert.ok(!card.textContent.includes('Exclude precursor'), metric + ' must not have a precursor toggle');
     assert.ok(card.querySelector('details').textContent.includes('About this metric'));
   }
+  const windowToggle=()=>[...findCard('loss').querySelectorAll('label')].find(label=>label.textContent==='train_window').querySelector('input');
+  assert.equal(windowToggle().checked,false,'train window must be hidden by default');
+  assert.equal([...findCard('loss').querySelectorAll('label')].find(label=>label.textContent==='train').querySelector('input').checked,true);
+  windowToggle().checked=true;windowToggle().dispatchEvent(new window.Event('change'));
+  assert.equal(windowToggle().checked,true);
+  const lossMode=findCard('loss').querySelector('select');lossMode.value='distribution';lossMode.dispatchEvent(new window.Event('change'));
+  assert.equal(windowToggle().checked,true,'an explicit choice must survive card rerenders');
   let memory = cards().find(c=>c.querySelector('strong').textContent.includes('cuda_peak_memory'));
   const select = [...memory.querySelectorAll('select')].find(s=>s.value==='GB');
   assert.ok(select, '30 GB must default to GB');

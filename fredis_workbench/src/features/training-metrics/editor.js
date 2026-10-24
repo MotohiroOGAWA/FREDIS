@@ -570,7 +570,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
       title.textContent = name.replace(/_mb$/, '') + ' (' + memoryUnit + ')';
     }
     card.append(controls);
-    const hidden = hiddenLanes.get(name) || new Set();
+    const hidden = hiddenLanes.get(name) || new Set(Object.values(chart.variants).flat().filter(lane=>lane.split==='train_window').map(lane=>lane.label));
     hiddenLanes.set(name, hidden);
     const memoryScale = memoryUnit ? ({MB:1,GB:1024,TB:1024*1024}[memoryUnit] || 1) : 1;
     const allLanes = chart.variants[settings.withoutPrecursor?'withoutPrecursor':'withPrecursor'].map(lane => ({...lane, stats:Object.fromEntries(Object.entries(lane.stats).map(([stat,points]) => [stat,points.map(([step,value]) => [step,value/memoryScale])]))}));
