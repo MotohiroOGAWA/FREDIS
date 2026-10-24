@@ -253,3 +253,25 @@ The validation-spectrum number input and slider also include intermediate
 `step_N` artifacts at their fractional epoch positions. The Validation selector
 can distinguish artifacts that share an epoch coordinate. No fractional epoch
 values are written into metrics or spectrum files.
+
+Branch classification charts (`branch_accuracy`, `branch_precision`,
+`branch_recall`, `branch_f1`, `branch_balanced_accuracy`) use sigmoid(logit) >= 0.5.
+Epoch, intermediate-validation, and train-window summaries sum TP/TN/FP/FN
+across batches before computing ratios. Labels -1 are ignored; label 0 is a
+weak negative, so these metrics measure agreement with supervision rather than
+chemical impossibility. Undefined ratios are omitted. These charts are scalar
+summaries, independent of generation path and peak thresholds.
+
+Free-running validation applies `peak_intensity_threshold` after summing
+identical physical formulas. Peaks at or below the threshold are removed from
+both generated and reference spectra (references use their own maximum intensity). Retained peaks are used
+for similarity, assignment scores, representative spectra, and depth metrics.
+Top-1 ion-assignment accuracy considers only states contributing to retained
+peaks; filtered fragments reduce coverage rather than conditional accuracy.
+Hydrogen-shift MAE is no longer recorded or offered as a chart.
+
+Single and batch prediction keep low-intensity peaks by default. Enable
+"Remove peaks at or below the model peak intensity threshold" in Workbench or
+pass `--filter-low-intensity-peaks` on the prediction CLI to remove them. The
+Python dataset API exposes `filter_low_intensity_peaks=False`. This choice is
+saved in prediction configuration and does not change validation filtering.

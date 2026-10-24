@@ -955,3 +955,46 @@ def test_validation_persists_ion_assignment_facets(tmp_path):
     assert any(
         name.startswith("ion_assignment_coverage@collision_energy:") for name in metrics
     )
+
+
+def test_validation_intensity_filter_matches_inference_export(tmp_path):
+    import json
+    from dataclasses import replace
+    from fredis.ml.specgen.competitive_spectrum_model import merge_candidate_peaks
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        validate_spectra,
+    )
+
+    torch.manual_seed(9)
+    generator = create_spectrum_generator(competitive_config()).eval()
+    data, _ = ReactionStructureBuilder(generator).build(
+        Compound.from_smiles("CC(O)N"),
+        [Adduct.parse("[M+H]+")],
+        [20.0],
+        [[18.033826, 44.049476]],
+        [[0.5, 1.0]],
+    )
+    generator.set_generation(
+        replace(generator.generation, peak_intensity_threshold=0.5)
+    )
+    expected = []
+    unfiltered_count = 0
+    for output in generator.predict_prepared_batches(data):
+        merged = merge_candidate_peaks(output.spectra)
+        unfiltered_count += len(merged.mz)
+        expected.extend(
+            (float(mz), float(value))
+            for mz, value in zip(merged.mz, merged.intensity)
+            if float(value) > 0.5
+        )
+    assert len(expected) < unfiltered_count
+    validate_spectra(generator, [data], tmp_path, "epoch_1", global_step=1, epoch=1)
+    payload = json.loads((tmp_path / "spectrum_validation/epoch_1.json").read_text())
+    record = payload["spectra"][0]
+    assert "hydrogen_shift_mae" not in record
+    assert [p["intensity"] for p in record["original_peaks"]] == [1.0]
+    # The validation artifact must retain exactly the peaks exported by inference.
+    actual = [(p["mz"], p["intensity"]) for p in record["generated_peaks"]]
+    torch.testing.assert_close(
+        torch.tensor(sorted(actual)), torch.tensor(sorted(expected))
+    )

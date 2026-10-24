@@ -76,7 +76,7 @@ def _reaction_registry(generator, reactions) -> list[dict[str, Any]]:
 
 
 def _build_tree(
-    result, sample: int, tensorizer, threshold: float, reactions=()
+    result, sample: int, tensorizer, threshold: float | None, reactions=()
 ) -> dict[str, Any]:
     """Fragment-tree nodes/edges explored for this prediction, annotated with
     per-node neutral formula/exact mass plus any predicted-peak ion states."""
@@ -140,9 +140,7 @@ def _build_tree(
     candidate_formula_tensor = spectrum_batch.state_formula_tensor
     intensity = spectra.intensity.detach().cpu().tolist()
 
-    # Candidate ions below the trained confidence threshold are the same
-    # unrelated adduct/hydrogen-shift guesses excluded from the peak list
-    # below; keep the node inspector consistent with what the spectrum shows.
+    # Apply the optional intensity filter consistently in the node inspector.
     annotations_by_node: dict[int, list[dict[str, Any]]] = {}
     # Each physical candidate row is its own formula.
     for entry, node in enumerate(candidate_node_index):
@@ -150,7 +148,7 @@ def _build_tree(
             continue
         probability = float(ion_probability[entry])
         if (
-            intensity[entry] < threshold
+            (threshold is not None and intensity[entry] <= threshold)
             or not bool((candidate_formula_tensor[entry, :-1] >= 0).all())
             or candidate_mz[entry] <= 0
         ):
@@ -260,7 +258,11 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
 
     if not result.spectra.mz.numel():
         raise ValueError("The model did not produce any peaks for this input.")
-    intensity_threshold = generator.generation.peak_intensity_threshold
+    intensity_threshold = (
+        generator.generation.peak_intensity_threshold
+        if request.get("filterLowIntensityPeaks", False)
+        else None
+    )
     node_indices = result.spectrum_batch.state_node_index.detach().cpu().tolist()
     node_smiles = result.spectrum_batch.node_smiles
     core = result.spectrum_batch.canonical_data
@@ -292,10 +294,8 @@ def predict(request: dict[str, Any]) -> dict[str, Any]:
                     result.spectra.confidence.detach().cpu().tolist(),
                 )
             )
-            # Below the trained ion confidence threshold: the same unrelated
-            # adduct/hydrogen-shift candidate this model now learns to push
-            # toward zero, kept out of the predicted spectrum shown here.
-            if intensity >= intensity_threshold
+            # Keep all valid peaks unless output filtering is explicitly enabled.
+            if (intensity_threshold is None or intensity > intensity_threshold)
             and bool((formula_row[:-1] >= 0).all())
             and mz > 0
         ),

@@ -10,7 +10,7 @@ const defaults = {
   db: 'unspecified', smilesColumn: 'SMILES',
   precursorMzColumn: 'PrecursorMZ', adductTypeColumn: 'AdductType',
   collisionEnergyColumn: 'CollisionEnergy', instrumentColumn: '',
-  specIdColumn: 'SpecID', overwrite: false, maxSamples:128, numWorkers:1, chunkSize:1, keepTemp:false
+  specIdColumn: 'SpecID', overwrite: false, maxSamples:128, numWorkers:1, chunkSize:1, keepTemp:false, filterLowIntensityPeaks:false
 };
 
 function buildBatchArgs(config) {
@@ -27,6 +27,7 @@ function buildBatchArgs(config) {
   if (String(config.instrumentColumn || '').trim()) args.push('--instrument-column', config.instrumentColumn.trim());
   if (config.overwrite) args.push('--overwrite');
   if (config.keepTemp) args.push('--keep-temp');
+  if (config.filterLowIntensityPeaks) args.push('--filter-low-intensity-peaks');
   return args;
 }
 
@@ -140,6 +141,7 @@ function html() {
   <div class="prep-step" data-predict-panel="conditions" hidden><section data-predict-mode="single"><div class="prep-section-header"><h2>3. Experimental Conditions</h2><p>Choose collision energy and one of the main adducts supported by the applied model.</p></div><div class="grid"><label>Collision energy (eV) *<input name="ce" type="number" min="0" step="any"></label><label>Adduct type *<select name="adductType"><option value="">Apply a model first…</option></select></label></div><div class="prep-actions"><button type="button" data-next-predict="output" class="primary">Next: Output →</button></div></section><section data-predict-mode="batch" hidden><div class="prep-section-header"><h2>3. Dataset Columns and Prediction Batch</h2><p>Map required metadata columns and bound simultaneous prediction work.</p></div><datalist id="predictDatasetColumns"></datalist>${mapping.map(([name,label,value])=>`<div class="mapping-row"><label>${label}</label><input name="${name}" value="${value}" list="predictDatasetColumns" ${name==='batchInstrumentColumn'?'placeholder="Not used"':''}><span id="predict-mapping-${name}" title="Not checked">—</span></div>`).join('')}<label>Maximum simultaneous samples<input name="batchMaxSamples" type="number" min="1" step="1" value="128"></label><div class="prep-actions"><button type="button" data-next-predict="output" class="primary">Next: Output →</button></div></section></div>
   <div class="prep-step" data-predict-panel="output" hidden><section data-predict-mode="single"><div class="prep-section-header"><h2>4. Predicted Spectrum</h2><p>The spectrum, peak table, fragment tree, and molecular details appear here after prediction.</p></div><p id="predictResultEmpty" class="dataset-preview-empty">Review the settings and run prediction.</p><div id="predictResultSection" hidden><div id="predictResult"></div></div><div class="prep-actions"><button type="button" data-next-predict="run" class="primary">Review and Run →</button></div></section><section data-predict-mode="batch" hidden><div class="prep-section-header"><h2>4. Output Settings</h2><p>Choose the output directory, result labeling, and parallel preparation settings.</p></div>${pathField('batchOutputDir','Output directory *','folder','outputDir')}<div class="grid"><label>DB label<input name="batchDb" value="unspecified"></label><label>Parallel prepare workers<input name="batchNumWorkers" type="number" min="1" step="1" value="1"></label><label>Compounds per worker chunk<input name="batchChunkSize" type="number" min="1" step="1" value="1"></label></div><label class="check"><input name="batchOverwrite" type="checkbox"><span>Overwrite existing output</span></label><label class="check"><input name="batchKeepTemp" type="checkbox"><span>Keep parallel preparation temporary files</span></label><p class="muted">The directory receives predicted.msds, predicted.mssim, prediction.pft, run information, and any retained temporary files.</p><div class="prep-actions"><button type="button" data-next-predict="run" class="primary">Review and Run →</button></div></section></div>
   <div class="prep-step" data-predict-panel="run" hidden><section><div class="prep-section-header"><h2>5. Review and Run</h2><p>Confirm the effective model, input, conditions, and output before starting.</p></div><dl id="predictRunSummary" class="run-summary"></dl><button type="button" id="predictPreflight">Preflight Check</button><p id="predictPreflightStatus" role="status"></p><div class="actions" data-predict-mode="batch" hidden><button type="button" id="predictOpenOutput">Reveal Existing Output</button></div><div id="predictBatchProgressRow" class="dataset-validation-progress" data-predict-mode="batch" hidden><div><span>Predict</span><progress id="predictBatchProgress" max="100"></progress><small id="predictBatchProgressText">Not started</small></div></div><pre id="predictBatchLog" data-predict-mode="batch" hidden></pre></section></div>
+  <label class="check"><input name="filterLowIntensityPeaks" type="checkbox"><span>Remove peaks at or below the model peak intensity threshold</span></label>
   <footer class="prep-bottom prediction-bottom"><div><div id="predictStatus" data-predict-mode="single" class="status idle">Ready</div><div id="predictBatchStatus" data-predict-mode="batch" class="status idle" hidden>Ready</div><p id="predictRunReasons" class="danger" role="status" tabindex="-1"></p><code id="predictBatchCommand" data-predict-mode="batch" hidden></code></div><div class="actions"><button type="button" id="predictionSaveDefaults">Save as Default</button><button type="button" id="predictBatchCopy" data-predict-mode="batch" hidden>Copy CLI Command</button><button type="button" id="predictStop" data-predict-mode="single" disabled>Stop</button><button type="button" id="predictBatchStop" data-predict-mode="batch" hidden disabled>Stop</button><button type="submit" id="predictSubmit" data-predict-mode="single" class="primary">▶ Predict Spectrum</button><button type="button" id="predictBatchRun" data-predict-mode="batch" class="primary" hidden>▶ Predict MSDataset</button></div></footer>`;
 }
 
@@ -156,6 +158,7 @@ function client(defaults) {
     instrumentColumn: value('batchInstrumentColumn'), overwrite: !!predictForm.elements.batchOverwrite?.checked,
     numWorkers:Number(value('batchNumWorkers')||1), chunkSize:Number(value('batchChunkSize')||1),
     keepTemp: !!predictForm.elements.batchKeepTemp?.checked,
+    filterLowIntensityPeaks: !!predictForm.elements.filterLowIntensityPeaks?.checked,
     modelPath: value('modelPath'), device: value('device')
   });
   const fullConfig = () => ({ ...config(), predictionMode, smiles: value('smiles'), ce: value('ce'), adductType: value('adductType') });
@@ -209,6 +212,7 @@ function client(defaults) {
       for (const [key, name] of Object.entries(fields)) if (predictForm.elements[name]) predictForm.elements[name].value = loaded[key] ?? '';
       predictForm.elements.batchOverwrite.checked = !!loaded.overwrite;
       predictForm.elements.batchKeepTemp.checked = !!loaded.keepTemp;
+      predictForm.elements.filterLowIntensityPeaks.checked = !!loaded.filterLowIntensityPeaks;
       for (const name of ['modelPath', 'device', 'smiles', 'ce']) if (predictForm.elements[name] && loaded[name] !== undefined) predictForm.elements[name].value = loaded[name];
       if (loaded.adductType) predictForm.elements.adductType.dataset.restoreValue = loaded.adductType;
       el('predictBatchStatus').textContent = 'Loaded configuration ' + message.path;

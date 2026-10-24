@@ -122,6 +122,19 @@ def test_training_and_loading_do_not_run_chemistry(tmp_path):
         out.loss.backward()
         optimizer.step()
     assert torch.isfinite(out.loss)
+    labels = loaded.reaction_contexts.edge_label
+    predicted = out.branch_logits.detach() >= 0
+    for name, mask in {
+        "tp": predicted & (labels == 1),
+        "tn": ~predicted & (labels == 0),
+        "fp": predicted & (labels == 0),
+        "fn": ~predicted & (labels == 1),
+    }.items():
+        assert out.metrics["branch_count_" + name] == mask.sum()
+    assert (
+        sum(out.metrics["branch_count_" + name] for name in ("tp", "tn", "fp", "fn"))
+        == (labels >= 0).sum()
+    )
     assert model.feature_model.edge_head[-1].weight.grad.abs().sum() > 0
     assert out.spectrum_output.metrics["probability_mass_error"] < 1e-5
     assert loaded.targets.intensity.tolist() != []

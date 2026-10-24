@@ -165,6 +165,28 @@ def _samples_per_compound(data):
     return data.num_samples / max(len(compounds), 1)
 
 
+def _add_branch_metrics(row, batch_metrics, prefix):
+    """Compute micro metrics from summed labelled-edge confusion counts."""
+    counts = {
+        name: sum(batch_metrics.get("branch_count_" + name, []))
+        for name in ("tp", "tn", "fp", "fn")
+    }
+    for name in counts:
+        row.pop(prefix + "branch_count_" + name, None)
+    tp, tn, fp, fn = (counts[name] for name in ("tp", "tn", "fp", "fn"))
+    ratios = {
+        "accuracy": (tp + tn, tp + tn + fp + fn),
+        "precision": (tp, tp + fp),
+        "recall": (tp, tp + fn),
+        "f1": (2 * tp, 2 * tp + fp + fn),
+    }
+    for name, (numerator, denominator) in ratios.items():
+        if denominator:
+            row[prefix + "branch_" + name] = numerator / denominator
+    if tp + fn and tn + fp:
+        row[prefix + "branch_balanced_accuracy"] = (tp / (tp + fn) + tn / (tn + fp)) / 2
+
+
 def _mean_training_interval(
     *,
     totals: dict,
@@ -208,6 +230,7 @@ def _mean_training_interval(
                 else key
             )
         ] = sum(values) / max(len(values), 1)
+    _add_branch_metrics(row, batch_metrics, "train/")
     return row
 
 
@@ -863,6 +886,7 @@ def train_reactions(
         ):
             values = batch_metrics.get(key, [])
             row["validation/" + key] = sum(values) / max(len(values), 1)
+        _add_branch_metrics(row, batch_metrics, "validation/")
         append_metric_distributions(
             output, global_step, "intermediate_validation", batch_metrics, epoch=epoch
         )
@@ -955,6 +979,7 @@ def train_reactions(
             ):
                 values = batches_metrics.get(key, [])
                 row["validation/" + key] = sum(values) / max(len(values), 1)
+            _add_branch_metrics(row, batches_metrics, "validation/")
             append_metric_distributions(
                 output, 0, "validation", batches_metrics, epoch=0
             )
@@ -1182,6 +1207,7 @@ def train_reactions(
                 ):
                     values = batch_metrics.get(key, [])
                     row[name + "/" + key] = sum(values) / max(len(values), 1)
+                _add_branch_metrics(row, batch_metrics, name + "/")
                 append_metric_distributions(
                     output, global_step, name, batch_metrics, epoch=epoch + 1
                 )

@@ -39,7 +39,7 @@ function createParameterEditor(container, initial, kind = "training", editReacti
     edge_num_layers:'Number of hidden layers scoring a compound/reaction edge.',
     branch_path_threshold:'Minimum cumulative path probability retained by fragment tree search. Zero disables threshold pruning. Saved with the model; prediction can override it.',
     max_fragment_nodes:'Maximum fragment nodes shared by the complete (compound, main adduct) branch group. Saved with the model; prediction can override it.',
-    peak_intensity_threshold:'Minimum max-normalized intensity retained in generated spectra. Does not affect training loss.',
+    peak_intensity_threshold:'Validation removes peaks at or below this max-normalized intensity from predictions and reference spectra. Prediction output filtering is optional and off by default. Does not affect training loss.',
     collision_energy_dim:'Collision-energy feature width passed separately to the intensity head.',
     generation_params:'Spectrum generation settings, separate from the model architecture. They are saved with the model and used by validation and prediction; prediction can override them.',
     name:'Human-readable name stored in this configuration.',

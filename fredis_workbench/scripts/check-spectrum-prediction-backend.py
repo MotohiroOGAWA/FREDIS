@@ -75,3 +75,24 @@ assert all(
 print(
     "Single-spectrum prediction tree preserves selectable edge transitions and reaction histories."
 )
+
+# The single-prediction UI keeps weak peaks by default and filters on request.
+from dataclasses import replace
+from tempfile import NamedTemporaryFile
+from unittest.mock import patch
+
+model.set_generation(replace(model.generation, peak_intensity_threshold=0.5))
+with NamedTemporaryFile(suffix=".pt") as checkpoint:
+    request = {
+        "modelPath": checkpoint.name,
+        "smiles": "CCO",
+        "ce": "20",
+        "adductType": "[M+H]+",
+    }
+    with patch.object(backend, "load_generator", return_value=model):
+        unfiltered = backend.predict(request)
+        filtered = backend.predict({**request, "filterLowIntensityPeaks": True})
+    assert any(p["intensity"] <= 0.5 for p in unfiltered["peaks"])
+    assert all(p["intensity"] > 0.5 for p in filtered["peaks"])
+    assert len(filtered["peaks"]) < len(unfiltered["peaks"])
+print("Single-spectrum peak intensity filtering is opt-in.")

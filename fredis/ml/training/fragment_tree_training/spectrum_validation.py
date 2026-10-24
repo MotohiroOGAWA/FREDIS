@@ -203,7 +203,9 @@ def _original_depths(data, sample, annotation, tolerance):
     return result
 
 
-def ion_assignment_metrics(batch, sample, annotation, intensities):
+def ion_assignment_metrics(
+    batch, sample, annotation, intensities, *, retained_rows=None
+):
     """Evaluate the top ion state conditional on an annotated fragment identity.
 
     Ambiguous annotations remain sets of allowed (fragment, adduct, shift)
@@ -213,12 +215,13 @@ def ion_assignment_metrics(batch, sample, annotation, intensities):
         "fragment_ion_adduct_accuracy",
         "hydrogen_shift_accuracy",
         "ion_assignment_joint_accuracy",
-        "hydrogen_shift_mae",
     )
     values = {name: [] for name in names}
     core = batch.canonical_data
     candidates = {}
     for row in torch.nonzero(batch.state_sample_index == sample).flatten().tolist():
+        if retained_rows is not None and row not in retained_rows:
+            continue
         node = int(batch.state_node_index[row])
         smiles = (
             core.compounds.smiles[node] if core is not None else batch.node_smiles[node]
@@ -253,7 +256,6 @@ def ion_assignment_metrics(batch, sample, annotation, intensities):
         values[names[0]].append(float(any(a == adduct for a, _ in labels)))
         values[names[1]].append(float(any(h == shift for _, h in labels)))
         values[names[2]].append(float((adduct, shift) in labels))
-        values[names[3]].append(min(abs(shift - h) for _, h in labels))
     result = {name: sum(v) / len(v) if v else None for name, v in values.items()}
     result["ion_assignment_coverage"] = evaluated / eligible if eligible else None
     return result
@@ -342,6 +344,8 @@ def append_metric_distributions(output_dir, global_step, split, metrics, *, epoc
     """Append q10/q25/median/q75/q90/mean series to per-chart TSV files."""
     rows = []
     for metric, values in metrics.items():
+        if metric.startswith("branch_count_"):
+            continue
         stats = distribution(values)
         if stats is None:
             continue
@@ -379,7 +383,6 @@ def _report_metrics(records):
         "fragment_ion_adduct_accuracy",
         "hydrogen_shift_accuracy",
         "ion_assignment_joint_accuracy",
-        "hydrogen_shift_mae",
         "ion_assignment_coverage",
     )
     # Top-N recall/precision are already a coarse, whole-spectrum ranking; a
@@ -436,6 +439,20 @@ def validate_spectra(
             for output in generator.predict_prepared_batches(data):
                 for sample, input_index in enumerate(output.sample_input_index):
                     annotation = annotations[input_index]
+                    threshold = generator.generation.peak_intensity_threshold
+                    maximum = max(
+                        (float(p["intensity"]) for p in annotation["peaks"]),
+                        default=0.0,
+                    )
+                    annotation = {
+                        **annotation,
+                        "peaks": [
+                            p
+                            for p in annotation["peaks"]
+                            if float(p["intensity"]) > maximum * threshold
+                        ],
+                    }
+
                     formula_rows = (
                         torch.nonzero(
                             output.spectrum_batch.state_sample_index == sample,
@@ -492,10 +509,14 @@ def validate_spectra(
                         )
                     ]
                     grouped = {}
+                    row_keys = {}
                     for row, peak in zip(formula_rows, generated):
                         key = tuple(
                             output.spectra.formula_tensor[row].detach().cpu().tolist()
                         )
+                        if any(v < 0 for v in key[:-1]) or peak["mz"] <= 0:
+                            continue
+                        row_keys[row] = key
                         if key not in grouped:
                             grouped[key] = dict(peak)
                         else:
@@ -506,6 +527,15 @@ def validate_spectra(
                                 if v is not None
                             ]
                             grouped[key]["depth"] = min(depths) if depths else None
+                    # Match inference export: merge physical formulas, then filter.
+                    grouped = {
+                        key: peak
+                        for key, peak in grouped.items()
+                        if peak["intensity"] > threshold
+                    }
+                    retained_rows = {
+                        row for row, key in row_keys.items() if key in grouped
+                    }
                     generated = list(grouped.values())
                     mz = [p["mz"] for p in generated]
                     intensity = [p["intensity"] for p in generated]
@@ -582,6 +612,7 @@ def validate_spectra(
                                     ],
                                 },
                                 output.spectra.intensity,
+                                retained_rows=retained_rows,
                             )
                         )
                     branch_group = int(data.sample_branch_group_index[sample])
@@ -619,6 +650,7 @@ def validate_spectra(
                                 sample,
                                 annotation,
                                 output.spectra.intensity,
+                                retained_rows=retained_rows,
                             ),
                             smiles=data.compounds.smiles[
                                 int(data.sample_tree_index[input_index])

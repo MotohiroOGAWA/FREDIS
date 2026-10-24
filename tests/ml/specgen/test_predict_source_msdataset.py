@@ -319,3 +319,35 @@ def test_prediction_prepare_reuses_worker_relations(monkeypatch):
                                precomputed={source.smiles: cached})[0]
     for name in ('reaction_conflict_index', 'reaction_invalidation_index'):
         torch.testing.assert_close(getattr(actual.reactions, name), getattr(expected.reactions, name))
+
+
+def test_prediction_intensity_filter_is_opt_in_and_excludes_boundary():
+    from dataclasses import replace
+
+    torch.manual_seed(9)
+    generator = _generator()
+    dataset = direct_input_dataset(
+        smiles_values=["CCO"], collision_energy="20 eV", adduct_type="[M+H]+"
+    )
+    kwargs = dict(
+        smiles_column="SMILES",
+        adduct_type_column="AdductType",
+        collision_energy_column="CollisionEnergy",
+        precursor_mz_column="PrecursorMZ",
+        instrument_column=None,
+    )
+    baseline, failures = predict_source_msdataset(dataset, generator, **kwargs)
+    assert failures.empty and len(baseline.peaks.intensity) > 0
+    # Every peak is at or below the maximum: inclusive cutoff removes all of them.
+    cutoff = float(max(baseline.peaks.intensity))
+    generator.set_generation(
+        replace(generator.generation, peak_intensity_threshold=cutoff)
+    )
+    unfiltered, failures = predict_source_msdataset(dataset, generator, **kwargs)
+    assert failures.empty
+    assert len(unfiltered.peaks.intensity) == len(baseline.peaks.intensity)
+    filtered, failures = predict_source_msdataset(
+        dataset, generator, filter_low_intensity_peaks=True, **kwargs
+    )
+    assert failures.empty
+    assert len(filtered.peaks.intensity) == 0

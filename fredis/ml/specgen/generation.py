@@ -17,7 +17,8 @@ class GenerationSettings:
         including Source. After each reaction depth, prune the lowest cumulative
         path probabilities and continue expanding survivors to the depth limit.
     peak_intensity_threshold:
-        Minimum max-normalized intensity for an output peak.
+        Relative intensity cutoff: validation always removes peaks at or below it;
+        prediction output applies it only when explicitly enabled.
     """
 
     branch_path_threshold: float = 0.0

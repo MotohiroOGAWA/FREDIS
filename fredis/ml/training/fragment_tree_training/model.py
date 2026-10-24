@@ -135,6 +135,14 @@ class ReactionFragmentTreeTrainingModel(nn.Module):
             num_positive_edges=(labels == 1).sum().float(),
             num_weak_negative_edges=(labels == 0).sum().float(),
         )
+        predicted = logits.detach() >= 0
+        for name, mask in {
+            "tp": predicted & (labels == 1),
+            "tn": ~predicted & (labels == 0),
+            "fp": predicted & (labels == 0),
+            "fn": ~predicted & (labels == 1),
+        }.items():
+            metrics["branch_count_" + name] = mask.sum().float()
         spectrum = None
         loss = self.branch_weight * branch
         if self.spectrum_model is not None:

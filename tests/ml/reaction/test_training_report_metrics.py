@@ -244,8 +244,17 @@ def test_ion_assignment_uses_top_state_and_preserves_ambiguous_pairs():
     assert scores["fragment_ion_adduct_accuracy"] == 1
     assert scores["hydrogen_shift_accuracy"] == 1
     assert scores["ion_assignment_joint_accuracy"] == 0
-    assert scores["hydrogen_shift_mae"] == 0
+    assert "hydrogen_shift_mae" not in scores
     assert scores["ion_assignment_coverage"] == 0.5
+    filtered = ion_assignment_metrics(
+        batch, 0, annotation, torch.tensor([0.8, 0.2]), retained_rows={1}
+    )
+    assert filtered["ion_assignment_joint_accuracy"] == 1
+    filtered = ion_assignment_metrics(
+        batch, 0, annotation, torch.tensor([0.8, 0.2]), retained_rows=set()
+    )
+    assert filtered["ion_assignment_coverage"] == 0
+    assert filtered["fragment_ion_adduct_accuracy"] is None
     # Re-ranking must change the result: do not choose the best label match.
     scores = ion_assignment_metrics(batch, 0, annotation, torch.tensor([0.2, 0.8]))
     assert scores["ion_assignment_joint_accuracy"] == 1
@@ -318,3 +327,28 @@ def test_samples_per_compound_counts_unique_source_identity_and_window_means():
     assert row["train/samples_per_compound"] == 3
     assert row["train/samples"] == 6
     assert "train/batches" not in row
+
+
+def test_branch_metrics_sum_confusion_counts_and_omit_undefined_ratios():
+    from fredis.ml.training.fragment_tree_training.training import _add_branch_metrics
+
+    row = {"train/branch_count_tp": 999}
+    _add_branch_metrics(
+        row,
+        {
+            "branch_count_tp": [1, 9],
+            "branch_count_tn": [2, 0],
+            "branch_count_fp": [1, 3],
+            "branch_count_fn": [0, 2],
+        },
+        "train/",
+    )
+    assert row["train/branch_accuracy"] == pytest.approx(12 / 18)
+    assert row["train/branch_precision"] == pytest.approx(10 / 14)
+    assert row["train/branch_recall"] == pytest.approx(10 / 12)
+    assert row["train/branch_f1"] == pytest.approx(20 / 26)
+    assert row["train/branch_balanced_accuracy"] == pytest.approx((10 / 12 + 2 / 6) / 2)
+    assert "train/branch_count_tp" not in row
+    empty = {}
+    _add_branch_metrics(empty, {}, "validation/")
+    assert empty == {}

@@ -151,6 +151,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep the temporary task/result files exchanged with --num-workers subprocesses (for inspection), instead of deleting them once every chunk completes.",
     )
+    parser.add_argument(
+        "--filter-low-intensity-peaks",
+        action="store_true",
+        help="Remove peaks at or below the relative peak intensity threshold (default: keep them).",
+    )
     args = parser.parse_args()
     if args.max_samples < 1:
         parser.error("--max-samples must be positive")
@@ -442,6 +447,7 @@ def predict_msdataset(
     precursor_mz_column: str,
     instrument_column: Optional[str],
     include_formula_annotation: bool,
+    filter_low_intensity_peaks: bool = False,
     num_workers: int = 1,
     chunk_size: int = 1,
     keep_temp: bool = False,
@@ -463,6 +469,7 @@ def predict_msdataset(
         precursor_mz_column=precursor_mz_column,
         instrument_column=instrument_column,
         include_formula_annotation=include_formula_annotation,
+        filter_low_intensity_peaks=filter_low_intensity_peaks,
         num_workers=num_workers,
         chunk_size=chunk_size,
         keep_temp=keep_temp,
@@ -531,6 +538,7 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "branchPathThreshold": args.branch_path_threshold,
         "maxFragmentNodes": args.max_fragment_nodes,
         "peakIntensityThreshold": args.peak_intensity_threshold,
+        "filterLowIntensityPeaks": args.filter_low_intensity_peaks,
     }
 
 
@@ -652,6 +660,7 @@ def main() -> None:
         instrument_column=args.instrument_column,
         spec_id_column=args.spec_id_column,
         include_formula_annotation=not args.no_formula_annotation,
+        filter_low_intensity_peaks=args.filter_low_intensity_peaks,
         num_workers=args.num_workers,
         chunk_size=args.chunk_size,
         keep_temp=args.keep_temp,

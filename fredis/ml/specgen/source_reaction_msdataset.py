@@ -132,6 +132,7 @@ def predict_source_msdataset(
     precursor_mz_column: str,
     instrument_column: str | None,
     include_formula_annotation: bool = True,
+    filter_low_intensity_peaks: bool = False,
     num_workers: int = 1,
     chunk_size: int = 1,
     keep_temp: bool = False,
@@ -369,7 +370,10 @@ def predict_source_msdataset(
                             prediction.intensity.detach().cpu().tolist(),
                             prediction.confidence.detach().cpu().tolist(),
                         ):
-                            if intensity < intensity_threshold:
+                            if (
+                                filter_low_intensity_peaks
+                                and intensity <= intensity_threshold
+                            ):
                                 continue
                             position = rows[output.sample_input_index[sample]]
                             local_spectra[position].peaks.append(

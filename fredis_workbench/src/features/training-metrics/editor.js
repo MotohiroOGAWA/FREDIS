@@ -320,6 +320,7 @@ function groupSeries(series, maxDepth = null) {
       if (match) metric = match[2];
     }
     if (split === 'val') split = 'validation';
+    if(metric.split('@')[0]==='hydrogen_shift_mae')continue;
     if(metric==='batches'&&(statistic!=='value'||split==='train_window'))continue;
     const facet = metric.match(/^(.*?)@([^:]+):(.+)$/);
     const dimension = facet ? facet[2] : '';
@@ -394,6 +395,7 @@ function metricInfo(metric, dimension = '') {
     ['Ion assignment', /fragment_ion_adduct|hydrogen_shift|ion_assignment/],
     ['Peak assignment (top N)', /^peak_(recall|precision)_top\d+/],
     ['Loss', /loss|cross_entropy/],
+    ['Branch classification', /^branch_(accuracy|precision|recall|f1|balanced_accuracy)$/],
     ['Training supervision', /num_(branch_groups|labelled_edges|positive_edges|weak_negative_edges|training_states)|branch_(positive|negative|recall)/],
     ['Probability flow', /probability/],
     ['Ion states & transitions', /num_ion_states|num_fragment_transitions/],
@@ -430,10 +432,14 @@ function metricInfo(metric, dimension = '') {
     gradient_norm: 'Gradient norm recorded during training.',
     samples_per_compound: 'For each batch: number of spectra divided by the number of distinct Source compounds (SMILES) in that batch. Epoch and train-window summaries average these batch ratios; distributions show their variation across batches. Unlike samples, this is per compound.',
     loop_seconds: 'Mean elapsed time per batch iteration, including batch preparation, forward evaluation, metric collection, and backward/optimizer steps during training. Excludes free-running validation and report publishing.',
+    branch_accuracy: 'Correct labelled-edge predictions / all labelled edges. Positive when sigmoid(logit) >= 0.5. Counts are summed across batches; ignored labels (-1) are excluded. Negative labels are weak negatives, not confirmed impossible reactions.',
+    branch_precision: 'TP / (TP + FP), using summed edge counts and a probability threshold of 0.5. Negative labels are weak negatives. Undefined denominators are omitted.',
+    branch_recall: 'TP / (TP + FN), using summed edge counts and a probability threshold of 0.5. Undefined denominators are omitted.',
+    branch_f1: '2 TP / (2 TP + FP + FN), using summed edge counts and a probability threshold of 0.5. Negative labels are weak negatives.',
+    branch_balanced_accuracy: 'Mean of positive recall and negative recall, using summed edge counts and a probability threshold of 0.5. Omitted unless both classes are present.',
     fragment_ion_adduct_accuracy: 'Conditional accuracy of the highest-intensity ion state for an annotated fragment: its adduct must belong to the allowed annotation set. Non-precursor peaks only; missing fragments are reflected in coverage.',
     hydrogen_shift_accuracy: 'Conditional accuracy of the hydrogen shift for the selected ion state of an annotated fragment. Any annotated shift for that fragment is accepted. Non-precursor peaks only.',
     ion_assignment_joint_accuracy: 'Conditional accuracy requiring the predicted (adduct, hydrogen shift) pair to occur together in the annotation set for the selected fragment. Non-precursor peaks only.',
-    hydrogen_shift_mae: 'Mean minimum absolute hydrogen-shift error against allowed annotations for the selected fragment. Lower is better. Non-precursor peaks only.',
     ion_assignment_coverage: 'Fraction of eligible annotated non-precursor peaks for which a predicted state of an annotated fragment is available. Report alongside conditional ion-assignment accuracy.',
     interval_steps: 'Number of batch updates in this training log interval.',
     epoch_seconds: 'Elapsed time for the initial evaluation or one epoch, in seconds.',
@@ -468,7 +474,7 @@ function metricInfo(metric, dimension = '') {
 }
 
 function metricOrder(a, b) {
-  const groups = ['Spectrum similarity','Ion assignment','Peak assignment (top N)','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset','Throughput','Performance & resources','Other'];
+  const groups = ['Spectrum similarity','Ion assignment','Peak assignment (top N)','Branch classification','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset','Throughput','Performance & resources','Other'];
   const metrics = ['loss','branch_loss','branch_positive_loss','branch_negative_loss','spectrum_loss','spectrum_loss_with_precursor','spectrum_loss_without_precursor','cross_entropy_loss','cross_entropy_loss_with_precursor','cross_entropy_loss_without_precursor','cosine_loss','cosine_loss_with_precursor','cosine_loss_without_precursor','intensity_loss','transition_cross_entropy','transition_cross_entropy_without_precursor'];
   const rank = chart => { const i = metrics.indexOf(chart.metric); return i < 0 ? metrics.length : i; };
   const facet = chart => ({'':0, main_adduct:1, collision_energy:2, depth:3}[chart.dimension || ''] ?? 4);
@@ -502,7 +508,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
   const splitColors={train:'#e76f51',train_window:'#f4a261',validation:'#3a86ff',intermediate_validation:'#2a9d8f',all:'#8b8f98'};
   const splitDashes={train:'',train_window:'4 2',validation:'',intermediate_validation:'6 3',all:''};
   const categoryColors=['#e76f51','#2a9d8f','#e9c46a','#264653','#8ab17d','#f4a261','#577590','#b56576','#6d597a','#ee6c4d'];
-  const GROUP_ORDER=['Spectrum similarity','Ion assignment','Peak assignment (top N)','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset','Throughput','Performance & resources','Other'];
+  const GROUP_ORDER=['Spectrum similarity','Ion assignment','Peak assignment (top N)','Branch classification','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset','Throughput','Performance & resources','Other'];
   const metricGroup=metric=>metricInfo(metric).group;
   const border='var(--border,rgba(128,128,128,.35))', accent='var(--accent,#36c5a2)';
   el('metricsDirectory').value = state.metricsDirectory || '';
