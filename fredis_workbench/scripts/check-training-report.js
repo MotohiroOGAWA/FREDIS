@@ -66,7 +66,7 @@ const { readRun } = require('../src/features/training-metrics/editor');
       await new Promise(resolve => setTimeout(resolve, 0));
 
       assert.equal(dom.window.document.querySelectorAll('#representativeSpectra article').length, 1);
-      assert.equal(dom.window.document.querySelector('#representativeSpectra select').value, 'q10');
+      assert.equal(dom.window.document.querySelector('#representativePoint').value, '0');
       assert.match(dom.window.document.getElementById('representativeStatus').textContent, /spectra/);
       assert.deepEqual(restoredScroll, { x: 11, y: 640 }, 'page refresh must restore the previous viewport after charts render');
       assert.equal(webviewState.reportScroll, undefined, 'saved viewport must be consumed only once');

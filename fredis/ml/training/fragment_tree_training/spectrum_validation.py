@@ -620,6 +620,9 @@ def validate_spectra(
                                 annotation,
                                 output.spectra.intensity,
                             ),
+                            smiles=data.compounds.smiles[
+                                int(data.sample_tree_index[input_index])
+                            ],
                             piece_index=piece_index,
                             sample_index=input_index,
                             adduct=annotation["adduct"],
@@ -721,6 +724,16 @@ def validate_spectra(
     )
     target_dir = Path(output_dir) / "spectrum_validation"
     target_dir.mkdir(exist_ok=True, parents=True)
+    from .validation_storage import save_validation_msdataset
+
+    save_validation_msdataset(
+        saved_spectra,
+        representatives,
+        target_dir / f"{label}.msds",
+        epoch=epoch,
+        global_step=global_step,
+    )
+    payload.update(epoch=epoch, global_step=global_step, msds_file=f"{label}.msds")
     result_path = target_dir / f"{label}.json"
     temporary_result = result_path.with_suffix(".json.tmp")
     temporary_result.write_text(json.dumps(payload))
@@ -728,6 +741,9 @@ def validate_spectra(
     # The UI needs only representative spectra, not the potentially multi-GB array.
     preview = {
         "schema": "fredis.spectrum-validation-summary",
+        "epoch": epoch,
+        "global_step": global_step,
+        "msds_file": f"{label}.msds",
         "summary": summary,
         "representatives": {
             metric: {

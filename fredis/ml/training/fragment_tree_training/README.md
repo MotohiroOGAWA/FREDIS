@@ -189,3 +189,34 @@ process subsequently changes those files, the viewer falls back to the live
 legacy logs instead of showing a stale converted snapshot. Migration preserves
 historical values and reconstructs the weighted loss components when the
 training configuration is available.
+
+
+## Validation spectrum datasets and selection
+
+Each validation writes `spectrum_validation/epoch_N.msds` (or `step_N.msds`
+for intermediate validation). The file contains the deduplicated union of
+q10/q25/q50/q75/q90 representatives selected by assignment score and cosine,
+with and without precursor peaks: at most 20 examples, each stored as a pair
+of generated and observed spectra. Metadata includes SMILES, all four scores,
+epoch/global step, adduct, collision energy, pair index, and selection reasons.
+Small JSON previews support fast browsing; the MSDataset files can also be
+opened in the msentity spectrum viewer.
+
+The report plots assignment score on X and cosine on Y. Number and slider
+controls select the epoch artifact. Clicking a point shows its mirror spectrum
+and SMILES; a selector also makes overlapping points accessible. The precursor
+checkbox changes the scores used for coordinates, retaining the entire union
+of representatives and all displayed peaks. Missing scores remain selectable
+as hollow points at the axis edge.
+
+To convert existing epoch JSON artifacts without replacing the original files:
+
+```bash
+node fredis_workbench/scripts/convert-validation-spectra.js /path/to/run
+```
+
+The converter streams large legacy files, preserves their representative
+selection, and recovers Source SMILES from the matching prepared validation
+manifest. It writes `.msds` files and compact previews for subsequent epoch
+switching. Older artifacts that saved fewer representatives retain those
+examples; missing historical examples are not fabricated.
