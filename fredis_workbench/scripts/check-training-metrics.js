@@ -2,13 +2,23 @@ const assert = require('assert/strict');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
-const { readRun, groupSeries, html, script } = require('../src/features/training-metrics/editor');
+const { readRun, groupSeries, metricInfo, html, script } = require('../src/features/training-metrics/editor');
 (async () => {
   new Function('vscode', script());
   assert.match(html(), /Each metric appears once/);
   assert.match(script(), /Exclude precursor/);
   assert.match(script(), /#e76f51/);
   assert.match(script(), /#3a86ff/);
+  assert.equal(metricInfo('num_labelled_edges').group, 'Training supervision');
+  assert.equal(metricInfo('num_positive_edges').group, 'Training supervision');
+  assert.equal(metricInfo('retained_probability').group, 'Probability flow');
+  assert.equal(metricInfo('num_ion_states').group, 'Ion states & transitions');
+  assert.equal(metricInfo('mean_path_depth').group, 'Fragment generation');
+  assert.equal(metricInfo('transition_cross_entropy').group, 'Loss');
+  assert.match(metricInfo('num_labelled_edges').description, /labelled reaction edges/);
+  assert.match(metricInfo('cosine_similarity', 'depth').description, /rather than cumulatively/);
+  assert.match(script(), /About this metric/);
+  assert.ok(script().indexOf("'Loss','Training supervision'") >= 0);
   const fixture = [];
   for (const split of ['train', 'train_window', 'validation']) {
     for (const adduct of ['[M+H]+', '[M+Na]+']) {

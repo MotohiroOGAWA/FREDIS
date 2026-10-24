@@ -140,7 +140,68 @@ function attach(panel) {
 function html({ hidden = true, autoRefresh = true } = {}) {
   return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section><h2>Representative validation spectra</h2><div class="actions"><label>Rank by <select id="representativeMetric"><option value="cosine_similarity">Cosine similarity</option><option value="assignment_score">Assignment score (m/z coverage)</option></select></label><label><input id="representativePrecursor" type="checkbox" checked> Include precursor</label><span id="representativeStatus" class="muted"></span></div><p class="muted">Representatives are selected separately by cosine similarity or assignment score, calculated with or without precursor peaks. Compare generated (top) and observed (bottom) spectra at q10, q25, median (q50), q75, and q90. Available once a result.training.pft report with spectrum validation is loaded.</p><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
 }
-function client(groupSeries) {
+function metricInfo(metric, dimension = '') {
+  const groups = [
+    ['Spectrum similarity', /cosine_similarity|spectrum_cosine|assignment_score|spectrum_nonempty_fraction|teacher_spectrum/],
+    ['Peak assignment (top N)', /^peak_(recall|precision)_top\d+/],
+    ['Loss', /loss|cross_entropy/],
+    ['Training supervision', /num_(branch_groups|labelled_edges|positive_edges|weak_negative_edges|training_states)|branch_(positive|negative|recall)/],
+    ['Probability flow', /probability/],
+    ['Ion states & transitions', /num_ion_states|num_fragment_transitions/],
+    ['Fragment generation', /fragment_nodes|path_depth|duplicate_states/],
+    ['Optimization', /^(learning_rate|gradient_norm)$/],
+    ['Dataset & throughput', /samples|batches|validation_fraction|interval_steps/],
+    ['Performance & resources', /seconds|memory/],
+  ];
+  const descriptions = {
+    loss: 'Total training loss: branch_weight × branch_loss + intensity_loss. Lower is better.',
+    branch_loss: 'Classification loss on reaction edges with supervision labels, using positive and negative examples to learn reaction selection.',
+    branch_positive_loss: 'Classification loss on positive reaction edges.',
+    branch_negative_loss: 'Classification loss on negative reaction edges.',
+    intensity_loss: 'Sum of spectrum_loss with precursor peaks and spectrum_loss without precursor peaks.',
+    spectrum_loss: 'intensity_loss_weight × [cross entropy + cosine_loss_weight × (1 − cosine)]. Exclude precursor switches the peaks used in this objective.',
+    transition_cross_entropy: 'Cross entropy computed from predicted probabilities and normalized observed intensity weights. Lower is better.',
+    full_spectrum_cosine: 'Cosine similarity of intensity distributions on training candidates, including precursor peaks. This uses a different candidate set from free-running spectrum evaluation.',
+    spectrum_cosine_std: 'Standard deviation of cosine similarity between freely generated and observed spectra. Measures variation across spectra.',
+    spectrum_cosine: 'Cosine similarity of intensity distributions on training candidates.',
+    num_branch_groups: 'Number of reaction branch groups in the batch. Groups represent compounds paired with main adducts.',
+    num_labelled_edges: 'Number of labelled reaction edges in the batch: positive edges plus weak negative edges. This is an edge count, rather than a spectrum count.',
+    num_positive_edges: 'Number of reaction edges with positive labels (1) in the batch.',
+    num_weak_negative_edges: 'Number of reaction edges with weak negative labels (0) in the batch.',
+    num_ion_states: 'Number of ion states used for intensity computation in the batch. Different adducts and hydrogen shifts count as separate states, before aggregation by molecular formula.',
+    num_fragment_transitions: 'Number of reaction transitions between fragments included in the batch computation.',
+    retained_probability: 'Total probability finally retained on precursor and fragment nodes, averaged across spectra. Its sum with sink_probability is approximately 1. This does not measure prediction accuracy.',
+    sink_probability: 'Mean probability flowing into the terminal sink across spectra. Its sum with retained_probability is approximately 1.',
+    probability_mass_error: 'Maximum probability conservation error in the batch: |retained_probability + sink_probability − 1|. Values closer to 0 indicate better numerical conservation.',
+    mean_path_depth: 'Mean reaction path depth of generated fragments.',
+    duplicate_states_removed: 'Number of duplicate states removed during generation.',
+    learning_rate: 'Learning rate configured in the optimizer.',
+    gradient_norm: 'Gradient norm recorded during training.',
+    interval_steps: 'Number of batch updates in this training log interval.',
+    epoch_seconds: 'Elapsed time for the initial evaluation or one epoch, in seconds.',
+    interval_seconds: 'Elapsed time for the training log interval, in seconds.',
+    cuda_peak_memory_mb: 'Peak CUDA memory usage, in MB.',
+  };
+  let description = descriptions[metric];
+  if (!description) {
+    if (/cosine_similarity/.test(metric)) description = 'Sum of matched predicted–observed intensity products divided by the product of their vector norms. Peaks are matched one-to-one within the m/z tolerance; unmatched peaks remain in the denominator. Higher is better.';
+    else if (/assignment_score/.test(metric)) description = 'Sum of observed intensities matched by predicted m/z values divided by the total observed intensity. Predicted intensities are not used. Higher is better.';
+    else if (/^peak_recall_top/.test(metric)) description = 'Number of assigned observed peaks recovered by the top N predicted peaks, ranked by predicted intensity, divided by the number of assigned observed peaks. Higher is better.';
+    else if (/^peak_precision_top/.test(metric)) description = 'Number of the top N predicted peaks matching assigned observed peaks, divided by N. Higher is better.';
+    else if (/nonempty_fraction/.test(metric)) description = 'Fraction of spectra with at least one generated peak.';
+    else if (/fragment_nodes/.test(metric)) description = 'Generated fragment node count. Unique counts exclude duplicates; mean counts are averaged across spectra.';
+    else if (/samples/.test(metric)) description = 'Number of spectra processed in the interval. This differs from molecule counts and labelled edge counts.';
+    else if (/batches/.test(metric)) description = 'Number of batches processed in the interval.';
+    else if (/validation_fraction/.test(metric)) description = 'Fraction of data used for validation.';
+    else if (/seconds/.test(metric)) description = 'Elapsed processing time, in seconds.';
+    else if (/memory/.test(metric)) description = 'Memory usage during computation. The metric name specifies the unit.';
+    else description = 'Value recorded in the training or validation log for ' + metric + '.';
+  }
+  const facet = {depth:'Evaluated using peaks at exactly depth N, rather than cumulatively through depth N. Observed peaks use their minimum explainable depth. Spectra with no observed peaks at that depth are excluded from aggregation.', main_adduct:'Aggregated separately for each main adduct.', collision_energy:'Aggregated by collision energy tertiles, ordered low → mid → high.'}[dimension];
+  return {group: groups.find(([, pattern]) => pattern.test(metric))?.[0] || 'Other', description: description + (facet ? '\n' + facet : '')};
+}
+
+function client(groupSeries, metricInfo) {
   const el = id => document.getElementById(id);
   const state = vscode.getState() || {};
   let selected = state.metricsSelected || [], data = [], report = null, validation = null, request = 0, busy = false;
@@ -149,17 +210,8 @@ function client(groupSeries) {
   const splitColors={train:'#e76f51',train_window:'#f4a261',validation:'#3a86ff',intermediate_validation:'#2a9d8f',all:'#8b8f98'};
   const splitDashes={train:'',train_window:'4 2',validation:'',intermediate_validation:'6 3',all:''};
   const categoryColors=['#e76f51','#2a9d8f','#e9c46a','#264653','#8ab17d','#f4a261','#577590','#b56576','#6d597a','#ee6c4d'];
-  const METRIC_GROUPS=[
-    ['Spectrum similarity',/cosine_similarity|assignment_score|spectrum_nonempty_fraction|teacher_spectrum/],
-    ['Peak assignment (top N)',/^peak_(recall|precision)_top\d+/],
-    ['Loss',/loss/],
-    ['Branch supervision',/branch_(positive|negative|recall)|num_training_states_depth/],
-    ['Optimization',/^(learning_rate|gradient_norm)$/],
-    ['Dataset & throughput',/samples|batches|fragment_nodes|validation_fraction/],
-    ['Performance & resources',/seconds|memory/],
-  ];
-  const GROUP_ORDER=METRIC_GROUPS.map(item=>item[0]).concat('Other');
-  const metricGroup=metric=>{for(const [label,pattern] of METRIC_GROUPS)if(pattern.test(metric))return label;return 'Other';};
+  const GROUP_ORDER=['Spectrum similarity','Peak assignment (top N)','Loss','Training supervision','Probability flow','Ion states & transitions','Fragment generation','Optimization','Dataset & throughput','Performance & resources','Other'];
+  const metricGroup=metric=>metricInfo(metric).group;
   const border='var(--border,rgba(128,128,128,.35))', accent='var(--accent,#36c5a2)';
   el('metricsDirectory').value = state.metricsDirectory || '';
   el('metricsLayout').value = state.metricsLayout === 'vertical' ? 'vertical' : 'grid';
@@ -205,6 +257,11 @@ function client(groupSeries) {
     const remove = document.createElement('button'); remove.textContent = '×'; remove.title = 'Remove chart'; remove.style.float = 'right';
     remove.onclick = () => { selected = selected.filter(n => n !== name); cardElements.delete(name); save(); render(); };
     card.append(remove, title);
+    const help = document.createElement('details');
+    const helpSummary = document.createElement('summary'); helpSummary.textContent = 'About this metric'; helpSummary.style.cursor = 'pointer';
+    const helpText = document.createElement('p'); helpText.className = 'muted'; helpText.style.whiteSpace = 'pre-line';
+    helpText.textContent = metricInfo(chart.metric, chart.dimension).description;
+    help.append(helpSummary, helpText); card.append(help);
     const availableWith = chart.variants.withPrecursor.length > 0, availableWithout = chart.variants.withoutPrecursor.length > 0;
     const settings = { mode:'mean', withoutPrecursor:!availableWith && availableWithout, ...(cardSettings.get(name) || {}) };
     if (settings.withoutPrecursor && !availableWithout) settings.withoutPrecursor=false;
@@ -416,5 +473,5 @@ function client(groupSeries) {
   render();
   renderSpectra();
 }
-function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ');'; }
-module.exports = { readRun, groupSeries, attach, html, script };
+function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ');'; }
+module.exports = { readRun, groupSeries, metricInfo, attach, html, script };
