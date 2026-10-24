@@ -265,7 +265,7 @@ def test_interval_counts_and_time_are_per_iteration():
         elapsed_seconds=5.0,
     )
     assert row["train/samples"] == 4
-    assert row["train/batches"] == 1
+    assert "train/batches" not in row
     assert row["train/total_samples"] == 8
     assert row["train/total_batches"] == 2
     assert row["train/num_labelled_edges"] == 20
@@ -293,3 +293,28 @@ def test_resumed_metric_history_preserves_old_and_new_column_names(tmp_path):
     assert rows[0]["train_samples"] == 100
     assert rows[1]["train_samples"] == 5
     assert rows[1]["train_total_samples"] == 100
+
+
+def test_samples_per_compound_counts_unique_source_identity_and_window_means():
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.training import _samples_per_compound
+
+    data = SimpleNamespace(
+        num_samples=6,
+        sample_tree_index=torch.tensor([0, 0, 1, 1, 2, 2]),
+        compounds=SimpleNamespace(smiles=("CC", "CN", "CC")),
+    )
+    assert _samples_per_compound(data) == 3
+    row = _mean_training_interval(
+        totals={"loss": 24.0},
+        batch_metrics={"samples_per_compound": [2.0, 4.0]},
+        samples=12,
+        batches=2,
+        epoch=1,
+        global_step=2,
+        elapsed_seconds=1.0,
+    )
+    assert row["train/samples_per_compound"] == 3
+    assert row["train/samples"] == 6
+    assert "train/batches" not in row

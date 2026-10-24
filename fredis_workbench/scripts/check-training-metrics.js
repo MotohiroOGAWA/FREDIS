@@ -132,7 +132,7 @@ const { readRun, groupSeries, metricInfo, html, script } = require('../src/featu
     const legacy = await readRun(dir);
     const points = name => legacy.series.find(s=>s.name === 'metrics/train_' + name).points;
     assert.deepEqual(points('samples'), [[10,20],[20,20]]);
-    assert.deepEqual(points('batches'), [[10,1],[20,1]]);
+    assert.deepEqual(points('batches'), [[10,5],[20,5]]);
     assert.deepEqual(points('total_samples'), [[10,100],[20,100]]);
     assert.deepEqual(points('total_batches'), [[10,5],[20,5]]);
     assert.deepEqual(points('spectrum_loss'), [[10,10],[20,8]]);

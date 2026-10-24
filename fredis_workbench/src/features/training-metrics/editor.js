@@ -171,6 +171,8 @@ async function readCharts(directory, names, report) {
   const catalog = groupSeries(index.series.map(entry=>({name:entry.name,points:[]})));
   const requested = new Set(names);
   const sources = new Set(catalog.filter(chart=>requested.has(chart.name)).flatMap(chart=>chart.sources));
+  const requestedSources=new Set(sources);
+  for(const name of requestedSources)if(/^metrics\/(train|validation|val|intermediate_validation)_batches$/.test(name))sources.add(name.replace(/_batches$/,'_total_batches'));
   const entries = index.series.filter(entry=>sources.has(entry.name));
   const files = [...new Set(entries.map(entry=>entry.file))];
   const series = new Map(entries.map(entry=>[entry.name,new Map()]));
@@ -190,8 +192,11 @@ async function readCharts(directory, names, report) {
       if (Number.isFinite(step) && Number.isFinite(value)) series.get(row.series).set(step,value);
     }
   }
+  for(const name of requestedSources)if(name.endsWith('_batches')&&!name.endsWith('_total_batches')){
+    const total=series.get(name.replace(/_batches$/,'_total_batches'));if(total?.size)series.set(name,total);
+  }
   const epochBoundaries=await readEpochBoundaries(directory,index,boundaryCache);
-  return {directory,files,epochBoundaries,series:[...series].map(([name,points])=>({name,points:[...points].sort((a,b)=>a[0]-b[0])}))};
+  return {directory,files,epochBoundaries,series:[...series].filter(([name])=>requestedSources.has(name)).map(([name,points])=>({name,points:[...points].sort((a,b)=>a[0]-b[0])}))};
 }
 
 async function readProgressMetrics(directory) {
@@ -269,9 +274,10 @@ async function readRun(directory) {
               row[split + '_total_samples'] = row[split + '_samples'];
               row[split + '_total_batches'] = row[split + '_batches'];
               row[split + '_samples'] = String(Number(row[split + '_samples']) / count);
-              row[split + '_batches'] = '1';
+              row[split + '_batches'] = String(count);
             }
           }
+          for(const split of ['train','validation','val'])if(row[split+'_total_batches'])row[split+'_batches']=row[split+'_total_batches'];
           for (const key of Object.keys(row)) {
           if (['event', 'epoch', 'global_step', 'branch_id'].includes(key)) continue;
           // Interval and epoch rows share train_* columns in the recorded TSV.
@@ -314,6 +320,7 @@ function groupSeries(series, maxDepth = null) {
       if (match) metric = match[2];
     }
     if (split === 'val') split = 'validation';
+    if(metric==='batches'&&(statistic!=='value'||split==='train_window'))continue;
     const facet = metric.match(/^(.*?)@([^:]+):(.+)$/);
     const dimension = facet ? facet[2] : '';
     const category = facet ? facet[3] : 'all';
@@ -421,6 +428,7 @@ function metricInfo(metric, dimension = '') {
     duplicate_states_removed: 'Number of duplicate states removed during generation.',
     learning_rate: 'Learning rate configured in the optimizer.',
     gradient_norm: 'Gradient norm recorded during training.',
+    samples_per_compound: 'For each batch: number of spectra divided by the number of distinct Source compounds (SMILES) in that batch. Epoch and train-window summaries average these batch ratios; distributions show their variation across batches. Unlike samples, this is per compound.',
     loop_seconds: 'Mean elapsed time per batch iteration, including batch preparation, forward evaluation, metric collection, and backward/optimizer steps during training. Excludes free-running validation and report publishing.',
     fragment_ion_adduct_accuracy: 'Conditional accuracy of the highest-intensity ion state for an annotated fragment: its adduct must belong to the allowed annotation set. Non-precursor peaks only; missing fragments are reflected in coverage.',
     hydrogen_shift_accuracy: 'Conditional accuracy of the hydrogen shift for the selected ion state of an annotated fragment. Any annotated shift for that fragment is accepted. Non-precursor peaks only.',
@@ -448,7 +456,7 @@ function metricInfo(metric, dimension = '') {
     else if (/fragment_nodes/.test(metric)) description = 'Generated fragment node count. Unique counts exclude duplicates; mean counts are averaged across spectra.';
     else if (/total_/.test(metric)) description = 'Total count for the dataset or evaluation interval, as specified by the metric name.';
     else if (/samples/.test(metric)) description = 'Mean number of spectra processed per batch iteration. Total dataset counts are shown separately.';
-    else if (/batches/.test(metric)) description = 'Mean number of batches per loop iteration (1 for a nonempty interval). Total batch counts are shown separately.';
+    else if (/batches/.test(metric)) description = 'Number of processed batches in the epoch (or in the intermediate validation pass). This count is not a per-batch mean; no train-window series is shown.';
     else if (/validation_fraction/.test(metric)) description = 'Fraction of data used for validation.';
     else if (/seconds/.test(metric)) description = 'Elapsed processing time, in seconds.';
     else if (/memory/.test(metric)) description = 'Memory usage during computation. The metric name specifies the unit.';
@@ -468,7 +476,12 @@ function metricOrder(a, b) {
   return groupDiff || rank(a) - rank(b) || facet(a) - facet(b) || a.metric.localeCompare(b.metric, undefined, {numeric:true}) || a.name.localeCompare(b.name, undefined, {numeric:true});
 }
 
-function client(groupSeries, metricInfo, metricOrder, representativePoints, msentityAssets, installMsentityViewer, comparisonPayload, createEpochAxis) {
+function availableDisplayModes(lanes) {
+  const has=(lane,stat)=>Array.isArray(lane.stats[stat])&&lane.stats[stat].length>0;
+  return ['mean','median','distribution'].filter(mode=>lanes.some(lane=>mode==='mean'?(has(lane,'mean')||has(lane,'value')):mode==='median'?has(lane,'median'):['q10','q25','median','q75','q90'].every(stat=>has(lane,stat))));
+}
+
+function client(groupSeries, metricInfo, metricOrder, representativePoints, msentityAssets, installMsentityViewer, comparisonPayload, createEpochAxis, availableDisplayModes) {
   const el = id => document.getElementById(id);
   const state = vscode.getState() || {};
   const spectrumViewer=installMsentityViewer(msentityAssets,vscode);
@@ -552,9 +565,15 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     if (settings.withoutPrecursor && !availableWithout) settings.withoutPrecursor=false;
     if (!settings.withoutPrecursor && !availableWith) settings.withoutPrecursor=true;
     cardSettings.set(name,settings);
+    const hidden = hiddenLanes.get(name) || new Set(Object.values(chart.variants).flat().filter(lane=>lane.split==='train_window').map(lane=>lane.label));
+    hiddenLanes.set(name, hidden);
+    const variantLanes=chart.variants[settings.withoutPrecursor?'withoutPrecursor':'withPrecursor'];
+    const shownLanes=variantLanes.filter(lane=>!hidden.has(lane.label));
+    const supportedModes=availableDisplayModes(shownLanes.length?shownLanes:variantLanes);
+    if(!supportedModes.includes(settings.mode))settings.mode=supportedModes[0]||'mean';
     const controls=document.createElement('div');controls.style.cssText='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0';
     const modeLabel=document.createElement('label');modeLabel.append(document.createTextNode('Display '));const mode=document.createElement('select');
-    for(const [value,labelText] of [['mean','Mean'],['median','Median'],['distribution','Distribution']]){const option=document.createElement('option');option.value=value;option.textContent=labelText;mode.append(option);}mode.value=settings.mode;mode.onchange=()=>{settings.mode=mode.value;save();refreshCard(name);};modeLabel.append(mode);controls.append(modeLabel);
+    for(const [value,labelText] of [['mean','Mean'],['median','Median'],['distribution','Distribution']]){const option=document.createElement('option');option.value=value;option.textContent=labelText;option.disabled=!supportedModes.includes(value);mode.append(option);}mode.value=settings.mode;mode.onchange=()=>{settings.mode=mode.value;save();refreshCard(name);};modeLabel.append(mode);controls.append(modeLabel);
     if (availableWith && availableWithout) {
     const precursorLabel=document.createElement('label'),precursor=document.createElement('input');precursor.type='checkbox';precursor.checked=settings.withoutPrecursor;precursor.onchange=()=>{settings.withoutPrecursor=precursor.checked;save();refreshCard(name);};precursorLabel.append(precursor,document.createTextNode(' Exclude precursor'));controls.append(precursorLabel);
     }
@@ -570,8 +589,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
       title.textContent = name.replace(/_mb$/, '') + ' (' + memoryUnit + ')';
     }
     card.append(controls);
-    const hidden = hiddenLanes.get(name) || new Set(Object.values(chart.variants).flat().filter(lane=>lane.split==='train_window').map(lane=>lane.label));
-    hiddenLanes.set(name, hidden);
+
     const memoryScale = memoryUnit ? ({MB:1,GB:1024,TB:1024*1024}[memoryUnit] || 1) : 1;
     const allLanes = chart.variants[settings.withoutPrecursor?'withoutPrecursor':'withPrecursor'].map(lane => ({...lane, stats:Object.fromEntries(Object.entries(lane.stats).map(([stat,points]) => [stat,points.map(([step,value]) => [step,value/memoryScale])]))}));
     const lanes = allLanes.filter(lane => !hidden.has(lane.label));
@@ -591,7 +609,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     }
     card.append(legend);
     if (settings.mode === 'distribution') { const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = 'Light band: q10–q90 · Dark band: q25–q75 · Line: median'; card.append(hint); }
-    const visibleStats=lane=>settings.mode==='distribution'?['q10','q25','median','q75','q90']:settings.mode==='median'?['median','value']:['mean','value'];
+    const visibleStats=lane=>settings.mode==='distribution'?['q10','q25','median','q75','q90']:settings.mode==='median'?['median']:['mean','value'];
     const points = lanes.flatMap(lane => visibleStats(lane).flatMap(stat=>lane.stats[stat]||[])).filter(point=>epochAxis.at(point[0])!==null);
     if (!points.length) { const p = document.createElement('p'); p.textContent = 'No measurements available to display.'; card.append(p); }
     else {
@@ -626,7 +644,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
           band(lane.stats.q10, lane.stats.q90, .10); band(lane.stats.q25, lane.stats.q75, .25);
           for (const stat of ['q10', 'q90', 'q25', 'q75']) line(lane.stats[stat], .45, 1);
           line(lane.stats.median);
-        } else line(lane.stats[settings.mode] || lane.stats.value);
+        } else line(lane.stats[settings.mode] || (settings.mode==='mean'?lane.stats.value:null));
       }
       node('text', { x:75, y:240, fill:'currentColor', 'font-size':12 }, epochAxis.format(first));
       node('text', { x:575, y:240, fill:'currentColor', 'font-size':12, 'text-anchor':'end' }, epochAxis.format(last));
@@ -834,5 +852,5 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
   render();
   renderSpectra();
 }
-function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ',' + representativePoints.toString() + ',' + JSON.stringify(msentityViewer.assets()).replace(/</g,'\\u003c') + ',' + msentityViewer.installMsentityViewer.toString() + ',' + msentityViewer.comparisonPayload.toString() + ',' + createEpochAxis.toString() + ');'; }
-module.exports = { readEpochBoundaries, validationResult, representativePoints, readRun, readCharts, readProgressMetrics, groupSeries, metricInfo, metricOrder, attach, html, script };
+function script() { return '(' + client.toString() + ')(' + groupSeries.toString() + ',' + metricInfo.toString() + ',' + '(function(metricInfo){return ' + metricOrder.toString() + ';})(' + metricInfo.toString() + ')' + ',' + representativePoints.toString() + ',' + JSON.stringify(msentityViewer.assets()).replace(/</g,'\\u003c') + ',' + msentityViewer.installMsentityViewer.toString() + ',' + msentityViewer.comparisonPayload.toString() + ',' + createEpochAxis.toString() + ',' + availableDisplayModes.toString() + ');'; }
+module.exports = { availableDisplayModes, readEpochBoundaries, validationResult, representativePoints, readRun, readCharts, readProgressMetrics, groupSeries, metricInfo, metricOrder, attach, html, script };

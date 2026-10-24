@@ -126,7 +126,6 @@ def _write_metric_artifacts(output: Path, report: dict) -> None:
     write_series_rows(output, scalar_rows(events), replace=True)
 
 
-
 def _read_metric_events(path: Path) -> list[dict]:
     """Read complete TSV rows, tolerating an interrupted live final row."""
     if (path.parent / "metrics/index.json").is_file() or not path.is_file():
@@ -158,6 +157,14 @@ def _read_metric_events(path: Path) -> list[dict]:
     return events
 
 
+def _samples_per_compound(data):
+    """Average spectra per unique Source compound present in this batch."""
+    compounds = {
+        data.compounds.smiles[int(index)] for index in data.sample_tree_index.tolist()
+    }
+    return data.num_samples / max(len(compounds), 1)
+
+
 def _mean_training_interval(
     *,
     totals: dict,
@@ -174,7 +181,6 @@ def _mean_training_interval(
         "global_step": global_step,
         "interval_steps": batches,
         "train/samples": samples / max(batches, 1),
-        "train/batches": float(bool(batches)),
         "train/total_samples": samples,
         "train/total_batches": batches,
         "interval_seconds": elapsed_seconds,
@@ -187,12 +193,20 @@ def _mean_training_interval(
             if key != "loss"
         }
     )
-    for key in ("gradient_norm", "learning_rate", "loop_seconds") + tuple(
-        k for k in batch_metrics if k.startswith("num_")
-    ):
+    for key in (
+        "gradient_norm",
+        "learning_rate",
+        "loop_seconds",
+        "samples_per_compound",
+    ) + tuple(k for k in batch_metrics if k.startswith("num_")):
         values = batch_metrics.get(key, [])
         row[
-            "train/" + key if key.startswith("num_") or key == "loop_seconds" else key
+            (
+                "train/" + key
+                if key.startswith("num_")
+                or key in ("loop_seconds", "samples_per_compound")
+                else key
+            )
         ] = sum(values) / max(len(values), 1)
     return row
 
@@ -819,7 +833,9 @@ def train_reactions(
                         time.perf_counter() - loop_started
                     )
                     batch_metrics.setdefault("samples", []).append(data.num_samples)
-                    batch_metrics.setdefault("batches", []).append(1.0)
+                    batch_metrics.setdefault("samples_per_compound", []).append(
+                        _samples_per_compound(data)
+                    )
                     sample_count += data.num_samples
                     batch_count += 1
                     del result, data, value
@@ -834,7 +850,7 @@ def train_reactions(
             "validation_fraction": validation_fraction,
             "validation_compounds": len(intermediate_compounds),
             "total_validation_compounds": total_validation_compounds,
-            "validation_batches": float(bool(batch_count)),
+            "validation_batches": batch_count,
             "validation_total_batches": batch_count,
             "validation_seconds": time.perf_counter() - validation_started,
             "validation_loss": totals.pop("loss") / sample_count,
@@ -842,7 +858,7 @@ def train_reactions(
         row.update(
             {"validation/" + key: value / sample_count for key, value in totals.items()}
         )
-        for key in ("loop_seconds",) + tuple(
+        for key in ("loop_seconds", "samples_per_compound") + tuple(
             k for k in batch_metrics if k.startswith("num_")
         ):
             values = batch_metrics.get(key, [])
@@ -916,7 +932,9 @@ def train_reactions(
                         time.perf_counter() - loop_started
                     )
                     batches_metrics.setdefault("samples", []).append(data.num_samples)
-                    batches_metrics.setdefault("batches", []).append(1.0)
+                    batches_metrics.setdefault("samples_per_compound", []).append(
+                        _samples_per_compound(data)
+                    )
                     count += data.num_samples
                     del result, data, value
                     bar.update(1)
@@ -925,14 +943,14 @@ def train_reactions(
                 "global_step": 0,
                 "validation_loss": totals.pop("loss") / count,
                 "validation/samples": count / max(len(groups), 1),
-                "validation/batches": float(bool(groups)),
+                "validation/batches": len(groups),
                 "validation/total_samples": count,
                 "validation/total_batches": len(groups),
             }
             row.update(
                 {"validation/" + key: value / count for key, value in totals.items()}
             )
-            for key in ("loop_seconds",) + tuple(
+            for key in ("loop_seconds", "samples_per_compound") + tuple(
                 k for k in batches_metrics if k.startswith("num_")
             ):
                 values = batches_metrics.get(key, [])
@@ -980,8 +998,11 @@ def train_reactions(
                 latest_validation="spectrum_validation/epoch_0.json",
             )
         epoch_progress = progress_bar(
-            total=start + epochs, initial=start,
-            description="Epoch", position=0, leave=True
+            total=start + epochs,
+            initial=start,
+            description="Epoch",
+            position=0,
+            leave=True,
         )
         early_stopping = EarlyStopping(
             early_stopping_patience, best=best, bad_epochs=bad_epochs
@@ -1112,7 +1133,9 @@ def train_reactions(
                             loop_seconds
                         )
                         batch_metrics.setdefault("samples", []).append(data.num_samples)
-                        batch_metrics.setdefault("batches", []).append(1.0)
+                        batch_metrics.setdefault("samples_per_compound", []).append(
+                            _samples_per_compound(data)
+                        )
                         if name == "train" and train_log_interval_steps:
                             train_window_batch_metrics.setdefault(
                                 "loop_seconds", []
@@ -1120,9 +1143,9 @@ def train_reactions(
                             train_window_batch_metrics.setdefault("samples", []).append(
                                 data.num_samples
                             )
-                            train_window_batch_metrics.setdefault("batches", []).append(
-                                1.0
-                            )
+                            train_window_batch_metrics.setdefault(
+                                "samples_per_compound", []
+                            ).append(batch_metrics["samples_per_compound"][-1])
                         sample_count += data.num_samples
                         batch_count += 1
                         if name == "train" and train_log_interval_steps:
@@ -1153,7 +1176,8 @@ def train_reactions(
                 )
                 row[name + "/total_samples"] = sample_count
                 row[name + "/total_batches"] = batch_count
-                for key in ("samples", "batches", "loop_seconds") + tuple(
+                row[name + "/batches"] = batch_count
+                for key in ("samples", "samples_per_compound", "loop_seconds") + tuple(
                     k for k in batch_metrics if k.startswith("num_")
                 ):
                     values = batch_metrics.get(key, [])

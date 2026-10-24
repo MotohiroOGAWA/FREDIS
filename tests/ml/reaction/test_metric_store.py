@@ -70,6 +70,26 @@ def test_scalar_snapshot_append_distributions_and_resume(tmp_path):
     assert not (tmp_path / "metric_distributions.tsv").exists()
 
 
+def test_batch_counts_are_epoch_only_and_compound_means_keep_window_series():
+    rows = list(
+        scalar_rows(
+            [
+                {"event": "epoch_end", "train_batches": 7},
+                {
+                    "event": "train_step",
+                    "train_batches": 1,
+                    "train_window_batches": 1,
+                    "train_samples_per_compound": 3.0,
+                },
+            ]
+        )
+    )
+    assert [(row[0], row[-1]) for row in rows] == [
+        ("metrics/train_batches", 7),
+        ("metrics/train_window_samples_per_compound", 3.0),
+    ]
+
+
 def test_migration_preserves_sources_and_normalizes_historical_metrics(tmp_path):
     scalar = "event\tepoch\tglobal_step\ttrain_samples\ttrain_batches\ttrain_intensity_loss\ttrain_spectrum_loss_with_precursor\ttrain_spectrum_loss_without_precursor\ttrain_transition_cross_entropy\ttrain_transition_cross_entropy_without_precursor\n"
     scalar += "epoch_end\t1\t10\t100\t5\t10\t6\t4\t2\t1\n"

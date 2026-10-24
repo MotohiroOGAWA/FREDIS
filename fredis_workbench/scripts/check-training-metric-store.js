@@ -12,11 +12,15 @@ const {readRun,readCharts,readProgressMetrics,html,script} = require('../src/fea
       {name:'metrics/train_loss',file:'metrics/scalars/loss.tsv'},
       {name:'metrics/validation_loss',file:'metrics/scalars/loss.tsv'},
       // Deliberately absent: neither listing nor loading loss may open this file.
+      {name:'metrics/train_batches',file:'metrics/scalars/batches.tsv'},
+      {name:'metrics/train_total_batches',file:'metrics/scalars/total-batches.tsv'},
       {name:'metrics/train_num_ion_states',file:'metrics/scalars/ion-states.tsv'},
     ]};
     const indexFile=path.join(root,'metrics/index.json');
     fs.writeFileSync(indexFile,JSON.stringify(index));
     fs.writeFileSync(path.join(root,'metrics/scalars/loss.tsv'),'series\tglobal_step\tepoch\tevent\tvalue\nmetrics/train_loss\t0\t0\tepoch_end\t3\nmetrics/train_loss\t10\t1\tepoch_end\t2\nmetrics/validation_loss\t10\t1\tepoch_end\t1\nmetrics/train_loss\t20\t2\tepoch_end\t0.9');
+    fs.writeFileSync(path.join(root,'metrics/scalars/batches.tsv'),'series\tglobal_step\tepoch\tevent\tvalue\nmetrics/train_batches\t10\t1\tepoch_end\t1\n');
+    fs.writeFileSync(path.join(root,'metrics/scalars/total-batches.tsv'),'series\tglobal_step\tepoch\tevent\tvalue\nmetrics/train_total_batches\t10\t1\tepoch_end\t7\n');
     let opens=[];
     const original=fs.createReadStream;
     fs.createReadStream=(filename,...args)=>{opens.push(filename);return original(filename,...args);};
@@ -31,6 +35,7 @@ const {readRun,readCharts,readProgressMetrics,html,script} = require('../src/fea
       assert.equal(selected.series.length,2);
       const progress=await readProgressMetrics(root);
       assert.deepEqual(progress.rows,[{event:'epoch_end',global_step:0,epoch:0,train_loss:3},{event:'epoch_end',global_step:10,epoch:1,train_loss:2,validation_loss:1}]);
+      const batches=await readCharts(root,['batches']);assert.deepEqual(batches.series.map(s=>s.name),['metrics/train_batches']);assert.deepEqual(batches.series[0].points,[[10,7]]);
       await assert.rejects(readCharts(root,['num_ion_states']),/ENOENT/);
       index.series[0].file='../outside.tsv';fs.writeFileSync(indexFile,JSON.stringify(index));
       await assert.rejects(readRun(root),/Invalid metric catalog entry/);

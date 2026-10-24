@@ -142,12 +142,17 @@ with-precursor and without-precursor objectives. `cross_entropy_loss` and
 `_without_precursor` charts. Raw cross-entropy and cosine diagnostics remain
 available separately.
 
-`samples`, `batches`, and `num_*` counts report means per batch iteration.
+`samples` and `num_*` counts report means per batch iteration. `batches`
+reports the batch count for an epoch or validation pass, with no train-window
+series. `samples_per_compound` divides each batch's sample count by its number
+of distinct compound SMILES; epoch and train-window values average these ratios.
 `total_samples` and `total_batches` retain interval totals in Dataset;
 Throughput contains the per-iteration counts. `loop_seconds` averages batch
 preparation, forward evaluation, metric collection, and, during training,
 backward and optimizer work. It excludes report publishing and free-running
 validation. `epoch_seconds` continues to report the complete epoch duration.
+The Display selector enables only modes supported by the selected series:
+mean (or a scalar value), median, and distribution with all five quantiles.
 
 Free-running validation evaluates fragment-ion adduct and hydrogen-shift
 assignments conditional on an annotated fragment being generated. For each

@@ -1,7 +1,11 @@
 const assert = require('assert/strict');
 const {JSDOM} = require('jsdom');
-const {html, script, metricOrder, groupSeries, metricInfo} = require('../src/features/training-metrics/editor');
+const {html, script, availableDisplayModes, metricOrder, groupSeries, metricInfo} = require('../src/features/training-metrics/editor');
 (async () => {
+  assert.deepEqual(availableDisplayModes([{stats:{value:[[1,2]]}}]),['mean']);
+  assert.deepEqual(availableDisplayModes([{stats:{mean:[[1,2]],median:[[1,2]]}}]),['mean','median']);
+  assert.deepEqual(availableDisplayModes([{stats:{q10:[[1,1]],q25:[[1,2]],median:[[1,3]],q75:[[1,4]],q90:[[1,5]],mean:[[1,3]]}}]),['mean','median','distribution']);
+  assert.deepEqual(availableDisplayModes([{stats:{mean:[],median:[]}}]),[]);
   const losses = ['spectrum_loss_without_precursor','branch_negative_loss','loss','branch_loss','branch_positive_loss','spectrum_loss_with_precursor','spectrum_loss','cross_entropy_loss','cross_entropy_loss_with_precursor','cross_entropy_loss_without_precursor','cosine_loss','cosine_loss_with_precursor','cosine_loss_without_precursor'];
   const series = losses.map(metric => ({name:'metrics/train_' + metric,points:[[1,2],[2,1]]}));
   for(const dimension of ['depth','collision_energy','main_adduct']) {
@@ -31,6 +35,7 @@ const {html, script, metricOrder, groupSeries, metricInfo} = require('../src/fea
   const findCard = metric => cards().find(card => card.querySelector('strong').textContent === metric);
   const orderedLosses = cards().map(c=>c.querySelector('strong').textContent).filter(name=>losses.includes(name));
   assert.deepEqual(orderedLosses.slice(0,4), ['loss','branch_loss','branch_positive_loss','branch_negative_loss']);
+  assert.deepEqual([...findCard('loss').querySelector('select').options].map(option=>[option.value,option.disabled]),[['mean',false],['median',true],['distribution',true]]);
   for (const metric of losses) {
     const card = findCard(metric);
     assert.ok(card, metric + ' must have its own chart');
@@ -44,6 +49,7 @@ const {html, script, metricOrder, groupSeries, metricInfo} = require('../src/fea
   assert.equal(windowToggle().checked,true);
   const lossMode=findCard('loss').querySelector('select');lossMode.value='distribution';lossMode.dispatchEvent(new window.Event('change'));
   assert.equal(windowToggle().checked,true,'an explicit choice must survive card rerenders');
+  assert.equal(findCard('loss').querySelector('select').value,'mean','invalid stored/display choices must fall back to an available mode');
   let memory = cards().find(c=>c.querySelector('strong').textContent.includes('cuda_peak_memory'));
   const select = [...memory.querySelectorAll('select')].find(s=>s.value==='GB');
   assert.ok(select, '30 GB must default to GB');

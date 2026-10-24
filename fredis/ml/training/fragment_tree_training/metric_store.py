@@ -134,6 +134,11 @@ def scalar_rows(events):
                 "",
             ):
                 continue
+            if event == "train_step" and key in (
+                "train_batches",
+                "train_window_batches",
+            ):
+                continue
             if (
                 event == "train_step"
                 and key.startswith("train_")
@@ -215,7 +220,8 @@ def normalize_legacy_scalar(row, intensity_weight):
             row[prefix + "total_samples"] = row[prefix + "samples"]
             row[prefix + "total_batches"] = batches
             row[prefix + "samples"] = float(row[prefix + "samples"]) / batches
-            row[prefix + "batches"] = 1
+        if row.get(prefix + "total_batches") not in (None, ""):
+            row[prefix + "batches"] = row[prefix + "total_batches"]
         if row.get(prefix + "intensity_loss") and not row.get(prefix + "spectrum_loss"):
             row[prefix + "spectrum_loss"] = row[prefix + "intensity_loss"]
         for suffix in ("with_precursor", "without_precursor"):
