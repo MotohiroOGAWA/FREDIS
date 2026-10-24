@@ -352,3 +352,60 @@ def test_branch_metrics_sum_confusion_counts_and_omit_undefined_ratios():
     empty = {}
     _add_branch_metrics(empty, {}, "validation/")
     assert empty == {}
+
+
+def test_ion_assignment_weights_by_fragment_intensity_and_penalizes_unknown_pairs():
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        ion_assignment_metrics,
+    )
+
+    batch = SimpleNamespace(
+        canonical_data=None,
+        node_smiles=("C", "CC"),
+        state_sample_index=torch.tensor([0, 0, 0]),
+        state_node_index=torch.tensor([0, 0, 1]),
+        state_adduct_index=torch.tensor([0, 1, 1]),
+        state_hydrogen_shift=torch.tensor([0, 1, 2]),
+        ion_type_strs=("[M+H]+", "[M+Na]+"),
+    )
+    annotation = {
+        "peaks": [
+            {
+                "matches": [
+                    {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0}
+                ]
+            },
+            {
+                "matches": [
+                    {"smiles": "CC", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0}
+                ]
+            },
+        ]
+    }
+    intensity = torch.tensor([0.6, 0.3, 0.1])
+    scores = ion_assignment_metrics(batch, 0, annotation, intensity)
+    for name in (
+        "fragment_ion_adduct_accuracy",
+        "hydrogen_shift_accuracy",
+        "ion_assignment_joint_accuracy",
+    ):
+        assert scores[name] == pytest.approx(0.9)
+    assert scores["ion_assignment_coverage"] == 1
+    # Filtering changes fragment weight as well as the states eligible for Top 1.
+    filtered = ion_assignment_metrics(
+        batch, 0, annotation, intensity, retained_rows={0, 2}
+    )
+    assert filtered["ion_assignment_joint_accuracy"] == pytest.approx(6 / 7)
+    # Both components can be allowed separately while the predicted pair is absent.
+    annotation["peaks"][0]["matches"] = [
+        {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 1},
+        {"smiles": "C", "fragmentIonAdduct": "[M+Na]+", "hydrogenShift": 0},
+    ]
+    scores = ion_assignment_metrics(batch, 0, annotation, intensity)
+    assert scores["fragment_ion_adduct_accuracy"] == pytest.approx(0.9)
+    assert scores["hydrogen_shift_accuracy"] == pytest.approx(0.9)
+    assert scores["ion_assignment_joint_accuracy"] == 0
+    zero = ion_assignment_metrics(batch, 0, annotation, torch.zeros(3))
+    assert zero["ion_assignment_joint_accuracy"] is None

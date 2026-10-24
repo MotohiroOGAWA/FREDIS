@@ -159,8 +159,8 @@ assignments conditional on an annotated fragment being generated. For each
 eligible non-precursor observed peak, select the highest-intensity predicted
 state among its annotated fragment identities, then compare its adduct and shift
 with the allowed annotations for that identity. Individual accuracies accept any
-allowed value; joint accuracy requires an allowed pair. Hydrogen-shift MAE uses
-the minimum absolute difference to an allowed shift. Missing fragments reduce
+allowed value; joint accuracy requires an allowed pair. Accuracy is weighted by
+the selected fragment SMILES' total retained predicted intensity. Missing fragments reduce
 `ion_assignment_coverage` and are excluded from conditional accuracy. Spectra
 with no eligible comparisons do not contribute to the accuracy distribution.
 These are annotation-consistency metrics, rather than uniquely established
@@ -276,3 +276,14 @@ with default 0, independent of the saved model's validation threshold. Set
 prediction CLI, or `peak_intensity_threshold=0.0` in the Python dataset API.
 Peaks at or below that value are removed. The value is saved in prediction
 configuration and does not change training or validation settings.
+
+Ion-assignment accuracies use predicted-fragment-intensity weighting within each
+spectrum: sum(weight * correct) / sum(weight). The weight is the sum of predicted
+intensities over retained ion states sharing the selected fragment SMILES; the
+highest-intensity state still determines its Top-1 adduct and hydrogen shift.
+Teacher-disallowed predictions remain in the denominator and score zero for
+whichever correctness conditions they fail. A pair absent from the allowed set
+always scores zero for joint accuracy, even if both components occur separately.
+Zero total weight gives an undefined accuracy; coverage remains an unweighted
+fraction of eligible annotated peaks. Across-spectrum summaries retain their
+existing per-spectrum aggregation.

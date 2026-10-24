@@ -209,7 +209,9 @@ def ion_assignment_metrics(
     """Evaluate the top ion state conditional on an annotated fragment identity.
 
     Ambiguous annotations remain sets of allowed (fragment, adduct, shift)
-    tuples. Missing fragments affect coverage, not conditional accuracy.
+    tuples. Accuracy is weighted by the selected SMILES fragment's total
+    retained-state predicted intensity. Missing fragments affect coverage, not
+    conditional accuracy.
     """
     names = (
         "fragment_ion_adduct_accuracy",
@@ -219,6 +221,8 @@ def ion_assignment_metrics(
     values = {name: [] for name in names}
     core = batch.canonical_data
     candidates = {}
+    fragment_weights = {}
+    weights = []
     for row in torch.nonzero(batch.state_sample_index == sample).flatten().tolist():
         if retained_rows is not None and row not in retained_rows:
             continue
@@ -231,6 +235,7 @@ def ion_assignment_metrics(
             batch.ion_type_strs[int(batch.state_adduct_index[row])],
             int(batch.state_hydrogen_shift[row]),
         )
+        fragment_weights[smiles] = fragment_weights.get(smiles, 0.0) + candidate[0]
         if smiles not in candidates or candidate[0] > candidates[smiles][0]:
             candidates[smiles] = candidate
     eligible = evaluated = 0
@@ -253,10 +258,20 @@ def ion_assignment_metrics(
         _, adduct, shift = candidates[smiles]
         labels = {(a, h) for sm, a, h in allowed if sm == smiles}
         evaluated += 1
+        weights.append(fragment_weights[smiles])
         values[names[0]].append(float(any(a == adduct for a, _ in labels)))
         values[names[1]].append(float(any(h == shift for _, h in labels)))
         values[names[2]].append(float((adduct, shift) in labels))
-    result = {name: sum(v) / len(v) if v else None for name, v in values.items()}
+    total_weight = sum(weights)
+    result = {
+        name: (
+            sum(weight * correct for weight, correct in zip(weights, outcomes))
+            / total_weight
+            if total_weight > 0
+            else None
+        )
+        for name, outcomes in values.items()
+    }
     result["ion_assignment_coverage"] = evaluated / eligible if eligible else None
     return result
 
