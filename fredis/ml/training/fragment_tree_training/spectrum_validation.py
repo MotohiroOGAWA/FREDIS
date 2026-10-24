@@ -436,12 +436,33 @@ def _report_metrics(records):
 
 @torch.no_grad()
 def validate_spectra(
-    generator, pieces, output_dir, label, *, global_step=None, progress=None, epoch=None
+    generator,
+    pieces,
+    output_dir,
+    label,
+    *,
+    global_step=None,
+    progress=None,
+    epoch=None,
+    status=None,
 ):
     was_training = generator.training
     generator.eval()
     records = []
     tolerance = generator.fragmenter.mass_tolerance
+    def generated_outputs(data):
+        iterator = iter(generator.predict_prepared_batches(data))
+        while True:
+            if status is not None:
+                status("generate")
+            try:
+                output = next(iterator)
+            except StopIteration:
+                return
+            if status is not None:
+                status("score")
+            yield output
+
     try:
         for piece_index, data in enumerate(pieces):
             if progress is not None:
@@ -451,7 +472,7 @@ def validate_spectra(
                     "Spectrum validation requires original peak annotations; regenerate structures"
                 )
             annotations = data.sample_annotations
-            for output in generator.predict_prepared_batches(data):
+            for output in generated_outputs(data):
                 for sample, input_index in enumerate(output.sample_input_index):
                     annotation = annotations[input_index]
                     threshold = generator.generation.peak_intensity_threshold
@@ -735,6 +756,8 @@ def validate_spectra(
         generator.train(was_training)
     if not records:
         raise ValueError("No validation spectra")
+    if status is not None:
+        status("save")
     ce = _ce_categories(records)
     cosine = [record["cosine_similarity"] for record in records]
     stats = distribution(cosine)

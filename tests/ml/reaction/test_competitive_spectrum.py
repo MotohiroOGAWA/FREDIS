@@ -942,7 +942,19 @@ def test_validation_persists_ion_assignment_facets(tmp_path):
         [[18.033826, 44.049476]],
         [[0.5, 1.0]],
     )
-    validate_spectra(generator, [data], tmp_path, "epoch_1", global_step=1, epoch=1)
+    actions = []
+    validate_spectra(
+        generator,
+        [data],
+        tmp_path,
+        "epoch_1",
+        global_step=1,
+        epoch=1,
+        status=actions.append,
+    )
+    assert actions[0] == "generate" and "score" in actions
+    assert actions[-1] == "save"
+
     payload = json.loads((tmp_path / "spectrum_validation/epoch_1.json").read_text())
     assert payload["spectra"]
     assert "fragment_ion_adduct_accuracy" in payload["spectra"][0]

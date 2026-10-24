@@ -77,7 +77,7 @@ def _sample_meets_assignment_score(
 
 
 PROGRESS_WIDTH = 100
-PROGRESS_FORMAT = "{desc:<18} {percentage:3.0f}%|{bar:36}| {n_fmt:>5}/{total_fmt:<5} [{elapsed}<{remaining}]"
+PROGRESS_FORMAT = "{desc:<38} {percentage:3.0f}%|{bar:12}| {n_fmt:>5}/{total_fmt:<5} [{elapsed}<{remaining}]{postfix}"
 
 
 def progress_bar(*, total, description, position, leave, initial=0):
@@ -94,6 +94,24 @@ def progress_bar(*, total, description, position, leave, initial=0):
         mininterval=0.1,
         maxinterval=1.0,
     )
+
+
+def validation_status(bar, detail=None, *, scope="Validation"):
+    """Label streamed validation work without inventing a separate full pass."""
+
+    def status(action):
+        phase, text = {
+            "generate": (2, "Generate spectra"),
+            "score": (2, "Match peaks & score spectra"),
+            "save": (3, "Save spectra & metrics"),
+        }[action]
+        bar.set_description_str(f"{scope} ({phase}/3)", refresh=True)
+        target = detail if detail is not None else bar
+        if detail is not None:
+            target.reset(total=1)
+        target.set_description_str(f"{scope} ({phase}/3): {text}", refresh=True)
+
+    return status
 
 
 def _write_metric_artifacts(output: Path, report: dict) -> None:
@@ -546,7 +564,7 @@ def train_reactions(
         lr = settings["lr"]
     # Build lightweight sample/chunk references from preparation sidecars.
     # Tensor payloads remain unopened until their first training/validation use.
-    startup_progress.set_description_str("Dataset index", refresh=True)
+    startup_progress.set_description_str("Startup (1/5): Index dataset", refresh=True)
     datasets, dataset_report = _load_prepared_datasets(
         train_dir,
         val_dir,
@@ -556,7 +574,7 @@ def train_reactions(
         cache_dataset_in_memory=cache_dataset_in_memory,
     )
     startup_progress.update(1)
-    startup_progress.set_description_str("Configuration", refresh=True)
+    startup_progress.set_description_str("Startup (2/5): Configure model", refresh=True)
     params = model_config
     model_config = inherit_model_config(
         model_config,
@@ -588,7 +606,12 @@ def train_reactions(
     write_training_configuration(output, model_config, settings)
     startup_progress.update(1)
     startup_progress.set_description_str(
-        "CUDA model" if use_cuda else "CPU model", refresh=True
+        (
+            "Startup (3/5): Load model on CUDA"
+            if use_cuda
+            else "Startup (3/5): Load model on CPU"
+        ),
+        refresh=True,
     )
     params = dict(model_config)
     generator = create_spectrum_generator(params).to(device)
@@ -603,7 +626,9 @@ def train_reactions(
     ).to(device)
     model.set_checkpoint_model_config(model_config)
     startup_progress.update(1)
-    startup_progress.set_description_str("Optimizer", refresh=True)
+    startup_progress.set_description_str(
+        "Startup (4/5): Create optimizer", refresh=True
+    )
     optimizer_parameters = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
         optimizer_parameters, lr=lr, weight_decay=weight_decay
@@ -616,6 +641,9 @@ def train_reactions(
     best = float("inf")
     bad_epochs = 0
     history = []
+    startup_progress.set_description_str(
+        "Startup (5/5): Restore training state", refresh=True
+    )
     initial_validation = None
     intermediate_history = []
     train_step_history = []
@@ -673,7 +701,7 @@ def train_reactions(
         json.dumps(parameter_report(model), indent=2)
     )
     startup_progress.update(1)
-    startup_progress.set_description_str("Ready", refresh=True)
+    startup_progress.set_description_str("Startup (5/5): Ready", refresh=True)
     startup_progress.close()
     # Chemistry ends here; CPU tensor collation can continue per batch.
     # Forward/backward, validation and compatibility masks use the selected device.
@@ -836,8 +864,13 @@ def train_reactions(
         validation_started = time.perf_counter()
         groups = batch_groups(intermediate_pieces, False)
         stage_progress.reset(total=len(groups) + len(intermediate_pieces))
-        stage_progress.set_description_str("Stage check")
-        stage_progress.set_postfix_str("validation loss", refresh=True)
+        validation_bar = iteration_progress["validation"]
+        validation_bar.reset(total=len(groups) + len(intermediate_pieces))
+        validation_bar.set_description_str(
+            "Validation check (1/3): Compute loss", refresh=True
+        )
+        stage_progress.set_description_str("Validation check (1/3): Compute loss")
+        stage_progress.set_postfix_str("", refresh=True)
         try:
             model.eval()
             with torch.no_grad():
@@ -863,6 +896,7 @@ def train_reactions(
                     batch_count += 1
                     del result, data, value
                     stage_progress.update(1)
+                    validation_bar.update(1)
         finally:
             model.train(was_training)
         row = {
@@ -890,7 +924,9 @@ def train_reactions(
         append_metric_distributions(
             output, global_step, "intermediate_validation", batch_metrics, epoch=epoch
         )
-        stage_progress.set_postfix_str("generate spectrum", refresh=True)
+        stage_progress.set_description_str(
+            "Validation check (2/3): Generate spectra", refresh=True
+        )
         row.update(
             {
                 "validation/" + k: v
@@ -899,9 +935,14 @@ def train_reactions(
                     intermediate_pieces,
                     output,
                     f"step_{global_step}",
+                    status=validation_status(
+                        validation_bar, stage_progress, scope="Validation check"
+                    ),
                     global_step=global_step,
                     progress=lambda _, phase, *rest: (
-                        stage_progress.update(1) if phase == "end" else None
+                        (stage_progress.update(1), validation_bar.update(1))
+                        if phase == "end"
+                        else None
                     ),
                     epoch=epoch,
                 ).items()
@@ -922,12 +963,17 @@ def train_reactions(
             replace=True,
         )
 
+        stage_progress.update(1)
+        validation_bar.reset(total=len(epoch_groups[1]) + len(datasets[1]))
+        validation_bar.set_description_str("Validation (waiting)", refresh=True)
+        validation_bar.set_postfix_str("", refresh=True)
+
     def evaluate_initial_model():
         """Plot an epoch-zero reference without changing training or stopping state."""
         groups = batch_groups(datasets[1], False)
         bar = progress_bar(
             total=len(groups) + len(datasets[1]),
-            description="Validation epoch 0",
+            description="Validation epoch 0 (1/3): Compute loss",
             position=0,
             leave=True,
         )
@@ -991,6 +1037,7 @@ def train_reactions(
                         datasets[1],
                         output,
                         "epoch_0",
+                        status=validation_status(bar, scope="Validation epoch 0"),
                         global_step=0,
                         epoch=0,
                         progress=lambda _, phase, *rest: (
@@ -1048,24 +1095,28 @@ def train_reactions(
             iteration_progress = {
                 "train": progress_bar(
                     total=len(epoch_groups[0]),
-                    description="Iteration(Train)",
+                    description="Train",
                     position=1,
                     leave=False,
                 ),
                 "validation": progress_bar(
                     total=len(epoch_groups[1]) + len(datasets[1]),
-                    description="Iteration(Validation)",
+                    description="Validation (waiting)",
                     position=2,
                     leave=False,
                 ),
             }
             stage_progress = progress_bar(
-                total=1, description="Stage", position=3, leave=False
+                total=1, description="Batch (waiting)", position=3, leave=False
             )
             for name, pieces, groups in zip(
                 ("train", "validation"), datasets, epoch_groups
             ):
                 model.train(name == "train")
+                if name == "validation":
+                    iteration_progress[name].set_description_str(
+                        "Validation (1/3): Compute loss", refresh=True
+                    )
                 totals = {}
                 sample_count = 0
                 batch_count = 0
@@ -1078,13 +1129,24 @@ def train_reactions(
                             else ("prepare", "forward", "metrics")
                         )
                         stage_progress.reset(total=len(stages))
-                        stage_progress.set_description_str(f"Stage {name}")
-                        stage_progress.set_postfix_str(stages[0], refresh=True)
+                        stage_progress.set_description_str(
+                            "Train (1/5): Move batch to device"
+                            if name == "train"
+                            else "Validation (1/3): Move batch to device"
+                        )
+                        stage_progress.set_postfix_str("", refresh=True)
                         # Repeated molecular graphs (including Source roots) are
                         # encoded once and gathered for each sample's tree.
                         data = data.to(device)
                         stage_progress.update(1)
-                        stage_progress.set_postfix_str("forward", refresh=True)
+                        stage_progress.set_description_str(
+                            (
+                                "Train (2/5): Predict & compute loss"
+                                if name == "train"
+                                else "Validation (1/3): Predict & compute loss"
+                            ),
+                            refresh=True,
+                        )
                         if name == "train":
                             if global_step < warmup_steps:
                                 for group in optimizer.param_groups:
@@ -1099,7 +1161,9 @@ def train_reactions(
                                 f"Non-finite {name} loss at epoch {epoch+1}"
                             )
                         if name == "train":
-                            stage_progress.set_postfix_str("backward", refresh=True)
+                            stage_progress.set_description_str(
+                                "Train (3/5): Compute gradients", refresh=True
+                            )
                             result.loss.backward()
                             norm = torch.nn.utils.clip_grad_norm_(
                                 (p for p in model.parameters() if p.requires_grad),
@@ -1107,7 +1171,9 @@ def train_reactions(
                                 error_if_nonfinite=True,
                             )
                             stage_progress.update(1)
-                            stage_progress.set_postfix_str("optimizer", refresh=True)
+                            stage_progress.set_description_str(
+                                "Train (4/5): Update model weights", refresh=True
+                            )
                             gradient_values.append(float(norm))
                             optimizer.step()
                             global_step += 1
@@ -1125,7 +1191,14 @@ def train_reactions(
                                     "learning_rate", []
                                 ).append(float(optimizer.param_groups[0]["lr"]))
                             stage_progress.update(1)
-                        stage_progress.set_postfix_str("metrics", refresh=True)
+                        stage_progress.set_description_str(
+                            (
+                                "Train (5/5): Collect metrics"
+                                if name == "train"
+                                else "Validation (1/3): Collect loss metrics"
+                            ),
+                            refresh=True,
+                        )
                         values = metric_values(result)
                         live = {}
                         for key, value in values.items():
@@ -1216,8 +1289,10 @@ def train_reactions(
             def spectrum_progress(_, phase, mean_cosine=None):
                 if phase == "start":
                     stage_progress.reset(total=1)
-                    stage_progress.set_description_str("Stage inference")
-                    stage_progress.set_postfix_str("generate spectrum", refresh=True)
+                    stage_progress.set_description_str(
+                        "Validation (2/3): Generate spectra"
+                    )
+                    stage_progress.set_postfix_str("", refresh=True)
                 else:
                     stage_progress.update(1)
                     iteration_progress["validation"].update(1)
@@ -1236,12 +1311,16 @@ def train_reactions(
                         datasets[1],
                         output,
                         f"epoch_{epoch+1}",
+                        status=validation_status(
+                            iteration_progress["validation"], stage_progress
+                        ),
                         global_step=global_step,
                         progress=spectrum_progress,
                         epoch=epoch + 1,
                     ).items()
                 }
             )
+            stage_progress.update(1)
             stage_progress.close()
             iteration_progress["train"].close()
             iteration_progress["validation"].close()

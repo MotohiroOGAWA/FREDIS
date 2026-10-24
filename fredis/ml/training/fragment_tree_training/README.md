@@ -287,3 +287,11 @@ always scores zero for joint accuracy, even if both components occur separately.
 Zero total weight gives an undefined accuracy; coverage remains an unweighted
 fraction of eligible annotated peaks. Across-spectrum summaries retain their
 existing per-spectrum aggregation.
+
+Terminal progress uses `Train` for batch iteration and numbered batch work
+(1/5 move to device, 2/5 predict and compute loss, 3/5 compute gradients,
+4/5 update model weights, 5/5 collect metrics). Validation labels identify
+1/3 prepared-data loss calculation, 2/3 spectrum generation and peak matching/
+scoring, and 3/3 saving spectra and metrics. Generation and scoring alternate
+within stage 2/3 as batches stream; no extra full-dataset pass is implied.
+Initial epoch-0 and intermediate validation use the same named stages.

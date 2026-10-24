@@ -29,7 +29,27 @@ class TestTrainingSources(unittest.TestCase):
         self.assertEqual(kwargs["ncols"], 100)
         self.assertFalse(kwargs["dynamic_ncols"])
         self.assertEqual(kwargs["position"], 1)
-        self.assertIn("{bar:36}", kwargs["bar_format"])
+        self.assertIn("{bar:12}", kwargs["bar_format"])
+        self.assertIn("{postfix}", kwargs["bar_format"])
+
+    def test_validation_progress_names_the_current_work(self):
+        from unittest.mock import MagicMock
+
+        bar, detail = MagicMock(), MagicMock()
+        status = training.validation_status(bar, detail)
+        status("generate")
+        detail.set_description_str.assert_called_with(
+            "Validation (2/3): Generate spectra", refresh=True
+        )
+        status("score")
+        detail.set_description_str.assert_called_with(
+            "Validation (2/3): Match peaks & score spectra", refresh=True
+        )
+        status("save")
+        bar.set_description_str.assert_called_with("Validation (3/3)", refresh=True)
+        detail.set_description_str.assert_called_with(
+            "Validation (3/3): Save spectra & metrics", refresh=True
+        )
 
     def test_resumed_progress_starts_at_completed_epoch(self):
         with patch.object(training, "tqdm") as tqdm:
