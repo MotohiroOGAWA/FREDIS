@@ -4,7 +4,7 @@ const {readRun,readCharts,validationResult,html,script}=require('../src/features
 (async()=>{
   const boundaries=[{step:0,epoch:0},{step:100,epoch:1},{step:250,epoch:2}];const axis=createEpochAxis(boundaries);
   assert.equal(axis.at(0),0);assert.equal(axis.at(50),.5);assert.equal(axis.at(100),1);assert.equal(axis.at(175),1.5);assert.equal(axis.at(250),2);
-  assert.equal(axis.at(325),2.5);assert.equal(axis.estimated(325),true);assert.equal(axis.estimated(175),false);assert.equal(createEpochAxis([]).at(50),null);
+  assert.equal(axis.at(325),2.5);assert.equal(axis.estimated(325),true);assert.equal(axis.estimated(175),false);assert.equal(createEpochAxis([]).at(50),50);assert.equal(createEpochAxis([]).mode,'step');assert.equal(axis.mode,'epoch');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'fredis-epoch-axis-'));let dom;
   try{
     fs.mkdirSync(path.join(root,'spectrum_validation'));
@@ -36,6 +36,18 @@ const {readRun,readCharts,validationResult,html,script}=require('../src/features
     const request=posted.at(-1);assert.equal(request.validationKey,'epoch_2');
     send({type:'metricsValidationData',request:0,validationRequest:request.validationRequest,data:await validationResult(root,{},'epoch_2')});
     number.value=1.5;number.dispatchEvent(new window.Event('change'));assert.equal(posted.at(-1).validationKey,'step_175');
+    const firstRoot=path.join(root,'first');fs.mkdirSync(path.join(firstRoot,'spectrum_validation'),{recursive:true});
+    fs.writeFileSync(path.join(firstRoot,'metrics.tsv'),'event\tepoch\tglobal_step\ttrain_loss\nepoch_end\t0\t0\t3\ntrain_step\t1\t50\t2\n');
+    for(const label of ['epoch_0','step_50'])fs.writeFileSync(path.join(firstRoot,'spectrum_validation',label+'.json'),JSON.stringify({summary:{samples:1},representatives:{cosine_similarity:{q10:{spectrum_index:0,value:.7}}},spectra:[record]}));
+    const firstValidation=await validationResult(firstRoot,{},'step_50');assert.equal(firstValidation.axisMode,'step');assert.equal(firstValidation.epoch,50);
+    const firstRender=new Promise(resolve=>window.addEventListener('trainingMetricsRendered',resolve,{once:true}));
+    send({type:'metricsData',request:0,data:{directory:firstRoot,epochBoundaries:[{step:0,epoch:0}],validation:firstValidation,series:[{name:'metrics/train_loss',points:[[10,3],[50,2]]}]}});await firstRender;
+    assert.match(document.getElementById('metricsCharts').textContent,/Step/);
+    const firstPlot=document.querySelector('#metricsCharts svg[role="img"]');assert.ok(firstPlot,'first-epoch points must be visible');firstPlot.getBoundingClientRect=()=>({left:0,width:600});firstPlot.dispatchEvent(new window.MouseEvent('mousemove',{clientX:575}));
+    assert.match(document.getElementById('metricsCharts').textContent,/step 50/);assert.equal(document.getElementById('representativeAxisLabel').textContent,'Step');
+    const completedRender=new Promise(resolve=>window.addEventListener('trainingMetricsRendered',resolve,{once:true}));
+    send({type:'metricsData',request:0,data:{directory:root,epochBoundaries:boundaries,validation,series:[{name:'metrics/train_loss',points}]}});await completedRender;
+    assert.match(document.getElementById('metricsCharts').textContent,/Epoch/);assert.equal(document.getElementById('representativeAxisLabel').textContent,'Epoch');
     console.log('Fractional epoch interpolation, raw step retention, chart geometry/hover, and intermediate spectrum selection passed.');
   }finally{dom?.window.close();fs.rmSync(root,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

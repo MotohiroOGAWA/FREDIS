@@ -13,13 +13,13 @@ function createEpochAxis(boundaries) {
     if(!Number.isFinite(step)||step<0)return null;
     const exact=anchors.find(point=>point.step===step);
     if(exact)return exact.epoch;
-    if(anchors.length<2)return null;
+    if(anchors.length<2)return step;
     let right=anchors.findIndex(point=>point.step>step);
     if(right<0)right=anchors.length-1;
     const a=anchors[right-1],b=anchors[right];
     return a.epoch+(step-a.step)/(b.step-a.step)*(b.epoch-a.epoch);
   };
-  return {at,estimated:step=>anchors.length>1&&Number(step)>anchors.at(-1).step,
+  return {at,mode:anchors.length>1?'epoch':'step',estimated:step=>anchors.length>1&&Number(step)>anchors.at(-1).step,
     format:epoch=>Number(epoch).toFixed(4).replace(/0+$/,'').replace(/\.$/,'')};
 }
 module.exports={createEpochAxis};

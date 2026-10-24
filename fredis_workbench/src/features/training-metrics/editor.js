@@ -31,6 +31,7 @@ async function validationResult(root, manifest = {}, requestedEpoch = null) {
     }
   }
   const axis=createEpochAxis(epochBoundaries);
+  const axisMode=labels.some(label=>label.startsWith('step_'))?axis.mode:'epoch';
   const checkpoints=labels.map(key=>{
     const [kind,number]=key.split('_'),step=kind==='step'?Number(number):null;
     return {key,epoch:kind==='epoch'?Number(number):axis.at(step),step,estimated:step!==null&&axis.estimated(step)};
@@ -47,7 +48,7 @@ async function validationResult(root, manifest = {}, requestedEpoch = null) {
   const target=path.join(directory,selected.key+'.json');
   const value=await require('./validation-reader').readValidation(target);
   return {file:path.relative(root,target),epoch:selected.epoch,key:selected.key,estimated:selected.estimated,
-    epochs:[...new Set(checkpoints.map(item=>item.epoch))],checkpoints,epochBoundaries,
+    epochs:[...new Set(checkpoints.map(item=>item.epoch))],checkpoints,epochBoundaries,axisMode,
     msdsFile:fs.existsSync(target.replace(/\.json$/,'.msds'))?path.relative(root,target.replace(/\.json$/,'.msds')):null,
     summary:value.summary||{},representatives:value.representatives||{}};
 }
@@ -378,7 +379,7 @@ function attach(panel) {
   });
 }
 function html({ hidden = true, autoRefresh = true } = {}) {
-  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section id="representativeValidation" style="min-width:0;overflow-anchor:none"><h2>Representative validation spectra</h2><div class="actions"><label>Epoch <input id="representativeEpoch" type="number" min="0" step="any" style="width:100px"></label><input id="representativeEpochSlider" type="range" min="0" step="any" aria-label="Validation epoch" style="min-width:200px"><label>Validation <select id="representativeCheckpoint" style="max-width:260px"></select></label><label><input id="representativePrecursor" type="checkbox" checked> Use scores with precursor</label></div><p id="representativeStatus" class="muted" style="height:2.6em;margin:6px 0;overflow:auto"></p><p class="muted">The plot contains the union of assignment-score and cosine representatives at q10, q25, q50, q75, and q90, selected both with and without precursor peaks. Changing the checkbox changes coordinates only.</p><div id="representativeScatter"></div><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
+  return `<div id="metricsApp"${hidden ? ' hidden' : ''}><section><h2>Training Report</h2><label>Run directory or result.training.pft<input id="metricsDirectory" type="text" data-path-kind="folder" placeholder="/path/to/run/result.training.pft" style="width:100%"></label><div class="actions"><button id="metricsBrowse">Browse…</button><button id="metricsLoad">Load / Refresh</button>${autoRefresh ? '<label><input id="metricsAuto" type="checkbox"> Auto refresh (15s)</label>' : ''}</div><p id="metricsStatus" role="status"></p><p class="muted">Each metric appears once. Chart data loads when selected. After adding it, switch that card between mean, median, and q10–q90 distribution views, or exclude precursor peaks. Train uses warm colors and validation uses cool colors; a breakdown (collision energy, adduct, depth) colors each category instead.</p><div class="actions"><input id="metricsFilter" type="search" placeholder="Filter charts" aria-label="Filter charts"><select id="metricsChoice" aria-label="Chart metric" style="max-width:80%"></select><button id="metricsAdd" disabled>＋ Add chart</button><button id="metricsAddAll" disabled>Add all charts</button><button id="metricsClear">Clear charts</button><label>Layout <select id="metricsLayout"><option value="grid">Grid</option><option value="vertical">Vertical</option></select></label></div></section><div id="metricsCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px"></div><section id="representativeValidation" style="min-width:0;overflow-anchor:none"><h2>Representative validation spectra</h2><div class="actions"><label><span id="representativeAxisLabel">Epoch</span> <input id="representativeEpoch" type="number" min="0" step="any" style="width:100px"></label><input id="representativeEpochSlider" type="range" min="0" step="any" aria-label="Validation epoch" style="min-width:200px"><label>Validation <select id="representativeCheckpoint" style="max-width:260px"></select></label><label><input id="representativePrecursor" type="checkbox" checked> Use scores with precursor</label></div><p id="representativeStatus" class="muted" style="height:2.6em;margin:6px 0;overflow:auto"></p><p class="muted">The plot contains the union of assignment-score and cosine representatives at q10, q25, q50, q75, and q90, selected both with and without precursor peaks. Changing the checkbox changes coordinates only.</p><div id="representativeScatter"></div><div id="representativeSpectra" style="display:grid;grid-template-columns:minmax(min(100%,760px),1fr);gap:12px"></div></section></div>`;
 }
 function metricInfo(metric, dimension = '') {
   const groups = [
@@ -592,7 +593,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     if (settings.mode === 'distribution') { const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = 'Light band: q10–q90 · Dark band: q25–q75 · Line: median'; card.append(hint); }
     const visibleStats=lane=>settings.mode==='distribution'?['q10','q25','median','q75','q90']:settings.mode==='median'?['median','value']:['mean','value'];
     const points = lanes.flatMap(lane => visibleStats(lane).flatMap(stat=>lane.stats[stat]||[])).filter(point=>epochAxis.at(point[0])!==null);
-    if (!points.length) { const p = document.createElement('p'); p.textContent = epochBoundaries.length?'No measurements available to display.':'Epoch positions become available after the first completed epoch.'; card.append(p); }
+    if (!points.length) { const p = document.createElement('p'); p.textContent = 'No measurements available to display.'; card.append(p); }
     else {
       const ns = 'http://www.w3.org/2000/svg';
       const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 600 260'); svg.style.width = '100%'; svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', name);
@@ -629,14 +630,14 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
       }
       node('text', { x:75, y:240, fill:'currentColor', 'font-size':12 }, epochAxis.format(first));
       node('text', { x:575, y:240, fill:'currentColor', 'font-size':12, 'text-anchor':'end' }, epochAxis.format(last));
-      node('text',{x:325,y:257,fill:'currentColor','font-size':12,'text-anchor':'middle'},'Epoch');
+      node('text',{x:325,y:257,fill:'currentColor','font-size':12,'text-anchor':'middle'},epochAxis.mode==='step'?'Step':'Epoch');
       const info = document.createElement('p'); info.className = 'muted'; info.style.whiteSpace = 'pre-line'; info.textContent = (faceted ? 'Color: category · Dashed: intermediate validation' : 'Color: split') + ' · Hover to inspect' + (points.some(point=>epochAxis.estimated(point[0]))?' · Current-epoch positions are estimated until its end step is recorded.':'');
       svg.onmousemove = event => {
         const rect = svg.getBoundingClientRect(); const epoch = first + ((event.clientX-rect.left)/rect.width*600-75)/500*(last-first);
         info.textContent = lanes.map(lane => {
           const values = visibleStats(lane).filter(stat=>lane.stats[stat]?.some(point=>epochAxis.at(point[0])!==null)).map(stat => { const samples=lane.stats[stat].filter(point=>epochAxis.at(point[0])!==null);
             let closest = samples[0]; for (const p of samples) if (Math.abs(epochAxis.at(p[0])-epoch)<Math.abs(epochAxis.at(closest[0])-epoch)) closest=p;
-            return stat+'='+closest[1].toPrecision(5)+(memoryUnit?' '+memoryUnit:'')+' (epoch '+epochAxis.format(epochAxis.at(closest[0]))+(epochAxis.estimated(closest[0])?' estimated':'')+')';
+            return stat+'='+closest[1].toPrecision(5)+(memoryUnit?' '+memoryUnit:'')+' ('+epochAxis.mode+' '+epochAxis.format(epochAxis.at(closest[0]))+(epochAxis.estimated(closest[0])?' estimated':'')+')';
           });
           return lane.label+': '+values.join(' · ');
         }).join('\n');
@@ -708,12 +709,13 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     const epochs=validation?.epochs || [];
     const epochInput=el('representativeEpoch'),slider=el('representativeEpochSlider');
     for(const control of [epochInput,slider]) {control.disabled=!epochs.length;control.min=epochs[0]??0;control.max=epochs.at(-1)??0;control.step='any';control.value=selectedEpoch??validation?.epoch??epochs.at(-1)??0;}
+    el('representativeAxisLabel').textContent=validation?.axisMode==='step'?'Step':'Epoch';
     const checkpointSelect=el('representativeCheckpoint');checkpointSelect.replaceChildren();
-    for(const point of validationCheckpoints()){const option=document.createElement('option');option.value=point.key;option.textContent='Epoch '+epochAxis.format(point.epoch)+(point.estimated?' (estimated)':'')+' · '+point.key;checkpointSelect.append(option);}
+    for(const point of validationCheckpoints()){const option=document.createElement('option');option.value=point.key;option.textContent=(validation?.axisMode==='step'?'Step ':'Epoch ')+epochAxis.format(point.epoch)+(point.estimated?' (estimated)':'')+' · '+point.key;checkpointSelect.append(option);}
     checkpointSelect.value=selectedValidationKey||validation?.key||'epoch_'+validation?.epoch;checkpointSelect.disabled=!validationCheckpoints().length;
     const plotBox=el('representativeScatter'),spectrumBox=el('representativeSpectra');
     for (const box of [plotBox,spectrumBox]) {box.setAttribute('aria-busy',String(epochLoading));box.inert=epochLoading;box.style.opacity=epochLoading?'.55':'';}
-    if (epochLoading) {el('representativeStatus').textContent='Loading epoch '+selectedEpoch+'…';return;}
+    if (epochLoading) {el('representativeStatus').textContent='Loading '+(validation?.axisMode==='step'?'step ':'epoch ')+selectedEpoch+'…';return;}
     plotBox.replaceChildren();
     const points=representativePoints(validation?.representatives);
     if (!points.length) {spectrumBox.hidden=true;el('representativeStatus').textContent=report?'No validation spectrum artifact is available yet.':'Load a training report to see representative spectra.';return;}
@@ -760,7 +762,7 @@ function client(groupSeries, metricInfo, metricOrder, representativePoints, msen
     const note=document.createElement('p');note.className='muted';note.style.cssText='height:2.8em;overflow:auto';note.textContent='Saved validation scores drive the scatter plot. The msentity Similarity control independently recalculates similarity using its selected method and Da tolerance.';details.append(note);
     const smiles=document.createElement('p');smiles.style.cssText='height:2.8em;overflow:auto;overflow-wrap:anywhere';smiles.textContent='SMILES: '+(record.smiles||record.SMILES||'Unavailable in this legacy artifact.');details.append(smiles);
     const reasons=document.createElement('p');reasons.className='muted';reasons.style.cssText='height:2.8em;overflow:auto';reasons.textContent='Selected by: '+point.selections.join(' / ');details.append(reasons);
-    el('representativeStatus').textContent='Epoch '+epochAxis.format(validation.epoch)+(validation.estimated?' (estimated)':'')+' · '+validation.file+' · '+points.length+' representative spectra · '+(validation.msdsFile||'legacy JSON');
+    el('representativeStatus').textContent=(validation.axisMode==='step'?'Step ':'Epoch ')+epochAxis.format(validation.epoch)+(validation.estimated?' (estimated)':'')+' · '+validation.file+' · '+points.length+' representative spectra · '+(validation.msdsFile||'legacy JSON');
   }
   if (typeof ResizeObserver !== 'undefined') {
     let lastWidth=0;

@@ -241,8 +241,8 @@ completed epoch boundaries `(step_N, N)` and `(step_Nplus1, N+1)`, the position 
 unchanged in storage. Indexed runs read a small scalar partition for boundary
 metadata rather than loading all chart files. An unfinished epoch uses the
 latest completed interval as an explicitly marked estimate; the next completed
-boundary corrects the positions. Before any completed interval exists, pending
-step positions wait for the first boundary.
+boundary corrects the positions. Before any completed interval exists, charts use a Step axis. Once the first
+epoch completes, they switch automatically to fractional Epoch coordinates.
 
 The validation-spectrum number input and slider also include intermediate
 `step_N` artifacts at their fractional epoch positions. The Validation selector
