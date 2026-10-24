@@ -33,6 +33,17 @@ const { readRun, groupSeries, html, script } = require('../src/features/training
   assert.ok(!grouped.some(c => c.name === 'recall_depth_10'));
   assert.deepEqual(grouped.find(c => c.name === 'loss').variants.withPrecursor.map(l => l.split), ['train', 'validation']);
   assert.equal(grouped.flatMap(c => c.sources).length, fixture.length - 1);
+  const facets = groupSeries([
+    ...['high', 'low', 'mid'].map(category => ({name: `distributions/validation/cosine_similarity@collision_energy:${category}_mean`, points:[[10,.2],[20,.4]]})),
+    ...['[M+H]+', '[M+Na]+'].map(category => ({name: `distributions/validation/cosine_similarity@main_adduct:${category}_mean`, points:[[10,.2],[20,.4]]})),
+    ...[0,1,2,3].map(category => ({name: `distributions/validation/assignment_score@depth:${category}_mean`, points:[[10,.2],[20,.4]]})),
+    ...[20,5,1,10].map(n => ({name: `metrics/val_peak_precision_top${n}`, points:[[10,.2]]})),
+  ], 3);
+  assert.deepEqual(facets.find(c => c.dimension === 'collision_energy').variants.withPrecursor.map(l => l.category), ['low','mid','high']);
+  assert.equal(facets.find(c => c.dimension === 'main_adduct').variants.withPrecursor.length, 2);
+  assert.ok(facets.find(c => c.dimension === 'main_adduct').variants.withPrecursor.every(l => l.stats.mean.length === 2));
+  assert.equal(facets.find(c => c.dimension === 'depth').variants.withPrecursor.length, 4);
+  assert.deepEqual(facets.filter(c => c.metric.startsWith('peak_precision')).map(c => c.metric), ['peak_precision_top01','peak_precision_top05','peak_precision_top10','peak_precision_top20']);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fredis-metrics-'));
   try {
     await assert.rejects(readRun(dir), /No metrics\.tsv or metric_distributions\.tsv found/);

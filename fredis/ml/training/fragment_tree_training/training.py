@@ -380,7 +380,6 @@ def train_reactions(
     import time
     from .sources import inherit_model_config
     from ...input.reaction_batching import select_samples
-    from torch.utils.tensorboard import SummaryWriter
 
     if resume and pattern_parameters:
         raise ValueError("Reaction architecture cannot change on Resume")
@@ -676,15 +675,6 @@ def train_reactions(
         "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad),
         "frozen": sum(p.numel() for p in model.parameters() if not p.requires_grad),
     }
-    writer = SummaryWriter(
-        str(output / "tensorboard"), purge_step=start + 1 if resume else None
-    )
-    iteration_writer = SummaryWriter(
-        str(output / "tensorboard" / "iterations"),
-        purge_step=global_step + 1 if resume else None,
-    )
-    writer.add_text("configuration/model", json.dumps(model_config, indent=2))
-    writer.add_text("configuration/training", json.dumps(settings, indent=2))
     started = time.perf_counter()
     stop_reason = "epochs_completed"
 
@@ -771,10 +761,6 @@ def train_reactions(
         append_metric_distributions(
             output, global_step, "train_window", train_window_batch_metrics, epoch=epoch
         )
-        for key, value in row.items():
-            if key not in ("epoch", "global_step"):
-                iteration_writer.add_scalar("train_interval/" + key, value, global_step)
-        iteration_writer.flush()
         publish_metrics()
         write_training_report(
             output,
@@ -871,12 +857,6 @@ def train_reactions(
             + "\n"
         )
         temporary.replace(output / "intermediate_validation.tsv")
-        for key, value in row.items():
-            if key not in ("epoch", "global_step"):
-                iteration_writer.add_scalar(
-                    "intermediate_validation/" + key, value, global_step
-                )
-        iteration_writer.flush()
 
     def evaluate_initial_model():
         """Plot an epoch-zero reference without changing training or stopping state."""
@@ -941,10 +921,6 @@ def train_reactions(
                 }
             )
             row["epoch_seconds"] = time.perf_counter() - begin
-            for key, value in row.items():
-                if key != "epoch":
-                    writer.add_scalar(key, value, 0)
-            writer.flush()
             return row
         finally:
             model.train(was_training)
@@ -1066,19 +1042,6 @@ def train_reactions(
                                 train_window_batch_metrics.setdefault(
                                     "learning_rate", []
                                 ).append(float(optimizer.param_groups[0]["lr"]))
-                            iteration_writer.add_scalar(
-                                "batch/train_loss",
-                                float(result.loss.detach()),
-                                global_step,
-                            )
-                            iteration_writer.add_scalar(
-                                "batch/gradient_norm", float(norm), global_step
-                            )
-                            iteration_writer.add_scalar(
-                                "batch/learning_rate",
-                                optimizer.param_groups[0]["lr"],
-                                global_step,
-                            )
                             stage_progress.update(1)
                         stage_progress.set_postfix_str("metrics", refresh=True)
                         values = metric_values(result)
@@ -1189,11 +1152,6 @@ def train_reactions(
             if global_step >= warmup_steps:
                 scheduler.step(row["validation_loss"])
             history.append(row)
-            for key, value in row.items():
-                if key != "epoch":
-                    writer.add_scalar(key, value, epoch + 1)
-            writer.flush()
-            iteration_writer.flush()
             report = publish_metrics()
             saved = dict(
                 model_config=model_config,
@@ -1314,8 +1272,6 @@ def train_reactions(
                 bar.close()
         if "epoch_progress" in locals():
             epoch_progress.close()
-        writer.close()
-        iteration_writer.close()
 
 
 class MLPWidths(list):

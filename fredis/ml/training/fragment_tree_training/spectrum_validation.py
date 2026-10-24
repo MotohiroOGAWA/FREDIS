@@ -99,10 +99,10 @@ def top_n_assignment_metrics(
         )
         # No assigned ground truth at all means the question isn't answerable,
         # not that the model scored zero (mirrors assignment_score's None).
-        result[f"peak_recall_top{n}{suffix}"] = (
+        result[f"peak_recall_top{n:02d}{suffix}"] = (
             (len(matched) / len(assigned)) if assigned else None
         )
-        result[f"peak_precision_top{n}{suffix}"] = (
+        result[f"peak_precision_top{n:02d}{suffix}"] = (
             (len(matched) / n) if assigned else None
         )
     return result
@@ -196,7 +196,7 @@ def _original_depths(data, sample, annotation, tolerance):
         candidates = [
             node_depths[node]
             for match in peak.get("matches", ())
-            for node in match.get("nodeIndices", ())
+            for node in match.get("nodeIds", match.get("nodeIndices", ()))
             if node in node_depths
         ]
         result.append(min(candidates) if candidates else None)
@@ -321,7 +321,7 @@ def _report_metrics(records):
     # per-depth split of a handful of candidates isn't meaningful, so they get
     # the flat + collision-energy/adduct facets only, not the depth facet.
     top_n_names = tuple(
-        f"peak_{kind}_top{n}{suffix}"
+        f"peak_{kind}_top{n:02d}{suffix}"
         for kind in ("recall", "precision")
         for n in TOP_N_VALUES
         for suffix in ("", "_without_precursor")
@@ -525,7 +525,7 @@ def validate_spectra(
                         )
                         if observed_np
                         else {
-                            f"peak_{kind}_top{n}_without_precursor": None
+                            f"peak_{kind}_top{n:02d}_without_precursor": None
                             for kind in ("recall", "precision")
                             for n in TOP_N_VALUES
                         }
@@ -662,8 +662,8 @@ def validate_spectra(
         )
     mean = lambda values: (distribution(values) or {"mean": 0.0})["mean"]
     top_n_summary = {
-        f"peak_{kind}_top{n}{suffix}": mean(
-            r[f"peak_{kind}_top{n}{suffix}"] for r in records
+        f"peak_{kind}_top{n:02d}{suffix}": mean(
+            r[f"peak_{kind}_top{n:02d}{suffix}"] for r in records
         )
         for kind in ("recall", "precision")
         for n in TOP_N_VALUES

@@ -31,10 +31,10 @@ def test_top_n_metrics_reward_recall_but_penalize_padding_with_junk_candidates()
     generated = ([{'mz': 100., 'intensity': 9.}, {'mz': 200., 'intensity': 4.}] +
                  [{'mz': 500. + i, 'intensity': .01} for i in range(30)])
     metrics = top_n_assignment_metrics(generated, observed, tolerance)
-    assert metrics['peak_recall_top1'] == pytest.approx(1 / 3)
-    assert metrics['peak_precision_top1'] == pytest.approx(1.0)
-    assert metrics['peak_recall_top5'] == pytest.approx(2 / 3)
-    assert metrics['peak_precision_top5'] == pytest.approx(2 / 5)
+    assert metrics['peak_recall_top01'] == pytest.approx(1 / 3)
+    assert metrics['peak_precision_top01'] == pytest.approx(1.0)
+    assert metrics['peak_recall_top05'] == pytest.approx(2 / 3)
+    assert metrics['peak_precision_top05'] == pytest.approx(2 / 5)
     # Recall cannot improve past what was actually generated (300 was never
     # produced), but precision keeps dropping as N grows past real hits --
     # exactly the signal that a large candidate pool doesn't buy a free ride.
@@ -48,8 +48,8 @@ def test_top_n_metrics_are_none_without_any_assigned_ground_truth():
     generated = [{'mz': 1., 'intensity': 1.}]
     metrics = top_n_assignment_metrics(generated, observed, tolerance)
     for n in TOP_N_VALUES:
-        assert metrics[f'peak_recall_top{n}'] is None
-        assert metrics[f'peak_precision_top{n}'] is None
+        assert metrics[f'peak_recall_top{n:02d}'] is None
+        assert metrics[f'peak_precision_top{n:02d}'] is None
 
 
 def test_top_n_metrics_use_suffix_and_report_metrics_facets_without_depth():
@@ -57,15 +57,15 @@ def test_top_n_metrics_use_suffix_and_report_metrics_facets_without_depth():
     observed = [{'mz': 100., 'intensity': 1., 'precursor': False, 'assigned': True}]
     generated = [{'mz': 100., 'intensity': 1.}]
     metrics = top_n_assignment_metrics(generated, observed, tolerance, suffix='_without_precursor')
-    assert set(metrics) == {f'peak_{kind}_top{n}_without_precursor' for kind in ('recall', 'precision') for n in TOP_N_VALUES}
+    assert set(metrics) == {f'peak_{kind}_top{n:02d}_without_precursor' for kind in ('recall', 'precision') for n in TOP_N_VALUES}
     records = [{'collision_energy_bin': 'Low', 'main_adduct': '[M+H]+', 'depth_metrics': {},
-                'peak_recall_top1': 1.0, 'peak_precision_top1': 1.0,
-                'peak_recall_top1_without_precursor': None, 'peak_precision_top1_without_precursor': None}]
+                'peak_recall_top01': 1.0, 'peak_precision_top01': 1.0,
+                'peak_recall_top01_without_precursor': None, 'peak_precision_top01_without_precursor': None}]
     report = _report_metrics(records)
-    assert report['peak_recall_top1'] == [1.0]
-    assert report['peak_recall_top1@collision_energy:Low'] == [1.0]
-    assert report['peak_recall_top1@main_adduct:[M+H]+'] == [1.0]
-    assert not any(key.startswith('peak_recall_top1@depth:') for key in report)
+    assert report['peak_recall_top01'] == [1.0]
+    assert report['peak_recall_top01@collision_energy:Low'] == [1.0]
+    assert report['peak_recall_top01@main_adduct:[M+H]+'] == [1.0]
+    assert not any(key.startswith('peak_recall_top01@depth:') for key in report)
 
 
 def test_report_quantiles_and_pft_manifest(tmp_path):
@@ -117,3 +117,33 @@ def test_training_interval_metrics_are_means():
     assert row['train/branch_loss'] == pytest.approx(1.75)
     assert row['gradient_norm'] == pytest.approx(2.0)
     assert row['learning_rate'] == pytest.approx(.15)
+
+
+def test_original_depths_accept_current_and_legacy_node_references(monkeypatch):
+    from types import SimpleNamespace
+    from fredis.ml.training.fragment_tree_training import spectrum_validation as validation
+
+    monkeypatch.setattr(validation, '_node_depths', lambda *args: {0: 0, 1: 1, 2: 2})
+    annotation = {'precursorMz': 300., 'peaks': [
+        {'precursor': True},
+        {'matches': [{'nodeIds': [2, 1]}]},
+        {'matches': [{'nodeIndices': [2]}]},
+        {'matches': []},
+    ]}
+    assert validation._original_depths(SimpleNamespace(spectrum_batch=object()), 0,
+                                       annotation, DaTolerance(.01)) == [0, 1, 2, None]
+
+
+def test_report_keeps_depth_and_adduct_time_series_separate():
+    records = [
+        {'collision_energy_bin': 'low', 'main_adduct': adduct,
+         'cosine_similarity': score,
+         'depth_metrics': {'1': {'cosine_similarity': score},
+                           '2': {'cosine_similarity': score / 2}}}
+        for adduct, score in [('[M+H]+', .8), ('[M+Na]+', .4)]
+    ]
+    report = _report_metrics(records)
+    assert report['cosine_similarity@main_adduct:[M+H]+'] == [.8]
+    assert report['cosine_similarity@main_adduct:[M+Na]+'] == [.4]
+    assert report['cosine_similarity@depth:1'] == [.8, .4]
+    assert report['cosine_similarity@depth:2'] == [.4, .2]

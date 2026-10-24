@@ -103,7 +103,7 @@ function groupSeries(series, maxDepth = null) {
     const facet = metric.match(/^(.*?)@([^:]+):(.+)$/);
     const dimension = facet ? facet[2] : '';
     const category = facet ? facet[3] : 'all';
-    let base = facet ? facet[1] : metric;
+    let base = (facet ? facet[1] : metric).replace(/(peak_(?:precision|recall)_top)(\d+)/g, (_, prefix, n) => prefix + n.padStart(2, '0'));
     const depth = dimension === 'depth' ? Number(category) : Number(base.match(/(?:^|_)depth_(\d+)$/)?.[1]);
     if (maxDepth !== null && Number.isFinite(depth) && depth > maxDepth) continue;
     const precursor = base.endsWith('_without_precursor') ? 'withoutPrecursor' : 'withPrecursor';
@@ -118,7 +118,7 @@ function groupSeries(series, maxDepth = null) {
     lane.stats[statistic] = source.points;
   }
   return [...charts.values()].sort((a,b) => a.name.localeCompare(b.name)).map(chart => {
-    for (const lanes of Object.values(chart.variants)) lanes.sort((a,b) => a.category.localeCompare(b.category) || a.split.localeCompare(b.split));
+    for (const lanes of Object.values(chart.variants)) lanes.sort((a,b) => (chart.dimension === 'collision_energy' ? (({low:0,mid:1,high:2}[a.category.toLowerCase()] ?? 3) - ({low:0,mid:1,high:2}[b.category.toLowerCase()] ?? 3)) : 0) || a.category.localeCompare(b.category, undefined, {numeric:true}) || a.split.localeCompare(b.split));
     return chart;
   });
 }
