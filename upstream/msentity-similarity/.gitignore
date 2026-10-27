@@ -1,0 +1,11 @@
+build/
+build-*/
+__pycache__/
+*.pyc
+bindings/java/target/
+bindings/csharp/**/bin/
+bindings/csharp/**/obj/
+bindings/natives/
+bindings/python/dist/
+*.egg-info/
+.vcpkg-cache/

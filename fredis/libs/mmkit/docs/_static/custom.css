@@ -1,0 +1,44 @@
+/* autosummary table */
+table.autosummary {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0 1.5rem 0;
+  font-size: 0.96rem;
+}
+
+table.autosummary th,
+table.autosummary td {
+  border: 1px solid #d8d8d8;
+  padding: 0.65rem 0.8rem;
+  vertical-align: top;
+}
+
+table.autosummary th {
+  background: #f3f3f3;
+  font-weight: 700;
+  text-align: left;
+}
+
+table.autosummary tr:nth-child(even) td {
+  background: #fafafa;
+}
+
+table.autosummary td:first-child {
+  width: 30%;
+  white-space: nowrap;
+}
+
+table.autosummary td:last-child {
+  width: 70%;
+}
+
+/* code-like link appearance for method/property names */
+table.autosummary td:first-child a {
+  font-family: monospace;
+  font-size: 0.95em;
+}
+
+/* slightly improve spacing around summary text */
+table.autosummary td p {
+  margin: 0;
+}

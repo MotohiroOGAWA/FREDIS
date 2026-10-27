@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>MsEntity</RootNamespace>
+    <PackageId>MsEntity</PackageId>
+    <Version>0.1.0</Version>
+    <Description>.NET binding of the msentity C++ library (MSDS, MSP, MGF, TSV, CSV)</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!-- Native libraries collected by CI (bindings/natives/<rid>/) are packed as
+       runtimes/<rid>/native/, where .NET finds them automatically. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../natives/**/*" Pack="true"
+          PackagePath="runtimes/%(RecursiveDir)native/%(Filename)%(Extension)" Visible="false" />
+  </ItemGroup>
+
+</Project>

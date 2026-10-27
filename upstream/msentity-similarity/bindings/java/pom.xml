@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.motohiroogawa</groupId>
+  <artifactId>msentity-similarity</artifactId>
+  <version>0.1.0</version>
+  <name>msentity-similarity</name>
+  <description>Java binding of msentity-similarity (spectrum similarity and .mssim files)</description>
+
+  <properties>
+    <!-- The Foreign Function & Memory API is final since Java 22. -->
+    <maven.compiler.release>22</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- C libraries for the tests; empty = use the bundled copies.
+         Override with -Dmssim.library=... -Dmsentity.library=... -->
+    <mssim.library></mssim.library>
+    <msentity.library></msentity.library>
+    <msentity.data>${project.basedir}/../../../msentity/tests/data</msentity.data>
+  </properties>
+
+  <profiles>
+    <!-- Development: use the libraries of the repository builds when they exist. -->
+    <profile>
+      <id>repository-build</id>
+      <activation>
+        <file>
+          <exists>${project.basedir}/../../build/libmsentity_similarity_c.so</exists>
+        </file>
+      </activation>
+      <properties>
+        <mssim.library>${project.basedir}/../../build/libmsentity_similarity_c.so</mssim.library>
+      </properties>
+    </profile>
+    <profile>
+      <id>msentity-build</id>
+      <activation>
+        <file>
+          <exists>${project.basedir}/../../../msentity/build/libmsentity_c.so</exists>
+        </file>
+      </activation>
+      <properties>
+        <msentity.library>${project.basedir}/../../../msentity/build/libmsentity_c.so</msentity.library>
+      </properties>
+    </profile>
+  </profiles>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.motohiroogawa</groupId>
+      <artifactId>msentity</artifactId>
+      <version>0.1.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <!-- Native libraries collected by CI: ../natives/<platform>/<library>. -->
+      <resource>
+        <directory>${project.basedir}/../natives</directory>
+        <targetPath>io/github/motohiroogawa/msentity/similarity/native</targetPath>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+          <systemPropertyVariables>
+            <mssim.library>${mssim.library}</mssim.library>
+            <msentity.library>${msentity.library}</msentity.library>
+            <mssim.repo>${project.basedir}/../..</mssim.repo>
+            <msentity.data>${msentity.data}</msentity.data>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

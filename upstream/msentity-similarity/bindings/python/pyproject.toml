@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msentity-similarity"
+version = "0.1.0"
+description = "Spectrum similarity and .mssim files (Python binding of msentity-similarity)"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["msentity>=0.1.0", "numpy"]
+
+[project.optional-dependencies]
+arrow = ["pyarrow>=14", "pandas"]
+
+[tool.setuptools]
+packages = ["msentity_similarity"]
+
+[tool.setuptools.package-data]
+# A wheel bundles the C library here.
+msentity_similarity = ["lib/*"]

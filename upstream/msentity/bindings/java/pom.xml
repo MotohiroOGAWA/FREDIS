@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.motohiroogawa</groupId>
+  <artifactId>msentity</artifactId>
+  <version>0.1.0</version>
+  <name>msentity</name>
+  <description>Java binding of the msentity C++ library (MSDS, MSP, MGF, TSV, CSV)</description>
+
+  <properties>
+    <!-- The Foreign Function & Memory API is final since Java 22. -->
+    <maven.compiler.release>22</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- C library for the tests; empty = use the copy bundled from ../natives.
+         Override with -Dmsentity.library=... -->
+    <msentity.library></msentity.library>
+  </properties>
+
+  <profiles>
+    <!-- Development: use the library of the repository build when it exists. -->
+    <profile>
+      <id>repository-build</id>
+      <activation>
+        <file>
+          <exists>${project.basedir}/../../build/libmsentity_c.so</exists>
+        </file>
+      </activation>
+      <properties>
+        <msentity.library>${project.basedir}/../../build/libmsentity_c.so</msentity.library>
+      </properties>
+    </profile>
+  </profiles>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <!-- Native libraries collected by CI: ../natives/<platform>/<library>. -->
+      <resource>
+        <directory>${project.basedir}/../natives</directory>
+        <targetPath>io/github/motohiroogawa/msentity/native</targetPath>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+          <systemPropertyVariables>
+            <msentity.library>${msentity.library}</msentity.library>
+            <msentity.repo>${project.basedir}/../..</msentity.repo>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

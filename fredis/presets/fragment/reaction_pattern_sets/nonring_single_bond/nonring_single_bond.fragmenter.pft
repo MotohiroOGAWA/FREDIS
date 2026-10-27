@@ -1,0 +1,135 @@
+{
+  "fragment_ion_tree_builder": {
+    "max_reaction_count": 3,
+    "reaction_pattern_set": {
+      "name": "nonring_single_bond",
+      "patterns": [
+        {
+          "name": "nonring_o_n_single_bond",
+          "reactant_smarts": "[#8&!#1&!#1:1]-&!@[#7&!#1:2]",
+          "products": [
+            {
+              "name": "o_side",
+              "smarts": "[*:1]"
+            },
+            {
+              "name": "n_side",
+              "smarts": "[*:2]"
+            }
+          ]
+        },
+        {
+          "name": "nonring_o_single_bond",
+          "reactant_smarts": "[#8&!#1&!#1:1]-&!@[!#7&!#1:2]",
+          "products": [
+            {
+              "name": "o_side",
+              "smarts": "[*:1]"
+            },
+            {
+              "name": "other_side",
+              "smarts": "[*:2]"
+            }
+          ]
+        },
+        {
+          "name": "nonring_n_single_bond",
+          "reactant_smarts": "[#7&!#1&!#1:1]-&!@[!#8&!#1:2]",
+          "products": [
+            {
+              "name": "n_side",
+              "smarts": "[*:1]"
+            },
+            {
+              "name": "other_side",
+              "smarts": "[*:2]"
+            }
+          ]
+        },
+        {
+          "name": "nonring_c_single_bond",
+          "reactant_smarts": "[#6&!#1&!#1:1]-&!@[!#8&!#7&!#1:2]",
+          "products": [
+            {
+              "name": "c_side",
+              "smarts": "[*:1]"
+            },
+            {
+              "name": "other_side",
+              "smarts": "[*:2]"
+            }
+          ]
+        },
+        {
+          "name": "nonring_halogen_single_bond",
+          "reactant_smarts": "[#9,#17,#35,#53;!#1:1]-&!@[!#1:2]",
+          "products": [
+            {
+              "name": "halogen_side",
+              "smarts": "[*:1]"
+            },
+            {
+              "name": "other_side",
+              "smarts": "[*:2]"
+            }
+          ]
+        },
+        {
+          "name": "nonring_other_single_bond",
+          "reactant_smarts": "[!#6&!#7&!#8&!#9&!#17&!#35&!#53&!#1:1]-&!@[!#6&!#7&!#8&!#9&!#35&!#17&!#53&!#1:2]",
+          "products": [
+            {
+              "name": "fragment_1",
+              "smarts": "[*:1]"
+            }
+          ]
+        }
+      ]
+    },
+    "fragment_ion_adduct_rule_set": {
+      "name": "adduct_rule_pos_H_Na_NH4_2M",
+      "adduct_rules": [
+        {
+          "name": "pos_H_r1_u2",
+          "adduct_type": "[M+H]+",
+          "fragment_ion_adducts": [
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_Na_r1_u2",
+          "adduct_type": "[M+Na]+",
+          "fragment_ion_adducts": [
+            "[M+Na]+",
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_NH4_r1_u2",
+          "adduct_type": "[M+H4N]+",
+          "fragment_ion_adducts": [
+            "[M+H4N]+",
+            "[M+H]+",
+            "[M-H]+"
+          ]
+        },
+        {
+          "name": "pos_2M_H_to_M_r1_u2",
+          "adduct_type": "[2M+H]+",
+          "fragment_ion_adducts": [
+            "[2M+H]+",
+            "[2M-H]+",
+            "[M+H]+",
+            "[M-H]+"
+          ]
+        }
+      ],
+      "hydrogen_shift_min": -5,
+      "hydrogen_shift_max": 0
+    }
+  },
+  "precursor_candidate_max_reaction_count": 0,
+  "mass_tolerance": "0.01Da,10ppm"
+}

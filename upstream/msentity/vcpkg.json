@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "msentity",
+  "version": "0.1.0",
+  "description": "Dependencies of msentity (used by the release builds; system packages work too)",
+  "builtin-baseline": "0e5030f583a5427123cd3b714255e5ae62faa3ba",
+  "dependencies": [
+    { "name": "arrow", "default-features": false, "features": ["parquet"] },
+    { "name": "hdf5", "default-features": false, "features": ["hl", "zlib"] },
+    "nlohmann-json"
+  ],
+  "features": {
+    "tests": {
+      "description": "Build the unit tests",
+      "dependencies": ["gtest"]
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "model_config": {
+    "mol_encoder_params": {
+      "node_dim": 8,
+      "graph_dim": 8,
+      "num_layers": 1,
+      "num_heads": 2,
+      "max_degree": 4,
+      "max_spatial_dist": 4,
+      "max_edge_dist": 4,
+      "ffn_mult": 2
+    },
+    "reaction_model_params": {
+      "hidden_dim": 8,
+      "num_heads": 2,
+      "branch_main_adduct_dim": 8,
+      "reaction_transformer": {
+        "encoder_layers": 1,
+        "decoder_layers": 1,
+        "num_heads": 2,
+        "ffn_mult": 2,
+        "max_reaction_distance": 4
+      },
+      "pattern_model_params": {
+        "0": {
+          "hidden_dim": 8,
+          "num_heads": 2,
+          "num_layers": 1,
+          "ffn_mult": 2,
+          "max_degree": 4,
+          "max_spatial_dist": 4,
+          "max_edge_dist": 4
+        }
+      }
+    },
+    "spectrum_model_params": {
+      "fragment_fc_dims": [
+        8,
+        16,
+        8
+      ],
+      "state_fc_dims": [
+        8,
+        16,
+        8
+      ],
+      "gat_num_layers": 1,
+      "state_set_num_heads": 2,
+      "state_set_num_layers": 1,
+      "ce_fc_dims": [
+        8,
+        16,
+        8
+      ],
+      "adduct_embedding_dim": 8,
+      "collision_energy_dim": 8,
+      "gat_ffn_mult": 2,
+      "state_set_ffn_mult": 2
+    }
+  }
+}

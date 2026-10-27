@@ -1,0 +1,18 @@
+build/
+.cache/
+compile_commands.json
+__pycache__/
+*.pyc
+
+# bindings
+bindings/java/target/
+bindings/csharp/**/bin/
+bindings/csharp/**/obj/
+bindings/csharp/**/TestResults/
+bindings/python/msentity/lib/
+*.egg-info/
+bindings/natives/
+bindings/python/dist/
+build-*/
+.vcpkg-cache/
+vcpkg_installed/

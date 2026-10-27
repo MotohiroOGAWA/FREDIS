@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="MsEntity.Similarity.Tests/MsEntity.Similarity.Tests.csproj" />
+  <Project Path="MsEntity.Similarity/MsEntity.Similarity.csproj" />
+</Solution>

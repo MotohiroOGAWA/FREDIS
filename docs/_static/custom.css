@@ -1,0 +1,9 @@
+/* Keep tensor shapes, command flags and schema tables readable on narrow pages. */
+.sidebar-brand-text { font-weight: 700; }
+.content { max-width: 88rem; }
+.article-container { max-width: 66rem; }
+article table { display: block; overflow-x: auto; }
+article td, article th { vertical-align: top; }
+article .mermaid { overflow-x: auto; text-align: center; }
+article pre { font-size: 0.85em; }
+article code.literal { overflow-wrap: anywhere; }

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>MsEntity.Similarity</RootNamespace>
+    <PackageId>MsEntity.Similarity</PackageId>
+    <Version>0.1.0</Version>
+    <Description>.NET binding of msentity-similarity (spectrum similarity and .mssim files)</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!-- msentity: a sibling checkout (../msentity) for development, else the NuGet package. -->
+  <PropertyGroup>
+    <MsEntityProject>$(MSBuildThisFileDirectory)../../../../msentity/bindings/csharp/MsEntity/MsEntity.csproj</MsEntityProject>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(MsEntityProject)') And '$(UseMsEntityPackage)' != 'true'">
+    <ProjectReference Include="$(MsEntityProject)" />
+  </ItemGroup>
+  <ItemGroup Condition="!Exists('$(MsEntityProject)') Or '$(UseMsEntityPackage)' == 'true'">
+    <PackageReference Include="MsEntity" Version="0.1.0" />
+  </ItemGroup>
+
+  <!-- Native libraries collected by CI (bindings/natives/<rid>/) are packed as
+       runtimes/<rid>/native/, where .NET finds them automatically. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../natives/**/*" Pack="true"
+          PackagePath="runtimes/%(RecursiveDir)native/%(Filename)%(Extension)" Visible="false" />
+  </ItemGroup>
+
+</Project>

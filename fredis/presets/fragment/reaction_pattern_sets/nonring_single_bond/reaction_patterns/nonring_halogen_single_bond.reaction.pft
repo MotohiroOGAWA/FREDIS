@@ -1,0 +1,14 @@
+{
+  "name": "nonring_halogen_single_bond",
+  "reactant_smarts": "[#9,#17,#35,#53;!#1:1]-&!@[!#1:2]",
+  "products": [
+    {
+      "name": "halogen_side",
+      "smarts": "[*:1]"
+    },
+    {
+      "name": "other_side",
+      "smarts": "[*:2]"
+    }
+  ]
+}

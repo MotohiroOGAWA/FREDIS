@@ -1,0 +1,8 @@
+# JitPack serves the Java binding to Maven/Gradle users:
+#   repository https://jitpack.io, dependency com.github.MotohiroOGAWA:msentity:<tag>
+# Instead of building from source (which needs the native libraries of all
+# platforms), it installs the JAR attached to the GitHub Release of the tag.
+jdk:
+  - openjdk17
+install:
+  - curl -fsSL -o msentity.jar "https://github.com/MotohiroOGAWA/msentity/releases/download/${VERSION}/msentity-${VERSION#v}.jar" && mvn -B install:install-file -Dfile=msentity.jar -DgroupId=com.github.MotohiroOGAWA -DartifactId=msentity -Dversion=${VERSION} -Dpackaging=jar -DgeneratePom=true

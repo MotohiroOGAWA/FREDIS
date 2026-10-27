@@ -1,0 +1,411 @@
+import json
+
+import pytest
+
+from fredis.domain.mass.tolerance import DaTolerance
+from fredis.ml.training.fragment_tree_training.report import REPORT_NAME, write_training_report
+from fredis.ml.training.fragment_tree_training.training import (
+    _mean_training_interval, _read_metric_events, _write_metric_artifacts,
+)
+from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+    TOP_N_VALUES, assignment_score, distribution, matched_cosine, top_n_assignment_metrics, _report_metrics)
+
+
+def test_assignment_and_cosine_without_intensity_prediction():
+    tolerance = DaTolerance(0.01)
+    observed = [{'mz': 100., 'intensity': 9.}, {'mz': 200., 'intensity': 1.}]
+    assert assignment_score([100.], observed, tolerance) == pytest.approx(.9)
+    assert matched_cosine([100.], [1.], observed, tolerance) == pytest.approx(9 / (82 ** .5))
+
+
+def test_top_n_metrics_reward_recall_but_penalize_padding_with_junk_candidates():
+    # A model that generates a huge pool of near-zero-intensity junk nodes (the
+    # user's concern: max_fragment_nodes~100 makes "generate everything" look
+    # attractive) must not get free recall/precision for that -- only the
+    # candidates it actually ranks highly should count.
+    tolerance = DaTolerance(0.5)
+    observed = [{'mz': 100., 'intensity': 10., 'precursor': False, 'assigned': True},
+                {'mz': 200., 'intensity': 5., 'precursor': False, 'assigned': True},
+                {'mz': 300., 'intensity': 1., 'precursor': False, 'assigned': True},
+                {'mz': 999., 'intensity': 50., 'precursor': False, 'assigned': False}]
+    generated = ([{'mz': 100., 'intensity': 9.}, {'mz': 200., 'intensity': 4.}] +
+                 [{'mz': 500. + i, 'intensity': .01} for i in range(30)])
+    metrics = top_n_assignment_metrics(generated, observed, tolerance)
+    assert metrics['peak_recall_top01'] == pytest.approx(1 / 3)
+    assert metrics['peak_precision_top01'] == pytest.approx(1.0)
+    assert metrics['peak_recall_top05'] == pytest.approx(2 / 3)
+    assert metrics['peak_precision_top05'] == pytest.approx(2 / 5)
+    # Recall cannot improve past what was actually generated (300 was never
+    # produced), but precision keeps dropping as N grows past real hits --
+    # exactly the signal that a large candidate pool doesn't buy a free ride.
+    assert metrics['peak_recall_top20'] == pytest.approx(2 / 3)
+    assert metrics['peak_precision_top20'] == pytest.approx(2 / 20)
+
+
+def test_top_n_metrics_are_none_without_any_assigned_ground_truth():
+    tolerance = DaTolerance(0.01)
+    observed = [{'mz': 1., 'intensity': 1., 'precursor': False, 'assigned': False}]
+    generated = [{'mz': 1., 'intensity': 1.}]
+    metrics = top_n_assignment_metrics(generated, observed, tolerance)
+    for n in TOP_N_VALUES:
+        assert metrics[f'peak_recall_top{n:02d}'] is None
+        assert metrics[f'peak_precision_top{n:02d}'] is None
+
+
+def test_top_n_metrics_use_suffix_and_report_metrics_facets_without_depth():
+    tolerance = DaTolerance(0.01)
+    observed = [{'mz': 100., 'intensity': 1., 'precursor': False, 'assigned': True}]
+    generated = [{'mz': 100., 'intensity': 1.}]
+    metrics = top_n_assignment_metrics(generated, observed, tolerance, suffix='_without_precursor')
+    assert set(metrics) == {f'peak_{kind}_top{n:02d}_without_precursor' for kind in ('recall', 'precision') for n in TOP_N_VALUES}
+    records = [{'collision_energy_bin': 'Low', 'main_adduct': '[M+H]+', 'depth_metrics': {},
+                'peak_recall_top01': 1.0, 'peak_precision_top01': 1.0,
+                'peak_recall_top01_without_precursor': None, 'peak_precision_top01_without_precursor': None}]
+    report = _report_metrics(records)
+    assert report['peak_recall_top01'] == [1.0]
+    assert report['peak_recall_top01@collision_energy:Low'] == [1.0]
+    assert report['peak_recall_top01@main_adduct:[M+H]+'] == [1.0]
+    assert not any(key.startswith('peak_recall_top01@depth:') for key in report)
+
+
+def test_report_quantiles_and_pft_manifest(tmp_path):
+    stats = distribution(range(11))
+    assert stats['q10'] == 1
+    assert stats['q25'] == 2.5
+    assert stats['median'] == 5
+    assert stats['q75'] == 7.5
+    assert stats['q90'] == 9
+    target = write_training_report(tmp_path / 'project' / 'runs' / 'run-1', status='running',
+                                   completed_epochs=2, global_step=40,
+                                   latest_validation='spectrum_validation/epoch_2.json')
+    assert target.name == REPORT_NAME == 'result.training.pft'
+    payload = json.loads(target.read_text())
+    assert payload['schema'] == 'fredis.training-report'
+    assert payload['kind'] == 'training-result'
+    assert payload['completedEpochs'] == 2
+    assert payload["artifacts"]["metricIndex"] == "metrics/index.json"
+    assert 'metricsJson' not in payload['artifacts']
+
+
+def test_live_train_and_epoch_metrics_round_trip_through_tsv(tmp_path):
+    report = {
+        'train_step_history': [
+            {'epoch': 1, 'global_step': 100, 'train_loss': 2.5,
+             'train/samples': 400, 'train/batches': 100},
+        ],
+        'history': [
+            {'epoch': 1, 'global_step': 120, 'train_loss': 2.0,
+             'validation_loss': 1.5},
+        ],
+    }
+    _write_metric_artifacts(tmp_path, report)
+    rows = _read_metric_events(tmp_path / 'metrics.tsv')
+    assert [row['event'] for row in rows] == ['train_step', 'epoch_end']
+    assert rows[0]['global_step'] == 100
+    assert rows[0]['train_loss'] == pytest.approx(2.5)
+    assert rows[0]["train_samples"] == 4
+    assert rows[0]["train_total_samples"] == 400
+    assert not (tmp_path / "metrics.tsv").exists()
+    assert not (tmp_path / 'metrics.json').exists()
+
+
+def test_training_interval_metrics_are_means():
+    row = _mean_training_interval(
+        totals={'loss': 11.0, 'branch_loss': 7.0},
+        batch_metrics={'gradient_norm': [1.0, 3.0], 'learning_rate': [.1, .2]},
+        samples=4, batches=2, epoch=1, global_step=100, elapsed_seconds=5.0,
+    )
+    assert row['train_loss'] == pytest.approx(2.75)
+    assert row['train/branch_loss'] == pytest.approx(1.75)
+    assert row['gradient_norm'] == pytest.approx(2.0)
+    assert row['learning_rate'] == pytest.approx(.15)
+
+
+def test_original_depths_accept_current_and_legacy_node_references(monkeypatch):
+    from types import SimpleNamespace
+    from fredis.ml.training.fragment_tree_training import spectrum_validation as validation
+
+    monkeypatch.setattr(validation, '_node_depths', lambda *args: {0: 0, 1: 1, 2: 2})
+    annotation = {'precursorMz': 300., 'peaks': [
+        {'precursor': True},
+        {'matches': [{'nodeIds': [2, 1]}]},
+        {'matches': [{'nodeIndices': [2]}]},
+        {'matches': []},
+    ]}
+    assert validation._original_depths(SimpleNamespace(spectrum_batch=object()), 0,
+                                       annotation, DaTolerance(.01)) == [0, 1, 2, None]
+
+
+def test_report_keeps_depth_and_adduct_time_series_separate():
+    records = [
+        {'collision_energy_bin': 'low', 'main_adduct': adduct,
+         'cosine_similarity': score,
+         'depth_metrics': {'1': {'cosine_similarity': score},
+                           '2': {'cosine_similarity': score / 2}}}
+        for adduct, score in [('[M+H]+', .8), ('[M+Na]+', .4)]
+    ]
+    report = _report_metrics(records)
+    assert report['cosine_similarity@main_adduct:[M+H]+'] == [.8]
+    assert report['cosine_similarity@main_adduct:[M+Na]+'] == [.4]
+    assert report['cosine_similarity@depth:1'] == [.8, .4]
+    assert report['cosine_similarity@depth:2'] == [.4, .2]
+
+
+def test_fragment_depth_metrics_are_persisted_for_each_validation_step(tmp_path):
+    import csv
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        _original_depths, append_metric_distributions,
+    )
+
+    # Current annotations refer to compounds via nodeIds. Exercise graph traversal,
+    # assignment lookup, aggregation, and the on-disk time series together.
+    batch = SimpleNamespace(
+        canonical_data=None,
+        decoded=SimpleNamespace(
+            node_sample_index=torch.tensor([0, 0, 0, 0]),
+            edge_index=torch.tensor([[0, 1, 2], [1, 2, 3]]),
+        ),
+        state_sample_index=torch.tensor([0, 0, 0, 0]),
+        state_node_index=torch.tensor([0, 1, 2, 3]),
+        state_mz=torch.tensor([400., 300., 200., 100.]),
+    )
+    annotation = {'precursorMz': 400., 'peaks': [
+        {'precursor': True},
+        *[{'matches': [{'nodeIds': [node]}]} for node in (1, 2, 3)],
+    ]}
+    depths = _original_depths(SimpleNamespace(spectrum_batch=batch), 0,
+                              annotation, DaTolerance(.01))
+    assert depths == [0, 1, 2, 3]
+    for step, score in [(10, .4), (20, .8)]:
+        records = [{'collision_energy_bin': 'low', 'main_adduct': '[M+H]+',
+                    'depth_metrics': {str(depth): {
+                        'cosine_similarity': score,
+                        'assignment_score': score,
+                    } for depth in depths}}]
+        append_metric_distributions(tmp_path, step, 'validation', _report_metrics(records))
+    catalog = json.loads((tmp_path / "metrics/index.json").read_text())
+    rows = []
+    for filename in {entry["file"] for entry in catalog["series"]}:
+        with (tmp_path / filename).open() as stream:
+            rows.extend(csv.DictReader(stream, delimiter="\t"))
+    assert not (tmp_path / "metric_distributions.tsv").exists()
+    for depth in (1, 2, 3):
+        for metric in ('cosine_similarity', 'assignment_score'):
+            saved = [
+                row
+                for row in rows
+                if row["series"]
+                == f"distributions/validation/{metric}@depth:{depth}_mean"
+            ]
+            assert [int(row['global_step']) for row in saved] == [10, 20]
+            assert [float(row['value']) for row in saved] == [.4, .8]
+
+
+def test_ion_assignment_uses_top_state_and_preserves_ambiguous_pairs():
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        ion_assignment_metrics,
+    )
+
+    batch = SimpleNamespace(
+        canonical_data=None,
+        node_smiles=("C",),
+        state_sample_index=torch.tensor([0, 0]),
+        state_node_index=torch.tensor([0, 0]),
+        state_adduct_index=torch.tensor([0, 1]),
+        state_hydrogen_shift=torch.tensor([1, 1]),
+        ion_type_strs=("[M+H]+", "[M+Na]+"),
+    )
+    annotation = {
+        "peaks": [
+            {
+                "matches": [
+                    {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0},
+                    {"smiles": "C", "fragmentIonAdduct": "[M+Na]+", "hydrogenShift": 1},
+                ]
+            },
+            {
+                "matches": [
+                    {"smiles": "CC", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0}
+                ]
+            },
+            {
+                "precursor": True,
+                "matches": [
+                    {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 1}
+                ],
+            },
+        ]
+    }
+    scores = ion_assignment_metrics(batch, 0, annotation, torch.tensor([0.8, 0.2]))
+    assert scores["fragment_ion_adduct_accuracy"] == 1
+    assert scores["hydrogen_shift_accuracy"] == 1
+    assert scores["ion_assignment_joint_accuracy"] == 0
+    assert "hydrogen_shift_mae" not in scores
+    assert scores["ion_assignment_coverage"] == 0.5
+    filtered = ion_assignment_metrics(
+        batch, 0, annotation, torch.tensor([0.8, 0.2]), retained_rows={1}
+    )
+    assert filtered["ion_assignment_joint_accuracy"] == 1
+    filtered = ion_assignment_metrics(
+        batch, 0, annotation, torch.tensor([0.8, 0.2]), retained_rows=set()
+    )
+    assert filtered["ion_assignment_coverage"] == 0
+    assert filtered["fragment_ion_adduct_accuracy"] is None
+    # Re-ranking must change the result: do not choose the best label match.
+    scores = ion_assignment_metrics(batch, 0, annotation, torch.tensor([0.2, 0.8]))
+    assert scores["ion_assignment_joint_accuracy"] == 1
+    scores = ion_assignment_metrics(batch, 1, annotation, torch.tensor([0.8, 0.2]))
+    assert scores["ion_assignment_coverage"] == 0
+    assert scores["fragment_ion_adduct_accuracy"] is None
+
+
+def test_interval_counts_and_time_are_per_iteration():
+    row = _mean_training_interval(
+        totals={"loss": 10.0, "num_labelled_edges": 999.0},
+        batch_metrics={"num_labelled_edges": [10.0, 30.0], "loop_seconds": [0.2, 0.6]},
+        samples=8,
+        batches=2,
+        epoch=1,
+        global_step=2,
+        elapsed_seconds=5.0,
+    )
+    assert row["train/samples"] == 4
+    assert "train/batches" not in row
+    assert row["train/total_samples"] == 8
+    assert row["train/total_batches"] == 2
+    assert row["train/num_labelled_edges"] == 20
+    assert row["train/loop_seconds"] == pytest.approx(0.4)
+
+
+def test_resumed_metric_history_preserves_old_and_new_column_names(tmp_path):
+    _write_metric_artifacts(
+        tmp_path,
+        {
+            "history": [
+                {"epoch": 1, "global_step": 10, "train_samples": 100},
+                {
+                    "epoch": 2,
+                    "global_step": 20,
+                    "train/samples": 5,
+                    "train/total_samples": 100,
+                },
+            ]
+        },
+    )
+    rows = _read_metric_events(tmp_path / "metrics.tsv")
+    catalog = json.loads((tmp_path / "metrics/index.json").read_text())
+    assert len(catalog["series"]) == len({entry["name"] for entry in catalog["series"]})
+    assert rows[0]["train_samples"] == 100
+    assert rows[1]["train_samples"] == 5
+    assert rows[1]["train_total_samples"] == 100
+
+
+def test_samples_per_compound_counts_unique_source_identity_and_window_means():
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.training import _samples_per_compound
+
+    data = SimpleNamespace(
+        num_samples=6,
+        sample_tree_index=torch.tensor([0, 0, 1, 1, 2, 2]),
+        compounds=SimpleNamespace(smiles=("CC", "CN", "CC")),
+    )
+    assert _samples_per_compound(data) == 3
+    row = _mean_training_interval(
+        totals={"loss": 24.0},
+        batch_metrics={"samples_per_compound": [2.0, 4.0]},
+        samples=12,
+        batches=2,
+        epoch=1,
+        global_step=2,
+        elapsed_seconds=1.0,
+    )
+    assert row["train/samples_per_compound"] == 3
+    assert row["train/samples"] == 6
+    assert "train/batches" not in row
+
+
+def test_branch_metrics_sum_confusion_counts_and_omit_undefined_ratios():
+    from fredis.ml.training.fragment_tree_training.training import _add_branch_metrics
+
+    row = {"train/branch_count_tp": 999}
+    _add_branch_metrics(
+        row,
+        {
+            "branch_count_tp": [1, 9],
+            "branch_count_tn": [2, 0],
+            "branch_count_fp": [1, 3],
+            "branch_count_fn": [0, 2],
+        },
+        "train/",
+    )
+    assert row["train/branch_accuracy"] == pytest.approx(12 / 18)
+    assert row["train/branch_precision"] == pytest.approx(10 / 14)
+    assert row["train/branch_recall"] == pytest.approx(10 / 12)
+    assert row["train/branch_f1"] == pytest.approx(20 / 26)
+    assert row["train/branch_balanced_accuracy"] == pytest.approx((10 / 12 + 2 / 6) / 2)
+    assert "train/branch_count_tp" not in row
+    empty = {}
+    _add_branch_metrics(empty, {}, "validation/")
+    assert empty == {}
+
+
+def test_ion_assignment_weights_by_fragment_intensity_and_penalizes_unknown_pairs():
+    from types import SimpleNamespace
+    import torch
+    from fredis.ml.training.fragment_tree_training.spectrum_validation import (
+        ion_assignment_metrics,
+    )
+
+    batch = SimpleNamespace(
+        canonical_data=None,
+        node_smiles=("C", "CC"),
+        state_sample_index=torch.tensor([0, 0, 0]),
+        state_node_index=torch.tensor([0, 0, 1]),
+        state_adduct_index=torch.tensor([0, 1, 1]),
+        state_hydrogen_shift=torch.tensor([0, 1, 2]),
+        ion_type_strs=("[M+H]+", "[M+Na]+"),
+    )
+    annotation = {
+        "peaks": [
+            {
+                "matches": [
+                    {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0}
+                ]
+            },
+            {
+                "matches": [
+                    {"smiles": "CC", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 0}
+                ]
+            },
+        ]
+    }
+    intensity = torch.tensor([0.6, 0.3, 0.1])
+    scores = ion_assignment_metrics(batch, 0, annotation, intensity)
+    for name in (
+        "fragment_ion_adduct_accuracy",
+        "hydrogen_shift_accuracy",
+        "ion_assignment_joint_accuracy",
+    ):
+        assert scores[name] == pytest.approx(0.9)
+    assert scores["ion_assignment_coverage"] == 1
+    # Filtering changes fragment weight as well as the states eligible for Top 1.
+    filtered = ion_assignment_metrics(
+        batch, 0, annotation, intensity, retained_rows={0, 2}
+    )
+    assert filtered["ion_assignment_joint_accuracy"] == pytest.approx(6 / 7)
+    # Both components can be allowed separately while the predicted pair is absent.
+    annotation["peaks"][0]["matches"] = [
+        {"smiles": "C", "fragmentIonAdduct": "[M+H]+", "hydrogenShift": 1},
+        {"smiles": "C", "fragmentIonAdduct": "[M+Na]+", "hydrogenShift": 0},
+    ]
+    scores = ion_assignment_metrics(batch, 0, annotation, intensity)
+    assert scores["fragment_ion_adduct_accuracy"] == pytest.approx(0.9)
+    assert scores["hydrogen_shift_accuracy"] == pytest.approx(0.9)
+    assert scores["ion_assignment_joint_accuracy"] == 0
+    zero = ion_assignment_metrics(batch, 0, annotation, torch.zeros(3))
+    assert zero["ion_assignment_joint_accuracy"] is None

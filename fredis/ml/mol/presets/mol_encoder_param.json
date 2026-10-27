@@ -1,0 +1,10 @@
+{
+  "symbols": ["C", "N", "O", "P", "S", "F", "Cl", "Br", "I"],
+  "node_dim": 32,
+  "graph_dim": 128,
+  "num_layers": 4,
+  "num_heads": 8,
+  "max_degree": 4,
+  "max_spatial_dist": 3,
+  "max_edge_dist": 3
+}

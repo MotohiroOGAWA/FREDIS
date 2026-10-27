@@ -1,0 +1,227 @@
+# Release build: a self-contained libmsentity_c for Linux x64, Windows x64,
+# and macOS arm64 (Arrow, Parquet, and HDF5 linked statically via vcpkg),
+# packaged for Python (wheels), Java (JAR), C# (NuGet), and C (archives),
+# tested on each platform, and published as a GitHub Release for tags v*.
+#
+# Run it without publishing from the Actions tab (workflow_dispatch).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  native:
+    name: native (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04          # glibc 2.35 → wheels tagged manylinux_2_35
+            rid: linux-x64
+            triplet: x64-linux
+            library: libmsentity_c.so
+            built: build/libmsentity_c.so
+            import_library: ""
+            cmake_args: ""
+          - os: windows-2022
+            rid: win-x64
+            triplet: x64-windows-static-md
+            library: msentity_c.dll
+            built: build/bin/Release/msentity_c.dll
+            import_library: build/Release/msentity_c.lib
+            cmake_args: ""
+          - os: macos-14
+            rid: osx-arm64
+            triplet: arm64-osx-msentity
+            library: libmsentity_c.dylib
+            built: build/libmsentity_c.dylib
+            import_library: ""
+            cmake_args: -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DCMAKE_OSX_ARCHITECTURES=arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check that the tag matches the project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != v$version"; exit 1; }
+
+      - name: Set up vcpkg (pinned to the manifest baseline)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            root="$(cygpath -m "$RUNNER_TEMP")/vcpkg"; cache="$(cygpath -m "$GITHUB_WORKSPACE")/.vcpkg-cache"
+          else
+            root="$RUNNER_TEMP/vcpkg"; cache="$GITHUB_WORKSPACE/.vcpkg-cache"
+          fi
+          baseline=$(python -c "import json; print(json.load(open('vcpkg.json'))['builtin-baseline'])")
+          git clone https://github.com/microsoft/vcpkg.git "$root"
+          git -C "$root" checkout "$baseline"
+          if [ "$RUNNER_OS" = Windows ]; then "$root/bootstrap-vcpkg.bat" -disableMetrics; else "$root/bootstrap-vcpkg.sh" -disableMetrics; fi
+          mkdir -p "$cache"
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$cache" >> "$GITHUB_ENV"
+
+      - name: Restore built dependencies
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'triplets/**') }}
+          restore-keys: vcpkg-${{ matrix.triplet }}-
+
+      - name: Build tools for vcpkg ports (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake autoconf-archive libtool pkg-config bison flex
+
+      - name: Build tools for vcpkg ports (macOS; Thrift needs bison > 2.5, Xcode ships 2.3)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bison flex
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+
+      - name: Configure (builds Arrow, Parquet, HDF5 with vcpkg on the first run)
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          -DVCPKG_OVERLAY_TRIPLETS="$GITHUB_WORKSPACE/triplets"
+          -DVCPKG_MANIFEST_FEATURES=tests
+          -DMSENTITY_STATIC_DEPS=ON -DMSENTITY_TEST_BINDINGS=OFF
+          ${{ matrix.cmake_args }}
+
+      # Saved even if a later step fails, so dependencies are built only once.
+      - name: Save built dependencies
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'triplets/**') }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test (C++ and C API)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Collect the native library and the C API archive
+        run: |
+          version=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt)
+          mkdir -p "out/natives/${{ matrix.rid }}"
+          cp -L "${{ matrix.built }}" "out/natives/${{ matrix.rid }}/${{ matrix.library }}"
+          case "$RUNNER_OS" in
+            Linux) ldd "out/natives/${{ matrix.rid }}/${{ matrix.library }}" ;;
+            macOS) otool -L "out/natives/${{ matrix.rid }}/${{ matrix.library }}" ;;
+          esac
+          name="msentity-c-$version-${{ matrix.rid }}"
+          mkdir -p "out/c/$name/include/msentity/c" "out/c/$name/lib"
+          cp include/msentity/c/msentity_c.h "out/c/$name/include/msentity/c/"
+          cp "out/natives/${{ matrix.rid }}/${{ matrix.library }}" "out/c/$name/lib/"
+          if [ -n "${{ matrix.import_library }}" ]; then cp "${{ matrix.import_library }}" "out/c/$name/lib/"; fi
+          cp LICENSE "out/c/$name/"
+          (cd out/c && cmake -E tar cf "$name.zip" --format=zip "$name")
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: natives-${{ matrix.rid }}
+          path: out/natives
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c-api-${{ matrix.rid }}
+          path: out/c/*.zip
+
+  # ---------------------------------------------------------------------------
+  packages:
+    name: packages (${{ matrix.rid }})
+    needs: native
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, rid: linux-x64, library: libmsentity_c.so, wheel_tag: manylinux_2_35_x86_64 }
+          - { os: windows-2022, rid: win-x64, library: msentity_c.dll, wheel_tag: win_amd64 }
+          - { os: macos-14, rid: osx-arm64, library: libmsentity_c.dylib, wheel_tag: macosx_14_0_arm64 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: natives-*
+          merge-multiple: true
+          path: bindings/natives
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Python wheel (build, install, test)
+        run: |
+          python -m pip install numpy pyarrow pandas wheel setuptools
+          python bindings/python/build_wheel.py --native "bindings/natives/${{ matrix.rid }}/${{ matrix.library }}" \
+            --platform-tag ${{ matrix.wheel_tag }} --out dist
+          python -m pip install dist/msentity-*.whl
+          MSENTITY_TEST_INSTALLED=1 python -m unittest discover -s bindings/python/tests -t bindings/python/tests -v
+
+      - name: Java (JAR with all natives; tests load the bundled library)
+        working-directory: bindings/java
+        run: mvn -B package
+
+      - name: C# (tests load the collected natives)
+        run: dotnet test bindings/csharp/MsEntity.slnx
+
+      - name: JAR, POM, and NuGet package (built once, on Linux)
+        if: runner.os == 'Linux'
+        run: |
+          version=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt)
+          cp "bindings/java/target/msentity-$version.jar" dist/
+          cp bindings/java/pom.xml "dist/msentity-$version.pom"
+          dotnet pack bindings/csharp/MsEntity/MsEntity.csproj -c Release -o dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ matrix.rid }}
+          path: dist/*
+
+  # ---------------------------------------------------------------------------
+  release:
+    needs: packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "{packages,c-api}-*"
+          merge-multiple: true
+          path: release
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la release
+          sed "s/@VERSION@/${GITHUB_REF_NAME#v}/g; s/@TAG@/$GITHUB_REF_NAME/g" .github/release-notes.md > notes.md
+          gh release create "$GITHUB_REF_NAME" release/* --title "msentity $GITHUB_REF_NAME" --notes-file notes.md

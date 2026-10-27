@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fredis"
+version = "0.1.0"
+description = "FREDIS: Fragmentation with Reactions that are Externally Definable for In Silico Spectra"
+authors = [
+    { name = "Motohiro Ogawa" }
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "tqdm",
+    "numpy",
+    "pandas",
+    "matplotlib>=3.7",
+    "h5py",
+    "pyarrow",
+    "msentity>=0.1.0",
+]
+
+[project.scripts]
+fredis = "fredis.cli.main:main"
+fredis-predict-spectrum = "fredis.ml.specgen.predict_spectrum:main"
+msentity-predict-fredis = "fredis.ml.specgen.predict_spectrum:main"
+
+[tool.setuptools.packages.find]
+include = ["fredis*"]
+
+[project.optional-dependencies]
+similarity = ["msentity-similarity>=0.1.0"]
+dev = ["black==26.10.1"]
+
+docs = [
+    "sphinx>=8",
+    "furo",
+    "sphinx-autodoc-typehints",
+    "myst-parser",
+    "myst-nb",
+    "jupyter-sphinx>=0.5",
+    "sphinxcontrib-mermaid",
+]
+
+[tool.mypy]
+files = ["fredis"]
+show_error_codes = true
+strict = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+extend-exclude = '/fredis/libs/'
+
+[tool.setuptools.package-data]
+"fredis.data" = ["LICENSE-msentity"]

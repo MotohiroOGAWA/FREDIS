@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msentity"
+version = "0.1.0"
+description = "Python binding of the msentity C++ library (MSDS, MSP, MGF, TSV, CSV)"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+arrow = ["pyarrow>=14", "pandas"]
+
+[tool.setuptools]
+packages = ["msentity"]
+
+[tool.setuptools.package-data]
+# A wheel bundles the C library here (see README.md).
+msentity = ["lib/*"]
