@@ -11,6 +11,8 @@ import sys
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--similarity', action='store_true')
 parser.add_argument('--jobs', default='4')
+parser.add_argument('--no-editable', action='store_true',
+                    help='Install standalone packages instead of referencing the source checkout')
 args, extra = parser.parse_known_args()
 extra = [x for x in extra if x != '--']
 root = Path(__file__).resolve().parents[1]
@@ -53,4 +55,6 @@ for name in modules:
             copied = True
     if not copied:
         raise SystemExit(f'No native shared library found in {build}')
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-build-isolation', '--no-deps', '-e', str(source / 'bindings/python')], check=True)
+    install_mode = [] if args.no_editable else ['-e']
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-build-isolation', '--no-deps',
+                    *install_mode, str(source / 'bindings/python')], check=True)
