@@ -15,6 +15,30 @@ class TuningTests(unittest.TestCase):
                 'baseArgs': ['--dataset-dir', 'prepared', '--lr', '0.001'],
                 'parameters': {'--lr': [0.001, 0.002]}}
 
+    def test_workbench_configuration_preserves_candidates_and_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'search'
+            config = {'datasetDir': str(Path(tmp) / 'prepared'),
+                      'outputDir': str(output), 'modelConfig': {},
+                      'architectureMode': 'shared',
+                      'sharedArchitecture': {'hidden_dim': 512},
+                      'tuning': {'enabled': True, 'parameters': {
+                          'sharedArchitecture.hidden_dim': [512, 256, 128]}}}
+            plan = expand_search(self.spec(output))
+            plan['configuration'] = config
+            with patch('fredis.ml.tuning.fragment_tree.subprocess.call', return_value=0):
+                self.assertEqual(run(plan), 0)
+            plan_document = json.loads((output / 'fragment-tree.tuning-plan.pft').read_text())
+            self.assertEqual(plan_document['schema'], 'fredis.tuning-plan')
+            saved = plan_document['configuration']
+            self.assertEqual(saved['tuning'], config['tuning'])
+            self.assertEqual(saved['datasetDir'], config['datasetDir'])
+            self.assertEqual(saved['outputDir'], str(output))
+            self.assertEqual(saved['resume'], '')
+            self.assertFalse((output / 'tuning-plan.json').exists())
+            self.assertFalse((output / 'fragment-tree.tuning-config.pft').exists())
+            self.assertEqual(config['outputDir'], str(output))
+
     def test_cli_and_subprocess_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -73,8 +97,9 @@ class TuningTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]['validation_cosine_similarity_q25.max'], '0.8')
             self.assertEqual(rows[0]['validation_cosine_similarity_q25.last'], '0.2')
-            with self.assertRaises(ValueError):
-                run(spec)
+            with patch('fredis.ml.tuning.fragment_tree.subprocess.call') as train_again:
+                self.assertEqual(run(spec), 0)
+                train_again.assert_not_called()
 
     def test_failures_and_missing_metrics_retained(self):
         with tempfile.TemporaryDirectory() as tmp:

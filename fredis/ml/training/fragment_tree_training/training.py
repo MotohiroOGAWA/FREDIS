@@ -1376,9 +1376,13 @@ def train_reactions(
                 cuda_rng_state=torch.cuda.get_rng_state_all() if use_cuda else None,
                 python_rng_state=random.getstate(),
             )
-            torch.save(saved, output / "last.pt")
+            last_temporary = output / "last.pt.tmp"
+            torch.save(saved, last_temporary)
+            last_temporary.replace(output / "last.pt")
             if improved:
-                torch.save(saved, output / "best.pt")
+                best_temporary = output / "best.pt.tmp"
+                torch.save(saved, best_temporary)
+                best_temporary.replace(output / "best.pt")
             if checkpoint_interval_epochs and (epoch + 1) % checkpoint_interval_epochs == 0:
                 directory = output / "checkpoints"
                 directory.mkdir(exist_ok=True)

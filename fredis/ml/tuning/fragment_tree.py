@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 RESULT_NAME = "fragment-tree.tuning.pft"
+PLAN_NAME = "fragment-tree.tuning-plan.pft"
 
 
 def validation_history(directory):
@@ -139,7 +140,61 @@ def expand_search(spec):
     return {**spec, "trials": trials}
 
 
+def tuning_configuration(plan):
+    configuration = plan.get("configuration")
+    if configuration is None and "modelConfig" in plan["trials"][0]["config"]:
+        configuration = dict(plan["trials"][0]["config"])
+        configuration["tuning"] = {"enabled": True, "parameters": {}}
+        for trial in plan["trials"]:
+            def collect(first, current, prefix=""):
+                for key, value in current.items():
+                    name = prefix + key
+                    if isinstance(value, dict) and isinstance(first.get(key), dict):
+                        collect(first[key], value, name + ".")
+                    elif name != "outputDir" and value != first.get(key):
+                        candidates = configuration["tuning"]["parameters"].setdefault(name, [first.get(key)])
+                        if value not in candidates:
+                            candidates.append(value)
+            collect(plan["trials"][0]["config"], trial["config"])
+        if configuration.get("architectureMode") == "shared":
+            configuration["tuning"]["parameters"] = {
+                key: value for key, value in configuration["tuning"]["parameters"].items()
+                if not key.startswith(("modelConfig.", "patternArchitecture."))
+            }
+        if configuration.get("patternArchitecture", {}).get("mode") == "shared":
+            configuration["tuning"]["parameters"] = {
+                key: value for key, value in configuration["tuning"]["parameters"].items()
+                if not key.startswith("modelConfig.reaction_model_params.pattern_model_params.")
+            }
+    if configuration is not None:
+        configuration = dict(configuration, outputDir=plan["outputDir"], resume="", trainingMode="new")
+    return configuration
+
+
+def write_tuning_plan(output, plan):
+    value = dict(plan, schema="fredis.tuning-plan", schemaVersion=1)
+    configuration = tuning_configuration(plan)
+    if configuration is not None:
+        value["configuration"] = configuration
+    temporary = output / (PLAN_NAME + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(output / PLAN_NAME)
+
+
 def run(plan):
+    # The lock is released by the OS even after an ungraceful orchestrator exit.
+    import fcntl
+    output = Path(plan["outputDir"])
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / ".tuning.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("Another tuning process is already using this output directory") from error
+        return _run(plan)
+
+
+def _run(plan):
     if "trials" not in plan:
         plan = expand_search(plan)
     output = Path(plan["outputDir"])
@@ -164,26 +219,41 @@ def run(plan):
         ):
             raise ValueError("Trial output argument does not match its configuration")
         if "--resume" in args or "--overwrite" in args:
-            raise ValueError("Tuning trials must use fresh output directories")
+            raise ValueError("Plan arguments cannot set resume or overwrite; checkpoint continuation is automatic")
         if (
             not directory.is_relative_to(output.resolve())
             or directory == output.resolve()
         ):
             raise ValueError("Trial outputs must be inside the search output directory")
-        if directory.exists() or directory in directories:
+        if directory in directories:
             raise ValueError(
-                "Trial output already exists or is duplicated: " + str(directory)
+                "Trial output is duplicated: " + str(directory)
             )
         directories.append(directory)
     output.mkdir(parents=True, exist_ok=True)
     report_file = output / RESULT_NAME
-    if report_file.exists() or (output / "tuning-results.json").exists():
-        raise ValueError("Tuning results already exist. Choose a new output directory.")
-    results = []
+    from .resume import completed, continuation, plan_signature, read_progress, score_summaries
+    prior, records, scores = read_progress(output, plan, RESULT_NAME, PLAN_NAME)
+    # Preserve TSV-only rows before the first atomic publication of a resumed run.
+    for index, row in scores.items():
+        trial = trials[index - 1]
+        record = records.setdefault(index, {
+            "trial": index,
+            "outputDir": str(Path(trial["config"]["outputDir"]).resolve().relative_to(output.resolve())),
+            "config": trial["config"], "args": trial["args"],
+            "status": row["status"],
+            "exitCode": int(row["exitCode"]) if row.get("exitCode") else None,
+            "validationHistory": [],
+        })
+        if not record.get("scoreSummaries"):
+            record["scoreSummaries"] = score_summaries(row)
+    results = [dict(record) for _, record in sorted(records.items())]
     report = {
+        **prior,
         "schema": "fredis.tuning-result",
         "status": "running",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": prior.get("createdAt", datetime.now(timezone.utc).isoformat()),
+        "planSignature": plan_signature(trials),
         "searchMethod": "grid",
         "totalTrials": len(trials),
         "trials": results,
@@ -191,7 +261,10 @@ def run(plan):
 
     def publish():
         for trial in results:
-            trial["scoreSummaries"] = summarize_trial(trial)
+            if trial.get("validationHistory"):
+                trial["scoreSummaries"] = summarize_trial(trial)
+            else:
+                trial.setdefault("scoreSummaries", {})
         report.update(updatedAt=datetime.now(timezone.utc).isoformat())
         columns = sorted(
             {
@@ -227,47 +300,75 @@ def run(plan):
         temp.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
         temp.replace(report_file)
 
+    write_tuning_plan(output, plan)
     publish()
-    (output / "tuning-plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+    active_record = None
     try:
         for index, trial in enumerate(trials, 1):
             directory = Path(trial["config"]["outputDir"])
-            record = {
+            previous = records.get(index)
+            record = previous if previous is not None else {
                 "trial": index,
-                "outputDir": str(directory.relative_to(output)),
-                "status": "running",
+                "outputDir": str(directory.resolve().relative_to(output.resolve())),
                 "config": trial["config"],
                 "args": trial["args"],
                 "startedAt": datetime.now(timezone.utc).isoformat(),
                 "validationHistory": [],
             }
-            results.append(record)
+            # Results retain their identity/order when a later trial was already done.
+            results[:] = [item for item in results if item["trial"] != index] + [record]
+            results.sort(key=lambda item: item["trial"])
+            if completed(previous, scores.get(index), directory):
+                history = validation_history(directory)
+                if not record.get("scoreSummaries"):
+                    record["scoreSummaries"] = score_summaries(scores.get(index))
+                record.update(status="completed", exitCode=0,
+                              validationHistory=history or record.get("validationHistory", []))
+                print(f"Tuning trial {index}/{len(trials)}: already completed; skipping", flush=True)
+                publish()
+                continue
+            active_record = record
+            record.update(status="running")
+            record.pop("error", None)
+            record.pop("finishedAt", None)
             publish()
             print(f"Tuning trial {index}/{len(trials)}: {directory}", flush=True)
             try:
-                record["exitCode"] = subprocess.call([sys.executable, *trial["args"]])
-                record["status"] = "completed" if record["exitCode"] == 0 else "failed"
-            except OSError as error:
+                argv, resume, already_finished = continuation(trial, directory)
+                if resume:
+                    record.setdefault("resumeHistory", []).append({
+                        **resume, "resumedAt": datetime.now(timezone.utc).isoformat(),
+                    })
+                    print(f"Trial {index}: checkpoint epoch {resume['epoch']}; remaining {resume['remainingEpochs']} epochs", flush=True)
+                if already_finished:
+                    record.update(exitCode=0, status="completed")
+                else:
+                    record["executionArgs"] = argv
+                    publish()
+                    record["exitCode"] = subprocess.call([sys.executable, *argv])
+                    record["status"] = "completed" if record["exitCode"] == 0 else "failed"
+            except (OSError, ValueError) as error:
                 record.update(exitCode=1, status="failed", error=str(error))
             record.update(
                 validationHistory=validation_history(directory),
                 finishedAt=datetime.now(timezone.utc).isoformat(),
             )
             publish()
+            active_record = None
             print(f'Trial {index}: {record["status"]}', flush=True)
     except BaseException:
-        if results and results[-1]["status"] == "running":
-            results[-1].update(
+        if active_record is not None and active_record["status"] == "running":
+            active_record.update(
                 status="interrupted",
                 validationHistory=validation_history(
-                    trials[len(results) - 1]["config"]["outputDir"]
+                    trials[active_record["trial"] - 1]["config"]["outputDir"]
                 ),
             )
         report["status"] = "interrupted"
         publish()
         raise
     report["status"] = (
-        "completed" if all(r["exitCode"] == 0 for r in results) else "failed"
+        "completed" if all(r["status"] == "completed" and r.get("exitCode") == 0 for r in results) else "failed"
     )
     publish()
     print(f"Tuning results: {report_file}", flush=True)

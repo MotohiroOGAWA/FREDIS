@@ -35,7 +35,7 @@ component flags or architecture documents. Workbench selects the corresponding
 command from its architecture mode.
 
 This grid creates four trials. Candidate lists form a complete Cartesian product;
-the orchestrator does not truncate or prune it. Choose a new search output root.
+the orchestrator does not truncate or prune it. Choose a new output root for a new search; reuse the same plan and root to resume.
 Each trial receives a distinct subdirectory, and a failed trial is recorded while
 later trials continue. The overall command reports failure if any trial fails.
 
@@ -62,7 +62,7 @@ and are excluded from editing/search.
 
 | File | Contents |
 |---|---|
-| `tuning-plan.json` | Submitted search definition |
+| `fragment-tree.tuning-plan.pft` | Submitted search definition |
 | `fragment-tree.tuning.pft` | Trial settings, statuses, timestamps, exit codes, and validation observations |
 | `tuning-scores.tsv` | Trial comparison columns |
 | Trial subdirectories | Ordinary checkpoints, training results, spectra, and logs |
@@ -76,3 +76,41 @@ Open `fragment-tree.tuning.pft` in Workbench to select a metric/statistic, inspe
 trial details, and open its training report. The viewer's ranking choice does
 not change which trials execute. Compare prediction behavior and held-out data,
 rather than treating a short tuning run as an accuracy claim.
+
+`fragment-tree.tuning-plan.pft` is the saved search plan and editable Workbench
+configuration. Workbench plans retain the original form settings and candidate
+order alongside executable trials. Click the file to open the Training Workbench;
+editing and saving regenerates the trials. Choose a fresh output directory when changing the plan. Reopen the same plan
+and keep the same output directory to continue an interrupted search. No separate tuning-plan.json or tuning-config file is
+written. The CLI still accepts legacy JSON search plans through `--plan`, and
+Workbench can restore legacy explicit trial plans through Load Configuration.
+
+## Resume an interrupted search
+
+Run the saved plan again, or open it in Workbench and start Tuning with the same
+settings and output directory (keep **New model** selected; ordinary single-model
+Resume mode is separate):
+
+```bash
+python -m fredis.cli train tune-fragment-tree --plan runs/search/fragment-tree.tuning-plan.pft
+```
+
+The orchestrator checks the saved plan against the result report and
+`tuning-scores.tsv`. A row is completed only when its status is `completed` and
+exit code is zero; a `running`, `failed` or missing row does not skip the trial.
+Completed trial reports can recover scores if the orchestrator was interrupted
+before committing its summary. Completed trials are retained and skipped.
+
+Unfinished trials resume from `last.pt`; a valid periodic checkpoint is used if
+`last.pt` is missing or corrupt. The checkpoint restores architecture, weights,
+optimizer, scheduler, random state and training history. Only the remaining
+planned epochs run, since the ordinary training CLI counts resumed `--epochs`
+as additional epochs. Trials already at the epoch limit or early stopping
+threshold are marked completed without extra training. Unattempted trials start
+normally. New checkpoint writes use atomic replacement.
+
+A non-empty trial directory without a usable checkpoint is reported failed,
+with its files retained; progress before the first checkpoint cannot be restored.
+Changed plans are rejected for an existing search, and a directory lock prevents
+concurrent orchestrators from writing the same search outputs. The original plan
+arguments and actual continuation arguments are both retained in the result.

@@ -8,7 +8,7 @@ from ...base import CLICommand
 class TuneFragmentTreeCommand(CLICommand):
     name = "tune-fragment-tree"
     help = (
-        "Run isolated fragment-tree training trials and save a .tuning.pft comparison."
+        "Run or resume fragment-tree trials and save a .tuning.pft comparison."
     )
     description = (
         "Run the ordinary fragment-tree CLI for each trial. Supply a JSON file with "
@@ -18,7 +18,7 @@ class TuneFragmentTreeCommand(CLICommand):
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         source = parser.add_mutually_exclusive_group(required=True)
-        source.add_argument("--plan", type=Path, help="Search specification JSON file")
+        source.add_argument("--plan", type=Path, help="Saved .tuning-plan.pft or legacy JSON search plan (same output resumes unfinished trials)")
         source.add_argument("--plan-json", help="Inline search specification JSON")
 
     def run(self, args: argparse.Namespace) -> None:
