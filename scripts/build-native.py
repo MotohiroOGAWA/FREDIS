@@ -31,13 +31,14 @@ endif()
 ''')
 modules = ['msentity'] + (['msentity-similarity'] if args.similarity else [])
 for name in modules:
-    source = root / 'upstream' / name
-    build = source / 'build'
+    source = root / 'libs' / name
+    build = root / 'build' / name
     options = [f'-DArrow_DIR={config / "Arrow"}', f'-DParquet_DIR={config / "Parquet"}',
-               '-DMSENTITY_BUILD_TESTS=OFF', '-DMSENTITY_BUILD_TOOLS=OFF']
+               '-DMSENTITY_BUILD_TESTS=OFF', '-DMSENTITY_BUILD_TOOLS=OFF',
+               f'-DCMAKE_BUILD_RPATH={arrow}']
     if name == 'msentity-similarity':
         options += ['-DMSENTITY_SIMILARITY_BUILD_TESTS=OFF', '-DMSENTITY_SIMILARITY_BUILD_TOOLS=OFF',
-                    f'-DFETCHCONTENT_SOURCE_DIR_MSENTITY={root / "upstream/msentity"}']
+                    f'-DFETCHCONTENT_SOURCE_DIR_MSENTITY={root / "libs/msentity"}']
     subprocess.run(['cmake', '-S', str(source), '-B', str(build), *options, *extra], check=True)
     subprocess.run(['cmake', '--build', str(build), '-j', args.jobs], check=True)
     # Install the Python facade and bundle the built C library beside it.
@@ -45,7 +46,11 @@ for name in modules:
     libdir = package / 'lib'
     libdir.mkdir(exist_ok=True)
     import shutil
+    copied = False
     for lib in build.rglob('lib' + name.replace('-', '_') + '_c.*'):
         if lib.suffix in {'.so', '.dylib'}:
             shutil.copy2(lib, libdir / lib.name)
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-deps', '-e', str(source / 'bindings/python')], check=True)
+            copied = True
+    if not copied:
+        raise SystemExit(f'No native shared library found in {build}')
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-build-isolation', '--no-deps', '-e', str(source / 'bindings/python')], check=True)

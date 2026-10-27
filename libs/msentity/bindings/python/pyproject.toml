@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "msentity"
 version = "0.1.0"
 description = "Python binding of the msentity C++ library (MSDS, MSP, MGF, TSV, CSV)"
-license = "MIT"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = ["numpy"]
 

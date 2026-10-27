@@ -13,32 +13,64 @@ sequences. The Python package and command-line entry point are both named
 
 ---
 
-## Installation and separated msentity packages
+## Installation
 
-The snapshots in `upstream/` are pinned in `upstream/versions.json` and contain
-no Git metadata. The viewer is maintained in the separate Workbench repository.
+The native dataset and similarity sources are bundled in `libs/msentity` and
+`libs/msentity-similarity`. `libs/versions.json` records their source revisions;
+local packaging adjustments support this checkout. No submodules are needed.
+The Python APIs remain `import msentity` and `import msentity_similarity`.
 
-Install CMake, a C++20 compiler, HDF5 development files, `nlohmann-json3-dev`,
-and `pyarrow>=20`, then run:
+### Docker (no compiler setup on the host)
 
-```bash
-python scripts/build-native.py                    # dataset library only
-python -m pip install -e .
-```
-
-Spectrum prediction also writes an embedded `.mssim` comparison with the source
-spectra, so that operation needs the separate similarity library:
+From this directory:
 
 ```bash
-python scripts/build-native.py --similarity
-python -m pip install -e '.[similarity]'
+docker build -t fredis .
+docker run --rm -v "$PWD/data:/data" fredis python -m fredis.cli --help
 ```
 
-The native helper uses Arrow/Parquet from pyarrow. Extra CMake options may be
-passed after `--`. The `fredis.data` compatibility model retains the existing
-mutable pandas/NumPy training interfaces; native msentity handles file I/O and
-msentity-similarity handles prediction scoring. Ordinary data preparation and
-fragmentation do not import similarity.
+The image includes FREDIS, both compiled native libraries, and the scientific
+Python dependencies. It needs no separate msentity service or server. This
+image supports CPU use; the workspace's existing `env/docker` image supplies
+the NVIDIA/PyTorch environment for GPU use. Rebuild that environment image to
+include the native build prerequisites. Dev Container creation and Docker
+Compose startup install this checkout automatically.
+
+### Existing Python / CUDA environment
+
+Use Python 3.10+ on Linux/macOS. On Debian/Ubuntu, install the build tools once:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libhdf5-dev nlohmann-json3-dev
+```
+
+Then, in your chosen virtual environment or container:
+
+```bash
+python scripts/install.py
+```
+
+This single command installs Python dependencies, builds both native libraries,
+and installs their Python bindings and FREDIS as editable packages. An existing
+PyTorch installation is reused; select your desired CUDA build beforehand.
+CMake 3.21+ and a C++20 compiler are required. On macOS install CMake, HDF5 and
+nlohmann-json with your package manager. On Windows use Docker.
+
+```bash
+python -c "import msentity, msentity_similarity, fredis"
+python -m pytest tests -v
+```
+
+Build output lives in `build/` and native libraries are copied into each binding
+package. Re-run the installer after moving the checkout, changing PyArrow, or
+updating the C++ sources. `--jobs 2` reduces parallel compiler memory use;
+`--no-deps` uses an already provisioned Python environment. For native-only work,
+`python scripts/build-native.py --similarity` remains available (requires
+PyArrow 20+, setuptools and wheel). Ordinary `pip install -e .` alone does not
+compile the bundled C++ sources.
+
+See [installation details](docs/guides/installation.md).
 
 ## Reaction Pattern Analysis
 

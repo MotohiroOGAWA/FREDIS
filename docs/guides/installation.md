@@ -4,50 +4,65 @@ FREDIS has a Python package, command-line workflows, and an optional VS Code
 Workbench. Install the scientific environment before installing the editable
 checkout. Python **3.10 or newer** is required.
 
-## Native dataset library
+## Recommended: Docker
 
-This fresh source tree includes source snapshots in `upstream/` and chemistry
-code in `fredis/libs/mmkit`; no submodule initialization is needed. See
-`upstream/versions.json` for the pinned dataset and similarity revisions.
-Install CMake, a C++20 compiler, HDF5 development files, `nlohmann-json3-dev`,
-and `pyarrow>=20`, then build/install the native Python bindings:
+From the FREDIS repository root:
 
 ```bash
-python scripts/build-native.py
+docker build -t fredis .
+docker run --rm -v "$PWD/data:/data" fredis python -m fredis.cli --help
 ```
 
-For spectrum prediction, build the separate similarity library as well with
-`python scripts/build-native.py --similarity`, then install `'.[similarity]'`.
-The viewer belongs to the separate Workbench repository.
+The image builds and installs the native libraries and their Python bindings,
+FREDIS, PyTorch, PyTorch Geometric, RDKit, and pytest. It supports CPU workflows.
+Data under the mounted `/data` directory persists on the host. For example,
+pass input/output arguments using `/data/...` paths. No msentity server is needed.
 
-## Python and scientific dependencies
+For the existing GPU workspace, rebuild `env/docker/Dockerfile` using the
+workspace's usual image build procedure. It now includes CMake, C++ tools,
+HDF5 headers and nlohmann-json. Dev Container creation runs
+`python mnt/fredis/scripts/install.py`; Compose startup runs the same installer
+from the backend directory. Existing containers can run the command manually.
 
-Use the Python environment in which you intend to prepare data, train, and run
-prediction. The model needs PyTorch, PyTorch Geometric, RDKit, and the chemistry library's
-`bidict` dependency. Choose a PyTorch
-build compatible with the available CPU/CUDA environment before installing FREDIS.
+## Existing Python or GPU environment
+
+The sources in `libs/msentity` and `libs/msentity-similarity` are bundled snapshots;
+`libs/versions.json` records their base revisions. The chemistry code remains in
+`fredis/libs/mmkit`. No submodule initialization is needed.
+
+Use Python 3.10+, CMake 3.21+, a C++20 compiler, HDF5 development files and
+nlohmann-json 3.10+. On Debian/Ubuntu:
 
 ```bash
-python -m pip install torch torch-geometric rdkit bidict
-python -m pip install -e .
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libhdf5-dev nlohmann-json3-dev
+python scripts/install.py
 ```
 
-The editable install adds the declared NumPy, pandas, matplotlib, HDF5, PyArrow,
-and progress-display dependencies. It does not choose a CUDA build or install a
-GPU driver. The example command above uses the package index's default PyTorch
-build; an existing cluster/container environment can supply its own build.
+Run this inside the virtual environment or container that will run FREDIS. The
+installer sets up Python dependencies, compiles both libraries, installs their
+Python bindings and installs FREDIS with similarity support. Existing PyTorch
+is reused; choose your CPU/CUDA build before running the installer if needed.
+On macOS install the corresponding build prerequisites with your package
+manager; Windows users should use Docker.
 
-Verify the environment using the same executable that will run the CLI:
+The binding packages bundle the compiled shared libraries, so normal imports
+work without PYTHONPATH or manually configured library paths:
 
 ```bash
-python -c "import torch, torch_geometric; from rdkit import Chem; print(torch.__version__, torch.cuda.is_available(), Chem.MolFromSmiles('CCO') is not None)"
+python -c "import msentity, msentity_similarity, fredis"
 python -m fredis.cli --help
-python -m fredis.ml.specgen.predict_spectrum --help
+python -m pytest tests -v
 ```
 
-The first command prints the installed PyTorch version, CUDA availability, and
-whether RDKit parsed ethanol. CPU execution works with `--device cpu` even when
-CUDA is unavailable. Continue with the [quickstart](../quickstart.md).
+`python scripts/install.py --jobs 2` reduces build parallelism. `--no-deps`
+skips Python dependency installation when the environment is already prepared.
+Native-only development can use `python scripts/build-native.py --similarity`
+with PyArrow 20+, setuptools and wheel already installed. Build files are under
+`build/`. Re-run the installer after moving the checkout, changing PyArrow,
+or updating native sources. `pip install -e .` alone does not build native code.
+
+Continue with the [quickstart](../quickstart.md).
 
 ## Command names
 

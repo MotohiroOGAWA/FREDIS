@@ -1,0 +1,11 @@
+.git
+**/__pycache__
+**/.pytest_cache
+**/build
+**/*.egg-info
+**/bindings/python/msentity/lib
+**/bindings/python/msentity_similarity/lib
+.venv
+data
+dist
+docs/_build

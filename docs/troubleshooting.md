@@ -9,7 +9,7 @@ look similar. Preserve the failing command and log with the resolved configurati
 | Symptom | Check / action |
 |---|---|
 | `torch`, `torch_geometric`, or `rdkit` cannot import | Use the intended Python environment and install scientific dependencies before the editable package |
-| A bundled `mmkit`/`msentity` import fails | Run `git submodule update --init --recursive` in the checkout |
+| A bundled `mmkit`/`msentity` import fails | Run `python scripts/install.py` in the checkout to build and install both native bindings |
 | CUDA is unavailable | Check `torch.cuda.is_available()` and the installed driver/build; use `--device cpu` for a CPU check |
 | Workbench succeeds in a terminal but fails in its job | Compare `fredis.pythonPath`, `fredis.applicationRoot`, and **Settings → Environment** with that terminal |
 

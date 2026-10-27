@@ -32,7 +32,7 @@ include = ["fredis*"]
 
 [project.optional-dependencies]
 similarity = ["msentity-similarity>=0.1.0"]
-dev = ["black==26.10.1"]
+dev = ["black==26.10.1", "pytest"]
 
 docs = [
     "sphinx>=8",
