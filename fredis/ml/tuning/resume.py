@@ -15,6 +15,8 @@ def plan_signature(trials):
 def read_progress(output, plan, result_name, plan_name):
     """Check identity before trusting a completed row or touching trial outputs."""
     report_file = output / result_name
+    if not report_file.exists():
+        report_file = next((output / name for name in ('fragment-tree.tuning.pft', 'fragment-tree.tuning-result.pft') if (output / name).exists()), report_file)
     report = json.loads(report_file.read_text()) if report_file.exists() else {}
     saved_file = next((output / name for name in (plan_name, 'tuning-plan.json') if (output / name).exists()), None)
     signature = plan_signature(plan['trials'])

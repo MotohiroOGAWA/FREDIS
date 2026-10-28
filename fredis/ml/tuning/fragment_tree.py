@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-RESULT_NAME = "fragment-tree.tuning.pft"
+RESULT_NAME = "result.tuning.pft"
 PLAN_NAME = "fragment-tree.tuning-plan.pft"
 
 

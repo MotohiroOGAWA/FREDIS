@@ -21,7 +21,7 @@ PyTorch-serialized prepared structures.
 | `*.reaction-model.pt` | PyTorch | Complete portable reaction pattern feature asset |
 | `fragment-tree.training-config.pft` | JSON | Resolved training settings for Workbench |
 | `result.training.pft` | JSON | Training result report and metric locations |
-| `fragment-tree.tuning.pft` | JSON | Trial settings, observations and statuses |
+| `result.tuning.pft` | JSON | Trial settings, observations and statuses |
 | `prediction.pft` | JSON | Prediction settings and provenance |
 | `result.reactionpatternanalysis.pft` | HDF5 | Analysis-wide summaries and indexes |
 | `compounds/*.peaks.parquet` | Parquet | Reaction-analysis peak summaries |

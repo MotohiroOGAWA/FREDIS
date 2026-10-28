@@ -194,3 +194,20 @@ def test_completed_training_report_recovers_missing_score_and_result(tmp_path):
         train.assert_not_called()
     report = json.loads((tmp_path / RESULT_NAME).read_text())
     assert report['trials'][0]['scoreSummaries']['validation_loss']['last'] == 0.5
+
+
+@pytest.mark.parametrize('legacy_name', ['fragment-tree.tuning.pft', 'fragment-tree.tuning-result.pft'])
+def test_legacy_result_name_resumes_without_retraining(tmp_path, legacy_name):
+    search = plan(tmp_path, 1)
+    with patch('fredis.ml.tuning.fragment_tree.subprocess.call', return_value=0):
+        assert run(search) == 0
+    assert RESULT_NAME == 'result.tuning.pft'
+    legacy = tmp_path / legacy_name
+    (tmp_path / RESULT_NAME).rename(legacy)
+    (tmp_path / 'tuning-scores.tsv').unlink()
+    with patch('fredis.ml.tuning.fragment_tree.subprocess.call') as train:
+        assert run(search) == 0
+        train.assert_not_called()
+    result = json.loads((tmp_path / RESULT_NAME).read_text())
+    assert result['status'] == 'completed'
+    assert len(result['trials']) == 1

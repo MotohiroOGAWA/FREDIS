@@ -63,7 +63,7 @@ and are excluded from editing/search.
 | File | Contents |
 |---|---|
 | `fragment-tree.tuning-plan.pft` | Submitted search definition |
-| `fragment-tree.tuning.pft` | Trial settings, statuses, timestamps, exit codes, and validation observations |
+| `result.tuning.pft` | Trial settings, statuses, timestamps, exit codes, and validation observations |
 | `tuning-scores.tsv` | Trial comparison columns |
 | Trial subdirectories | Ordinary checkpoints, training results, spectra, and logs |
 
@@ -72,7 +72,7 @@ including cosine/loss distribution summaries. Q1/Q3/median/mean describe spectra
 within an epoch. Maximum, final-epoch, and loss minimum values are distinct
 statistics; a missing final observation stays missing.
 
-Open `fragment-tree.tuning.pft` in Workbench to select a metric/statistic, inspect
+Open `result.tuning.pft` in Workbench to select a metric/statistic, inspect
 trial details, and open its training report. The viewer's ranking choice does
 not change which trials execute. Compare prediction behavior and held-out data,
 rather than treating a short tuning run as an accuracy claim.
@@ -114,3 +114,15 @@ with its files retained; progress before the first checkpoint cannot be restored
 Changed plans are rejected for an existing search, and a directory lock prevents
 concurrent orchestrators from writing the same search outputs. The original plan
 arguments and actual continuation arguments are both retained in the result.
+
+## Copy a short command from Workbench
+
+**Save Tuning Plan & Copy Command** saves the current tuning candidates and settings in a
+`fragment-tree.tuning-plan.pft` file inside the current Output Directory and copies
+a command referencing that file with `--plan`. The source configuration file
+location does not determine the export destination.
+It no longer embeds every trial in a long `--plan-json` argument. Candidate order
+(for example `512, 256, 128, 64`) and all trial settings stay in the saved plan.
+The plan must remain available when running the copied command. Copying an
+unchanged search retains its existing plan; changing an already executed search
+requires a new output directory.
