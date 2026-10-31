@@ -77,9 +77,9 @@ def validation_history(directory):
 def summarize_trial(trial):
     """Retain every comparison column, independent of any ranking preference."""
     history = trial.get("validationHistory", [])
-    metrics = sorted(
-        {key for row in history for key in row if key.startswith("validation")}
-    )
+    metrics = list(dict.fromkeys(
+        key for row in history for key in row if key.startswith("validation")
+    ))
     result = {}
     for metric in metrics:
         observations = [
@@ -266,15 +266,13 @@ def _run(plan):
             else:
                 trial.setdefault("scoreSummaries", {})
         report.update(updatedAt=datetime.now(timezone.utc).isoformat())
-        columns = sorted(
-            {
+        columns = list(dict.fromkeys(
                 f"{metric}.{stat}"
                 for trial in results
                 for metric, summary in trial["scoreSummaries"].items()
                 for stat in summary
                 if stat in ("max", "last", "min")
-            }
-        )
+        ))
         report["scoreColumns"] = columns
         table = output / "tuning-scores.tsv.tmp"
         with table.open("w") as stream:

@@ -165,3 +165,18 @@ def test_appending_after_interruption_keeps_complete_rows(tmp_path):
         stream.write(name + "\t2\t2\t\t1.")
     write_series_rows(tmp_path, [(name, 3, 3, "", 1.0)])
     assert [row["global_step"] for row in read_series(tmp_path, name)] == ["1", "3"]
+
+
+def test_recording_order_survives_catalog_and_tuning_summary(tmp_path):
+    from fredis.ml.tuning.fragment_tree import validation_history, summarize_trial
+
+    names = ["validation_loss", "validation_branch_loss", "validation_assignment_score"]
+    event = {"event": "epoch_end", "global_step": 10, "epoch": 1, **dict.fromkeys(names, 0.5)}
+    write_series_rows(tmp_path, scalar_rows([event]), replace=True)
+    assert [entry["name"] for entry in catalog(tmp_path)["series"]] == ["metrics/" + name for name in names]
+    history = validation_history(tmp_path)
+    assert list(summarize_trial({"validationHistory": history})) == names
+    # Appends keep established order and add new metrics at the end.
+    event["validation_cosine_loss"] = 0.2
+    write_series_rows(tmp_path, scalar_rows([event]), replace=True)
+    assert list(summarize_trial({"validationHistory": validation_history(tmp_path)})) == names + ["validation_cosine_loss"]

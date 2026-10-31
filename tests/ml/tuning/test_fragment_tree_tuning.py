@@ -84,6 +84,8 @@ class TuningTests(unittest.TestCase):
             self.assertEqual(report['status'], 'completed')
             self.assertEqual(len(report['trials'][0]['validationHistory']), 2)
             summaries = report['trials'][0]['scoreSummaries']
+            self.assertEqual(list(summaries)[:2], ['validation_loss', 'validation_cosine'])
+            self.assertEqual(report['scoreColumns'][0], 'validation_loss.max')
             self.assertEqual(summaries['validation_loss']['min'], 1)
             self.assertEqual(summaries['validation_loss']['max'], 2)
             self.assertEqual(summaries['validation_loss']['last'], 2)

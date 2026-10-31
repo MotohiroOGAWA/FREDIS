@@ -117,7 +117,7 @@ def write_series_rows(output, rows, *, replace=False, legacy_sources=None):
             writer.writerows(items)
         if replace:
             destination.replace(target)
-    catalog["series"] = sorted(entries.values(), key=lambda entry: entry["name"])
+    catalog["series"] = list(entries.values())
     if legacy_sources is not None:
         catalog["legacySources"] = legacy_sources
     if grouped:
@@ -159,7 +159,7 @@ def iter_series_rows(output, prefix):
         item for item in _catalog(output)["series"] if item["name"].startswith(prefix)
     ]
     wanted = {item["name"] for item in entries}
-    for relative in sorted({item["file"] for item in entries}):
+    for relative in dict.fromkeys(item["file"] for item in entries):
         target = (output / relative).resolve()
         if not target.is_relative_to(output.resolve()):
             raise ValueError("Metric file escapes the training directory")
@@ -172,13 +172,13 @@ def iter_series_rows(output, prefix):
 def read_scalar_events(output):
     output = Path(output)
     catalog = _catalog(output)
-    files = {
+    files = dict.fromkeys(
         entry["file"]
         for entry in catalog["series"]
         if entry["name"].startswith("metrics/")
-    }
+    )
     events = {}
-    for relative in sorted(files):
+    for relative in files:
         target = (output / relative).resolve()
         if not target.is_relative_to(output.resolve()):
             raise ValueError("Metric file escapes the training directory")
