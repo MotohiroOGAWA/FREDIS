@@ -345,7 +345,7 @@ select peak cell  → the C files on the node's path only
 python -m fredis.cli analysis reaction-pattern \
   --source-spec '{"path":"nist-positive.msds","kind":"dataset","columns":{"smiles":"SMILES","adduct":"AdductType","collision_energy":"CollisionEnergy","precursor_mz":"PrecursorMZ"}}' \
   --output-dir results/reaction-pattern-analysis \
-  --params single_bond_cleavage_pos.fragmenter.pft \
+  --params single_bond_cleavage_m_h_plus.fragmenter.pft \
   --tree-config tree.json \
   --max-reaction-count 3 --mass-tolerance "20 ppm" \
   --num-workers 8 --chunk-size 4

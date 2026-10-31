@@ -6,7 +6,7 @@
       "patterns": [
         {
           "name": "nonring_o_n_single_bond",
-          "reactant_smarts": "[#8&!#1&!#1:1]-&!@[#7&!#1:2]",
+          "reactant_smarts": "[#8:1]-&!@[#7:2]",
           "products": [
             {
               "name": "o_side",
@@ -20,7 +20,7 @@
         },
         {
           "name": "nonring_o_single_bond",
-          "reactant_smarts": "[#8&!#1&!#1:1]-&!@[!#7&!#1:2]",
+          "reactant_smarts": "[#8:1]-&!@[!#7&!#1:2]",
           "products": [
             {
               "name": "o_side",
@@ -34,7 +34,7 @@
         },
         {
           "name": "nonring_n_single_bond",
-          "reactant_smarts": "[#7&!#1&!#1:1]-&!@[!#8&!#1:2]",
+          "reactant_smarts": "[#7:1]-&!@[!#8&!#1:2]",
           "products": [
             {
               "name": "n_side",
@@ -48,7 +48,7 @@
         },
         {
           "name": "nonring_c_single_bond",
-          "reactant_smarts": "[#6&!#1&!#1:1]-&!@[!#8&!#7&!#1:2]",
+          "reactant_smarts": "[#6:1]-&!@[!#8&!#7&!#1:2]",
           "products": [
             {
               "name": "c_side",
@@ -62,7 +62,7 @@
         },
         {
           "name": "nonring_halogen_single_bond",
-          "reactant_smarts": "[#9,#17,#35,#53;!#1:1]-&!@[!#1:2]",
+          "reactant_smarts": "[#9,#17,#35,#53:1]-&!@[!#1:2]",
           "products": [
             {
               "name": "halogen_side",
@@ -87,42 +87,13 @@
       ]
     },
     "fragment_ion_adduct_rule_set": {
-      "name": "adduct_rule_pos_H_Na_NH4_2M",
+      "name": "m_h_plus",
       "adduct_rules": [
         {
-          "name": "pos_H_r1_u2",
+          "name": "pos_H",
           "adduct_type": "[M+H]+",
           "fragment_ion_adducts": [
-            "[M-H]+",
             "[M+H]+"
-          ]
-        },
-        {
-          "name": "pos_Na_r1_u2",
-          "adduct_type": "[M+Na]+",
-          "fragment_ion_adducts": [
-            "[M+Na]+",
-            "[M-H]+",
-            "[M+H]+"
-          ]
-        },
-        {
-          "name": "pos_NH4_r1_u2",
-          "adduct_type": "[M+H4N]+",
-          "fragment_ion_adducts": [
-            "[M+H4N]+",
-            "[M+H]+",
-            "[M-H]+"
-          ]
-        },
-        {
-          "name": "pos_2M_H_to_M_r1_u2",
-          "adduct_type": "[2M+H]+",
-          "fragment_ion_adducts": [
-            "[2M+H]+",
-            "[2M-H]+",
-            "[M+H]+",
-            "[M-H]+"
           ]
         }
       ],

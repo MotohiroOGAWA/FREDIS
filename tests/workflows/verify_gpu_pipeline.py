@@ -69,7 +69,7 @@ def main():
             MSDataset(metadata, selected.peaks, columns=metadata.columns.tolist()).save(str(out / (split + '.msds')))
         del records
     train_data = MSDataset.load(str(out / 'train.msds'), load_peak_metadata=False)
-    base = json.loads((ROOT / 'fredis/presets/fragment/reaction_pattern_sets/nonring_single_bond/nonring_single_bond.fragmenter.pft').read_text())
+    base = json.loads((ROOT / 'fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft').read_text())
     base['fragment_ion_tree_builder']['max_reaction_count'] = 2
     (out / 'base.fragmenter.pft').write_text(json.dumps(base, indent=2))
 

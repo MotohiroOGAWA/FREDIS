@@ -85,7 +85,7 @@ class TestConfigOptions(unittest.TestCase):
         self.assertEqual(kwargs['chemistry_config']['fragmenter_params']['precursor_candidate_max_reaction_count'],1)
 
     def test_official_training_command_forwards_explicit_options(self):
-        from fredis.cli.train.commands.fragment_tree import FragmentTreeTrainCommand
+        from fredis.cli.train.commands.fragment_tree_detailed import FragmentTreeDetailedTrainCommand
         from fredis.ml.training.fragment_tree_training import training
         args=training.build_arg_parser().parse_args(['--dataset-dir','dataset','--output-dir','out',
             '--node-dim','48','--max-fragment-nodes','80',
@@ -95,7 +95,7 @@ class TestConfigOptions(unittest.TestCase):
             '--validation-interval-steps','1000','--validation-fraction','0.1'])
         with tempfile.TemporaryDirectory() as directory, patch('fredis.ml.training.fragment_tree_training.sources.inherit_model_config',side_effect=lambda config,*args,**kwargs:config) as inherit, patch('fredis.ml.training.fragment_tree_training.sources.prepared_dataset_paths',return_value=(Path('dataset/train_structures'),Path('dataset/validation_structures'))), patch.object(training,'train_reactions',return_value={}) as run, patch('builtins.print'):
             args.output_dir=directory
-            FragmentTreeTrainCommand().run(args)
+            FragmentTreeDetailedTrainCommand().run(args)
         inherit.assert_not_called()
         self.assertEqual(run.call_args.kwargs['model_config']['mol_encoder_params']['node_dim'],48)
         self.assertEqual(run.call_args.kwargs['model_config']['generation_params']['max_fragment_nodes'],80)

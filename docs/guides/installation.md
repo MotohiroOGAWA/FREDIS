@@ -26,9 +26,11 @@ from the backend directory. Existing containers can run the command manually.
 
 ## Existing Python or GPU environment
 
-The sources in `libs/msentity` and `libs/msentity-similarity` are bundled snapshots;
-`libs/versions.json` records their base revisions. The chemistry code remains in
-`fredis/libs/mmkit`. No submodule initialization is needed.
+The sources in `libs/msentity` and `libs/msentity-similarity` are Git submodules.
+Git records their exact tested commits; the chemistry code remains in
+`fredis/libs/mmkit`. Clone with `--recurse-submodules`, or run
+`git submodule update --init --recursive` after cloning or pulling updates.
+Initialize the submodules before `docker build` as well.
 
 Use Python 3.10+, CMake 3.21+, a C++20 compiler, HDF5 development files and
 nlohmann-json 3.10+. On Debian/Ubuntu:
@@ -36,6 +38,7 @@ nlohmann-json 3.10+. On Debian/Ubuntu:
 ```bash
 sudo apt-get update
 sudo apt-get install -y build-essential cmake libhdf5-dev nlohmann-json3-dev
+git submodule update --init --recursive
 python scripts/install.py
 ```
 
@@ -58,7 +61,7 @@ python -m pytest tests -v
 `python scripts/install.py --jobs 2` reduces build parallelism. `--no-deps`
 skips Python dependency installation when the environment is already prepared.
 Native-only development can use `python scripts/build-native.py --similarity`
-with PyArrow 20+, setuptools and wheel already installed. Build files are under
+with PyArrow 20+, setuptools 77+, packaging 24.2+ and wheel already installed. Build files are under
 `build/`. Re-run the installer after moving the checkout, changing PyArrow,
 or updating native sources. `pip install -e .` alone does not build native code.
 

@@ -19,7 +19,7 @@ def main():
         subprocess.run([sys.executable, *command], cwd=root, check=True)
 
     if not args.no_deps:
-        run("-m", "pip", "install", "setuptools>=61", "wheel", "pyarrow>=20",
+        run("-m", "pip", "install", "setuptools>=77", "packaging>=24.2", "wheel", "pyarrow>=20",
             "torch", "torch-geometric", "rdkit", "bidict", "pytest")
     run(str(root / "scripts/build-native.py"), "--similarity", "--jobs", str(args.jobs))
     options = ["--no-deps"] if args.no_deps else []

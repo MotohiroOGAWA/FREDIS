@@ -1,4 +1,4 @@
-"""Build source snapshots with the Arrow/Parquet shipped in pyarrow.
+"""Build Git submodule sources with the Arrow/Parquet shipped in pyarrow.
 
 Requires CMake, a C++20 compiler, HDF5 development files and nlohmann-json.
 Extra CMake options may be passed after --, e.g. -DCMAKE_PREFIX_PATH=/deps.
@@ -16,6 +16,16 @@ parser.add_argument('--no-editable', action='store_true',
 args, extra = parser.parse_known_args()
 extra = [x for x in extra if x != '--']
 root = Path(__file__).resolve().parents[1]
+for module in ['libs/msentity'] + (['libs/msentity-similarity'] if args.similarity else []):
+    if not (root / module / 'CMakeLists.txt').is_file():
+        raise SystemExit(f'Missing submodule {module}. Run: git submodule update --init --recursive')
+from importlib.metadata import version
+if int(version('setuptools').split('.')[0]) < 77:
+    raise SystemExit('Native Python bindings require setuptools 77+. Run: python -m pip install \"setuptools>=77\" wheel')
+try:
+    from packaging.licenses import canonicalize_license_expression
+except ImportError:
+    raise SystemExit('Native Python bindings require packaging 24.2+. Run: python -m pip install "packaging>=24.2"')
 import pyarrow
 arrow = Path(pyarrow.__file__).parent
 config = root / 'build/native-deps'

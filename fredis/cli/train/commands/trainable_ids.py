@@ -39,7 +39,7 @@ class TrainableIdsCommand(CLICommand):
     def run(self, args):
         default = (
             Path(__file__).resolve().parents[3]
-            / "presets/fragment/reaction_pattern_sets/nonring_single_bond/nonring_single_bond.fragmenter.pft"
+            / "presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft"
         )
         fragmenter = json.loads(default.read_text())
         fragmenter["fragment_ion_tree_builder"]["max_reaction_count"] = 1

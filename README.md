@@ -15,10 +15,15 @@ sequences. The Python package and command-line entry point are both named
 
 ## Installation
 
-The native dataset and similarity sources are bundled in `libs/msentity` and
-`libs/msentity-similarity`. `libs/versions.json` records their source revisions;
-local packaging adjustments support this checkout. No submodules are needed.
+The native dataset and similarity sources are Git submodules in `libs/msentity`
+and `libs/msentity-similarity`. Git records the exact tested commits. After cloning
+(or pulling an update), run `git submodule update --init --recursive` before building.
 The Python APIs remain `import msentity` and `import msentity_similarity`.
+
+Initialize the submodules before building a Docker image too. To update a library,
+fetch its releases, check out the intended tag/commit inside `libs/`, rebuild,
+and run the tests before committing the updated submodule reference. Update
+msentity and msentity-similarity together to compatible releases.
 
 ### Docker (no compiler setup on the host)
 
@@ -48,6 +53,7 @@ sudo apt-get install -y build-essential cmake libhdf5-dev nlohmann-json3-dev
 Then, in your chosen virtual environment or container:
 
 ```bash
+git submodule update --init --recursive
 python scripts/install.py
 ```
 
@@ -67,7 +73,7 @@ package. Re-run the installer after moving the checkout, changing PyArrow, or
 updating the C++ sources. `--jobs 2` reduces parallel compiler memory use;
 `--no-deps` uses an already provisioned Python environment. For native-only work,
 `python scripts/build-native.py --similarity` remains available (requires
-PyArrow 20+, setuptools and wheel). Ordinary `pip install -e .` alone does not
+PyArrow 20+, setuptools 77+, packaging 24.2+ and wheel). Ordinary `pip install -e .` alone does not
 compile the bundled C++ sources.
 
 See [installation details](docs/guides/installation.md).

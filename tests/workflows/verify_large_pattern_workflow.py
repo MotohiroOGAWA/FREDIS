@@ -48,7 +48,7 @@ def run(name,argv):
     commands.append(dict(step=name,args=argv,seconds=round(time.monotonic()-start,2)))
     progress.write_text(json.dumps(commands,indent=2))
 
-base=json.loads((repo/'fredis/presets/fragment/reaction_pattern_sets/nonring_single_bond/nonring_single_bond.fragmenter.pft').read_text())
+base=json.loads((repo/'fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft').read_text())
 base['fragment_ion_tree_builder']['max_reaction_count']=1
 base['fragment_ion_tree_builder']['fragment_ion_adduct_rule_set']['adduct_rules'].append(dict(name='pos_K',adduct_type='[M+K]+',fragment_ion_adducts=['[M+K]+','[M-H]+','[M+H]+']))
 (out/'configs/base.fragmenter.pft').write_text(json.dumps(base,indent=2))

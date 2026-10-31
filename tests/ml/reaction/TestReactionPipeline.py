@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-FRAGMENTER = Path("fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft")
+FRAGMENTER = Path(__file__).resolve().parents[2] / "fixtures/fragmenter.pft"
 SYMBOLS = ["C", "N", "O", "P", "S", "F", "Cl", "Br", "I"]
 
 

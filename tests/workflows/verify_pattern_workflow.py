@@ -43,7 +43,7 @@ for split, indexes in [('train', [4305, 4358]), ('validation', [3765, 3762])]:
     dataset = MSDataset(metadata, view.peaks, columns=metadata.columns.tolist())
     dataset.save(str(out / f'{split}.msds'))
 
-base = json.loads((ROOT / 'fredis/presets/fragment/reaction_pattern_sets/nonring_single_bond/nonring_single_bond.fragmenter.pft').read_text())
+base = json.loads((ROOT / 'fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft').read_text())
 base['fragment_ion_tree_builder']['max_reaction_count'] = 1
 # Small motif definitions exercise new pattern parameters on the actual
 # flavanone spectra. They are workflow probes, not validated fragmentation rules.

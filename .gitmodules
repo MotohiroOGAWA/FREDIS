@@ -1,0 +1,8 @@
+[submodule "libs/msentity"]
+	path = libs/msentity
+	url = https://github.com/MotohiroOGAWA/msentity.git
+	ignore = untracked
+[submodule "libs/msentity-similarity"]
+	path = libs/msentity-similarity
+	url = https://github.com/MotohiroOGAWA/msentity-similarity.git
+	ignore = untracked

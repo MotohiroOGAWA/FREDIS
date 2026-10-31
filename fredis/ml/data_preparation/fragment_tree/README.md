@@ -10,7 +10,7 @@ RDKit.
 ```bash
 python -m fredis.cli train create-fragment-tree-data \
   --input train.msds --validation-input validation.msds \
-  --output-dir prepared --params single_bond_cleavage_pos.fragmenter.pft \
+  --output-dir prepared --params single_bond_cleavage_m_h_plus.fragmenter.pft \
   --num-workers 4 --chunk-size 4 \
   --max-unique-fragment-smiles 1000 --max-reaction-combinations 50000 \
   --overwrite 1
@@ -119,7 +119,7 @@ The CLI accepts the same list using `--datasets-json` and `--dataset-mode`:
 python -m fredis.cli train create-fragment-tree-data \
   --datasets-json '[{"path":"a.msds","split":"train"},{"path":"b.msds","split":"validation"},{"path":"c.msds","split":"test"}]' \
   --dataset-mode assigned --output-dir prepared \
-  --params fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft
+  --params fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft
 ```
 
 Each list entry can include `id` and `mapping` with `smilesColumn`,
@@ -193,7 +193,7 @@ CLI command as standalone workflows:
 python -m fredis.cli train split-datasets \
   --datasets-json '[{"path":"a.msds"},{"path":"b.msds"}]' \
   --dataset-mode automatic --validation-ratio 0.1 --test-ratio 0.1 --seed 7 \
-  --params fredis/presets/fragment/single_bond_cleavage_pos.fragmenter.pft \
+  --params fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft \
   --output-dir split-datasets
 ```
 

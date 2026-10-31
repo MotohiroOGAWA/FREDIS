@@ -1,4 +1,0 @@
-<Solution>
-  <Project Path="MsEntity.Tests/MsEntity.Tests.csproj" />
-  <Project Path="MsEntity/MsEntity.csproj" />
-</Solution>
