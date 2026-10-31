@@ -53,8 +53,13 @@ for name in modules:
                     f'-DFETCHCONTENT_SOURCE_DIR_MSENTITY={root / "libs/msentity"}']
     subprocess.run(['cmake', '-S', str(source), '-B', str(build), *options, *extra], check=True)
     subprocess.run(['cmake', '--build', str(build), '-j', args.jobs], check=True)
-    # Install the Python facade and bundle the built C library beside it.
-    package = source / 'bindings/python' / name.replace('-', '_')
+    # Stage bindings outside the submodule: neither packaging metadata nor
+    # compiled libraries should modify the upstream checkout.
+    import shutil
+    bindings = root / 'build/python-bindings' / name
+    shutil.copytree(source / 'bindings/python', bindings, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns('lib', '__pycache__', '*.egg-info', 'build', 'dist'))
+    package = bindings / name.replace('-', '_')
     libdir = package / 'lib'
     libdir.mkdir(exist_ok=True)
     import shutil
@@ -67,4 +72,4 @@ for name in modules:
         raise SystemExit(f'No native shared library found in {build}')
     install_mode = [] if args.no_editable else ['-e']
     subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-build-isolation', '--no-deps',
-                    *install_mode, str(source / 'bindings/python')], check=True)
+                    *install_mode, str(bindings)], check=True)
