@@ -328,10 +328,10 @@ def load_samples(
         precursorMzColumn=columns["precursor_mz"],
     )
     inspection = inspect_records(data, fragmenter, mapping, symbols=symbols)
-    smiles = data[columns["smiles"]].tolist()
-    adducts = data[columns["adduct"]].tolist()
-    energies = data[columns["collision_energy"]].tolist()
-    precursors = data[columns["precursor_mz"]].tolist()
+    smiles = data[columns["smiles"]]
+    adducts = data[columns["adduct"]]
+    energies = data[columns["collision_energy"]]
+    precursors = data[columns["precursor_mz"]]
     samples: list[SampleRecord] = []
     invalid_peaks = 0
     for local in tqdm(
@@ -343,7 +343,7 @@ def load_samples(
     ):
         precursor_mz = float(precursors[local])
         energy = parse_ce_to_ev(energies[local], precursor_mz)
-        values = [(float(peak.mz), float(peak.intensity)) for peak in data[local].peaks]
+        values = list(zip(data[local].mz.tolist(), data[local].intensity.tolist()))
         if (
             energy is None
             or not math.isfinite(float(energy))

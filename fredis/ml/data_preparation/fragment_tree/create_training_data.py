@@ -11,7 +11,8 @@ from tqdm import tqdm
 from fredis.utils.parallel_subprocess import run_parallel_subprocesses
 from fredis.domain.fragment.tree.FragmentTreeBuilder import FragmentTreeLimitExceeded
 from fredis.libs.mmkit.mmkit import Compound, Adduct
-from fredis.data import MSDataset
+
+import msentity as ms
 from fredis.domain.mass.parse_ce import parse_ce_to_ev
 from fredis.ml.input.structure_builder import ReactionStructureBuilder
 from fredis.ml.input.source_reaction_structure import (
@@ -134,6 +135,8 @@ def _confirm_existing_output(args):
 
 def _prepare_group(task, builder, options):
     tree, smiles, rows, dataset, *seed_rows = task
+    if isinstance(dataset, bytes):
+        dataset = ms.from_bytes(dataset)
     output = Path(options["output_dir"])
     adduct_type_column = options["adduct_type_column"]
     collision_energy_column = options["collision_energy_column"]
@@ -145,16 +148,16 @@ def _prepare_group(task, builder, options):
     intensities = []
     for index in range(len(dataset)):
         record = dataset[index]
-        adducts.append(Adduct.parse(str(dataset[adduct_type_column].iloc[index])))
-        precursor_mz = float(dataset[precursor_mz_column].iloc[index])
+        adducts.append(Adduct.parse(str(dataset[adduct_type_column][index])))
+        precursor_mz = float(dataset[precursor_mz_column][index])
         if not math.isfinite(precursor_mz) or precursor_mz <= 0:
             raise ValueError(f"Invalid precursor m/z at record {rows[index]}")
-        ev = parse_ce_to_ev(dataset[collision_energy_column].iloc[index], precursor_mz)
+        ev = parse_ce_to_ev(dataset[collision_energy_column][index], precursor_mz)
         if ev is None or not math.isfinite(float(ev)) or float(ev) < 0:
             raise ValueError(f"Cannot convert CE at record {rows[index]}")
         energies.append(float(ev))
-        peaks = record.peaks
-        values = [(float(peak.mz), float(peak.intensity)) for peak in peaks]
+        peaks = record
+        values = list(zip(peaks.mz.tolist(), peaks.intensity.tolist()))
         if any(
             not math.isfinite(mz) or mz <= 0 or not math.isfinite(value) or value < 0
             for mz, value in values
@@ -196,7 +199,7 @@ def _prepare_group(task, builder, options):
     provenance = {}
     if "_fredis_dataset_path" in dataset.columns and "_fredis_source_record" in dataset.columns:
         paths, indexes = dataset["_fredis_dataset_path"], dataset["_fredis_source_record"]
-        provenance["source_records"] = [dict(path=str(paths.iloc[index]), record_index=int(indexes.iloc[index]))
+        provenance["source_records"] = [dict(path=str(paths[index]), record_index=int(indexes[index]))
                                         for index in kept]
     save_fragment_tree_structure(
         structure=structure,
@@ -329,7 +332,7 @@ def _search_maxima(completed_search_stats):
 
 def create_reaction_training_data(
     *,
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     chemistry_config: dict,
     output_dir: str | Path,
     smiles_column: str = "SMILES",
@@ -396,7 +399,7 @@ def create_reaction_training_data(
         max_reaction_combinations=max_reaction_combinations,
     )
     grouped = {}
-    for index, smiles in enumerate(dataset[smiles_column].tolist()):
+    for index, smiles in enumerate(dataset[smiles_column]):
         grouped.setdefault(str(smiles), []).append(index)
     output = Path(output_dir)
     # main() already verified (and, with --overwrite, cleared) the whole output tree
@@ -667,7 +670,7 @@ def create_reaction_training_data(
                         with task_file.open("wb") as stream:
                             pickle.dump(
                                 dict(
-                                    tasks=chunk,
+                                    tasks=[(*task[:3], task[3].to_bytes(), *task[4:]) for task in chunk],
                                     chemistry_config=chemistry_config,
                                     options=options,
                                 ),
@@ -1116,7 +1119,7 @@ def main(argv: list[str] | None = None) -> None:
         else:
             validation = automatic["validation"] if args.validation_ratio else None
         if validation is not None:
-            for key in canonical_keys(validation[validation_mapping["smilesColumn"] if args.validation_input else args.smiles_column].astype(str)):
+            for key in canonical_keys(validation[validation_mapping["smilesColumn"] if args.validation_input else args.smiles_column]):
                 assignments[key] = "validation"
     if not args.overwrite and (
         list(output.rglob("*.preft.pt"))

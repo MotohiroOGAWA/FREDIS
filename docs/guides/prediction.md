@@ -110,12 +110,12 @@ Existing outputs require `--overwrite`; publication uses an atomic save.
 ## Inspect from Python
 
 ```python
-from fredis.data.core.MSDataset import MSDataset
+import msentity as ms
 
-predicted = MSDataset.load("predictions/dataset/predicted.msds")
+predicted = ms.load("predictions/dataset/predicted.msds")
 print(len(predicted), predicted.n_peaks_total)
-print(predicted.metadata[["SpecID", "SourceSpecID", "PredictionAdductType"]].head())
-print(predicted.peaks[0].data)
+print(predicted.to_pandas()[["SpecID", "SourceSpecID", "PredictionAdductType"]].head())
+print(predicted[0].peaks)
 ```
 
 The [Python API](../api/prediction.md) exposes generator loading, chunked outputs,

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 from tqdm import tqdm
 
-from fredis.data import MSDataset, load_ms_dataset
+import msentity as ms
 from fredis.libs.mmkit.mmkit import Compound, Formula
 from fredis.domain.mass.tolerance import MassTolerance
 from fredis.utils.parallel_subprocess import run_parallel_subprocesses
@@ -61,7 +61,7 @@ def assign_formulas(
     add_finished_tag: bool = False,
     report_file: Optional[str] = None,
     enable_neutral_loss: bool = False,
-) -> MSDataset:
+) -> ms.Dataset:
     """Assign possible subformulas to MS/MS peaks.
 
     This function writes:
@@ -548,7 +548,7 @@ def parallel_assign_formulas(
                 max_workers=num_workers,
             )
 
-        output_datasets: List[MSDataset] = []
+        output_datasets: List[ms.Dataset] = []
 
         for info in tqdm(
             parallel_infos,
@@ -564,7 +564,7 @@ def parallel_assign_formulas(
                 )
                 continue
 
-            chunk_dataset = load_ms_dataset(temp_output)
+            chunk_dataset = ms.load(temp_output)
 
             if len(chunk_dataset) == 0:
                 continue
@@ -582,10 +582,7 @@ def parallel_assign_formulas(
                 f"See report file: {report_file}"
             )
 
-        if hasattr(MSDataset, "concat"):
-            merged_dataset = MSDataset.concat(output_datasets)
-        else:
-            raise AttributeError("MSDataset.concat() is required for merging chunks.")
+        merged_dataset = ms.concat(output_datasets)
 
         save_dataset(
             merged_dataset,

@@ -4,6 +4,8 @@ Run with PYTHONPATH=. python tests/workflows/verify_gpu_pipeline.py --output PAT
 Experimental peaks are retained; the small model verifies execution, not accuracy.
 """
 
+from fredis.msdata import with_metadata
+
 import argparse
 from copy import deepcopy
 import json
@@ -17,7 +19,8 @@ import numpy as np
 import torch
 
 from fredis.domain.fragment import Fragmenter
-from fredis.data.core.MSDataset import MSDataset
+
+import msentity as ms
 from fredis.ml.training.fragment_tree_training.integration import PATTERN_KEY
 from fredis.ml.training.fragment_tree_training.pattern_models import inspect_model
 from fredis.ml.training.fragment_tree_training.training import build_arg_parser, training_model_config
@@ -28,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', required=True)
-    parser.add_argument('--source', default='/workspaces/CLEFTS/raw_data/MoNA/flavonoids/mona_pos_cf_flavonoids.msds')
+    parser.add_argument('--source', default=str(ROOT.parents[1] / 'raw_data/MoNA/flavonoids/mona_pos_cf_flavonoids.msds'))
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--training-command', choices=['fragment-tree', 'fragment-tree-detailed'],
                         default='fragment-tree-detailed')
@@ -57,18 +60,18 @@ def main():
         print(name + ': passed', flush=True)
 
     if not (out / 'train.msds').exists():
-        records = MSDataset.load(args.source, load_peak_metadata=False)
+        records = ms.load(args.source)
         for split, indices in [('train', [4305, 4358]), ('validation', [3765, 3762]),
                                ('prediction', [4305, 4358, 3765, 3762])]:
             raw = out / ('raw_' + split + '.msds')
             records[indices].save(str(raw))
-            selected = MSDataset.load(str(raw), load_peak_metadata=False)
-            metadata = selected.metadata.copy()
+            selected = ms.load(str(raw))
+            metadata = selected.to_pandas().copy()
             metadata['SmokeCollisionEnergy'] = [float(str(value).split()[0]) for value in metadata.CollisionEnergy]
             metadata['OriginalRecordIndex'] = indices
-            MSDataset(metadata, selected.peaks, columns=metadata.columns.tolist()).save(str(out / (split + '.msds')))
+            with_metadata(metadata, selected, columns=metadata.columns.tolist()).save(str(out / (split + '.msds')))
         del records
-    train_data = MSDataset.load(str(out / 'train.msds'), load_peak_metadata=False)
+    train_data = ms.load(str(out / 'train.msds'))
     base = json.loads((ROOT / 'fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft').read_text())
     base['fragment_ion_tree_builder']['max_reaction_count'] = 2
     (out / 'base.fragmenter.pft').write_text(json.dumps(base, indent=2))
@@ -161,7 +164,7 @@ def main():
                       if name.startswith('feature_model.mol_encoder.'))
     assert mol_updated
 
-    row = train_data.metadata.iloc[0]
+    row = train_data.to_pandas().iloc[0]
     prediction = ['-m', 'fredis.ml.specgen.predict_spectrum', '--model', str(fine_checkpoint),
                   '--device', args.device, '--strict', '--max-samples', '2', '--max-fragment-nodes', '30',
                   '--peak-intensity-threshold', '0']
@@ -170,12 +173,12 @@ def main():
     run('batch_prediction', [*prediction, '--input', str(out / 'prediction.msds'),
                             '--collision-energy-column', 'SmokeCollisionEnergy', '--output-dir', str(out / 'batch'),
                             '--num-workers', '2', '--chunk-size', '1'])
-    single = MSDataset.load(str(out / 'single/predicted.msds'))
-    batch = MSDataset.load(str(out / 'batch/predicted.msds'))
+    single = ms.load(str(out / 'single/predicted.msds'))
+    batch = ms.load(str(out / 'batch/predicted.msds'))
     assert len(single) == 1 and len(batch) == 4
-    assert batch.metadata.OriginalRecordIndex.tolist() == [4305, 4358, 3765, 3762]
-    assert all(len(peaks.data) and np.isfinite(peaks.data).all() for peaks in batch.peaks)
-    np.testing.assert_allclose(single.peaks[0].data, batch.peaks[0].data, rtol=1e-4, atol=1e-5)
+    assert batch.to_pandas().OriginalRecordIndex.tolist() == [4305, 4358, 3765, 3762]
+    assert all(len(peaks.mz) and np.isfinite(peaks.mz).all() and np.isfinite(peaks.intensity).all() for peaks in batch)
+    np.testing.assert_allclose(np.column_stack(single[0].peaks), np.column_stack(batch[0].peaks), rtol=1e-4, atol=1e-5)
     report = dict(source=args.source, experimental_record_indices=[4305, 4358, 3765, 3762],
                   device=args.device, training_command=args.training_command,
                   commands=steps, prepared_splits_valid=True, resume_verified=True,

@@ -1,4 +1,6 @@
 """50-compound pretraining, two 10-compound branches, all associated spectra."""
+
+from fredis.msdata import with_metadata
 import argparse
 from collections import Counter
 from copy import deepcopy
@@ -19,17 +21,18 @@ from rdkit import Chem, RDLogger
 from fredis.domain.fragment import Fragmenter
 from fredis.domain.mass.parse_ce import parse_ce_to_ev
 from fredis.libs.mmkit.mmkit import Adduct
-from fredis.data.core.MSDataset import MSDataset
+
+import msentity as ms
 from fredis.ml.specgen.predict_spectrum import load_generator
 from fredis.ml.training.fragment_tree_training.integration import PATTERN_KEY
 from fredis.ml.training.fragment_tree_training.pattern_models import export_pattern
 
 parser=argparse.ArgumentParser()
 parser.add_argument('--output',required=True)
-parser.add_argument('--source',default='/workspaces/CLEFTS/raw_data/MoNA/MoNA-export-LC-MS-MS_Positive_Mode_high_cf.msds')
+parser.add_argument('--source',default=str(Path(__file__).resolve().parents[4] / 'raw_data/MoNA/MoNA-export-LC-MS-MS_Positive_Mode_high_cf.msds'))
 parser.add_argument('--continue-run',action='store_true')
 args=parser.parse_args()
-repo=Path(os.environ.get('FREDIS_REPO','/workspaces/CLEFTS/mnt/app')).resolve()
+repo=Path(os.environ.get('FREDIS_REPO', Path(__file__).resolve().parents[2])).resolve()
 out=Path(args.output).resolve()
 if out.is_relative_to(repo):raise ValueError('Output must be outside the Git repository')
 out.mkdir(parents=True,exist_ok=args.continue_run)
@@ -58,7 +61,7 @@ lipid_pattern=dict(name='lipid_long_chain_single_bond',reactant_smarts='[C;$([C;
 
 if not (out/'selection.json').exists():
     print('Loading complete source and selecting compounds',flush=True)
-    source=MSDataset.load(args.source,load_peak_metadata=False);meta=source.metadata
+    source=ms.load(args.source);meta=source.to_pandas()
     fragmenter=Fragmenter.from_dict(base)
     mols={};canonical={};adduct_valid={};energies={}
     for text in meta.SMILES.astype(str).unique():
@@ -125,14 +128,14 @@ if not (out/'selection.json').exists():
         selection['stages'][stage]=rows
         for split in ['train','validation']:
             selected=[r for r in rows if r['split']==split];indices=[i for r in selected for i in r['source_record_indices']]
-            view=source[indices];tmp=out/'raw'/f'{stage}_{split}.msds';view.save(str(tmp));view=MSDataset.load(str(tmp),load_peak_metadata=False)
-            metadata=view.metadata.copy();metadata['OriginalRecordIndex']=indices;metadata['OriginalSMILES']=metadata.SMILES
+            view=source[indices];tmp=out/'raw'/f'{stage}_{split}.msds';view.save(str(tmp));view=ms.load(str(tmp))
+            metadata=view.to_pandas().copy();metadata['OriginalRecordIndex']=indices;metadata['OriginalSMILES']=metadata.SMILES
             metadata['SMILES']=[canonical[str(meta.iloc[i].SMILES)] for i in indices]
             metadata['VerificationCollisionEnergy']=[float(energies[(str(meta.iloc[i].CollisionEnergy),float(meta.iloc[i].PrecursorMZ) if '%' in str(meta.iloc[i].CollisionEnergy) else None)]) for i in indices]
-            MSDataset(metadata,view.peaks,columns=metadata.columns.tolist()).save(str(tmp))
+            with_metadata(metadata,view,columns=metadata.columns.tolist()).save(str(tmp))
     selection['stages']['union']=sum((selection['stages'][s] for s in ['base','flavonoid','lipid']),[])
     for split in ['train','validation']:
-        MSDataset.concat([MSDataset.load(str(out/'raw'/f'{stage}_{split}.msds'),load_peak_metadata=False) for stage in ['base','flavonoid','lipid']]).save(str(out/'raw'/f'union_{split}.msds'))
+        ms.concat([ms.load(str(out/'raw'/f'{stage}_{split}.msds')) for stage in ['base','flavonoid','lipid']]).save(str(out/'raw'/f'union_{split}.msds'))
     (out/'selection.json').write_text(json.dumps(selection,indent=2))
 selection=json.loads((out/'selection.json').read_text())
 for stage,rows in selection['stages'].items():print(stage,len(rows),'compounds',sum(r['spectrum_count'] for r in rows),'spectra',flush=True)
@@ -218,10 +221,10 @@ for stage in ['base','flavonoid','lipid','union']:
     (out/'configs'/f'{stage}.model.json').write_text(json.dumps({'model_config':ck['model_config']},indent=2))
 predictions=[]
 for stage in ['flavonoid','lipid']:
-    raw=MSDataset.load(str(out/'raw'/f'{stage}_train.msds'),load_peak_metadata=False)
-    row=raw.metadata.iloc[0]
+    raw=ms.load(str(out/'raw'/f'{stage}_train.msds'))
+    row=raw.to_pandas().iloc[0]
     run('predict_'+stage,['-m','fredis.ml.specgen.predict_spectrum','--model',str(models/'integrated_final.pt'),'--smiles',str(row.SMILES),'--ce',str(row.VerificationCollisionEnergy),'--adduct-type',str(row.AdductType),'--output-dir',str(out/('prediction_'+stage)),'--strict','--device','cpu','--max-fragment-nodes','100','--peak-intensity-threshold','0'])
-    predicted=MSDataset.load(str(out/('prediction_'+stage)/'predicted.msds'))
+    predicted=ms.load(str(out/('prediction_'+stage)/'predicted.msds'))
     assert predicted.n_peaks_total>0
     predictions.append(dict(stage=stage,compound=str(row.Name),adduct=str(row.AdductType),collision_energy=float(row.VerificationCollisionEnergy),peaks=predicted.n_peaks_total))
 report=dict(predictions=predictions,source=selection['source'],selection=str(out/'selection.json'),commands=commands,preparation_checks=preparation_checks,weight_checks=weight_checks,routing=routing,pattern_ids=pattern_ids,head_training_feature_difference=maximum,all_selected_spectra_used=True,original_integrated_file_removed=True,scope='Workflow verification; not an accuracy benchmark')

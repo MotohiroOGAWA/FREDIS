@@ -19,6 +19,16 @@ The native dataset and similarity sources are Git submodules in `libs/msentity`
 and `libs/msentity-similarity`. Git records the exact tested commits. After cloning
 (or pulling an update), run `git submodule update --init --recursive` before building.
 The Python APIs remain `import msentity` and `import msentity_similarity`.
+FREDIS uses the native `msentity.Dataset` directly for preparation, analysis,
+prediction and annotation. No former Python msentity data model is bundled.
+Array construction helpers return native datasets; similarity uses
+`msentity_similarity` directly.
+
+The Workbench pins `msentity-spectrum-viewer` as a Git submodule, including its
+native dependencies. In the Workbench checkout run
+`git submodule update --init --recursive`, `python scripts/build-native.py`,
+then `npm run build:spectrum-viewer` to build and package the pinned viewer.
+
 
 Initialize the submodules before building a Docker image too. To update a library,
 fetch its releases, check out the intended tag/commit inside `libs/`, rebuild,

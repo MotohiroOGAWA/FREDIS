@@ -161,7 +161,8 @@ def extract(
 ):
     from rdkit import rdBase
     import pandas as pd
-    from fredis.data.core.MSDataset import MSDataset
+
+    import msentity as ms
     from fredis.ml.data_preparation.fragment_tree.record_validation import (
         inspect_records,
         DEFAULT_MAPPING,
@@ -187,9 +188,9 @@ def extract(
     output = Path(output_dir).resolve()
     context = create_preparation_context(chemistry)
     mapping = {**DEFAULT_MAPPING, **(mapping or {})}
-    dataset = MSDataset.load(str(input_path), load_peak_metadata=False)
+    dataset = ms.load(str(input_path))
     ids = spec_ids(dataset, id_column)
-    metadata = dataset.metadata
+    metadata = dataset.to_pandas()
     model_config = json.loads(json.dumps(model_config or default_model(chemistry)))
     model_config["fragmenter_params"] = chemistry["fragmenter_params"]
     model_config.setdefault("mol_encoder_params", {})["symbols"] = chemistry["symbols"]
@@ -301,7 +302,7 @@ def extract(
     import numpy as np
 
     for index in inspection["validIndexes"]:
-        peaks = dataset[index].peaks
+        peaks = dataset[index]
         if (
             not np.isfinite(peaks.mz).all()
             or np.any(peaks.mz <= 0)

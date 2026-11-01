@@ -10,7 +10,8 @@ import sys
 import tempfile
 
 from fredis.cli.chemistry_options import configure_chemistry_options, resolve_chemistry_options
-from fredis.data import MSDataset
+
+import msentity as ms
 from .context import create_preparation_context
 from .dataset_plan import DEFAULT_MAPPING, SPLITS, normalize_entries, plan_datasets
 from .datasets import canonical_keys, load_spectrum_dataset
@@ -25,8 +26,8 @@ def fingerprint(path):
 
 def validate_peaks(data):
     import numpy as np
-    peaks = data.peaks
-    if np.any(peaks.lengths == 0):
+    peaks = data
+    if np.any(np.diff(data.offsets) == 0):
         raise ValueError('Some spectra have no peaks.')
     if not np.isfinite(peaks.mz).all() or np.any(peaks.mz <= 0):
         raise ValueError('Peak m/z values must be finite and positive.')
@@ -100,7 +101,7 @@ def restore_checked(snapshot, progress=None):
         data['_fredis_dataset_path'] = entry['path']
         data['_fredis_source_record'] = snapshot['validIndexes'][entry['id']]
         datasets.append(data)
-    combined = MSDataset.concat(datasets) if len(datasets) > 1 else datasets[0]
+    combined = ms.concat(datasets) if len(datasets) > 1 else datasets[0]
     keys = canonical_keys(combined['SMILES'], progress=(lambda current, total: progress(dict(
         stage='restoring', percent=65 + 10 * current / max(1, total), current=current, total=total))) if progress else None)
     labels = np.array([snapshot['assignments'][key] for key in keys])

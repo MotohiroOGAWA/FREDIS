@@ -4,6 +4,8 @@ The peaks are synthetic. Use measured experimental spectra for scientific traini
 Run from the repository root: python docs/examples/create_demo_dataset.py --output runs/demo-input
 """
 
+from fredis.msdata import with_metadata, dataset_from_arrays
+
 import argparse
 from pathlib import Path
 
@@ -11,8 +13,8 @@ import numpy as np
 import pandas as pd
 
 from fredis.libs.mmkit.mmkit import Adduct, Compound
-from fredis.data.core.MSDataset import MSDataset
-from fredis.data.core.PeakSeries import PeakSeries
+
+
 
 
 def write_split(directory, name, smiles, energies, fragment_masses):
@@ -41,8 +43,8 @@ def write_split(directory, name, smiles, energies, fragment_masses):
             ]
         )
     values = np.asarray(peaks, dtype=np.float64)
-    series = PeakSeries(values, np.arange(0, len(values) + 1, 3), sort_by_mz=True)
-    dataset = MSDataset(metadata, series)
+    series = dataset_from_arrays(values, np.arange(0, len(values) + 1, 3), sort_by_mz=True)
+    dataset = with_metadata(metadata, series)
     path = directory / (name + ".msds")
     dataset.save(str(path))
     print(f"{path.name}: {len(dataset)} spectra, {dataset.n_peaks_total} peaks")

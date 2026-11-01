@@ -4,45 +4,23 @@ from __future__ import annotations
 import csv
 import io
 import random
+import pandas as pd
 from pathlib import Path
-from fredis.data import MSDataset
+
+import msentity as ms
 
 SUPPORTED_SUFFIXES = (".msds", ".msp", ".mgf", ".tsv", ".csv", ".parquet")
 
 
-def load_spectrum_dataset(path: str | Path) -> MSDataset:
+def load_spectrum_dataset(path: str | Path) -> ms.Dataset:
     path = Path(path)
     suffix = path.suffix.lower()
-    if suffix == ".msds":
-        return MSDataset.load(str(path), load_peak_metadata=False)
-    if suffix == ".msp":
-        from fredis.data.io.msp import read_msp
-
-        return read_msp(str(path), show_progress=False, normalize_intensity=False)
-    if suffix == ".mgf":
-        from fredis.data.io.mgf import read_mgf
-
-        return read_mgf(str(path), show_progress=False, normalize_intensity=False)
-    from fredis.data.io.tsv import read_tsv, read_tsv_text
-
-    if suffix == ".tsv":
-        return read_tsv(path, show_progress=False)
-    if suffix == ".csv":
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            rows = list(csv.reader(handle))
-        output = io.StringIO()
-        writer = csv.writer(output, delimiter="\t")
-        writer.writerows(rows)
-        return read_tsv_text(output.getvalue(), source_name=str(path))
-    if suffix == ".parquet":
+    if suffix == '.parquet':
         import pandas as pd
-
-        return read_tsv_text(
-            pd.read_parquet(path).to_csv(sep="\t", index=False), source_name=str(path)
-        )
-    raise ValueError(
-        "Unsupported dataset format. Use MSDataset, MSP, MGF or a TSV / CSV / Parquet spectrum table with a Peak column."
-    )
+        return ms.read_text(pd.read_parquet(path).to_csv(sep='\t', index=False), 'tsv')
+    if suffix in SUPPORTED_SUFFIXES:
+        return ms.load(path)
+    raise ValueError('Unsupported dataset format: ' + suffix)
 
 
 def canonical_smiles(value: str) -> str:
@@ -75,7 +53,7 @@ def canonical_keys(values, progress=None):
 
 
 def canonical_column(dataset, column):
-    values = dataset[column].astype(str)
+    values = pd.Series(dataset[column], dtype=object).astype(str)
     return values.map(dict(zip(values, canonical_keys(values))))
 
 
@@ -114,12 +92,12 @@ def split_assignments(values, validation_ratio=0.0, test_ratio=0.0, seed=0, prog
 def split_dataset(dataset, column, validation_ratio=0.0, test_ratio=0.0, seed=0, progress=None):
     import numpy as np
 
-    keys, assignments = split_assignments(dataset[column].astype(str), validation_ratio, test_ratio, seed, progress=progress)
+    keys, assignments = split_assignments(dataset[column], validation_ratio, test_ratio, seed, progress=progress)
     labels = np.array([assignments[key] for key in keys])
     return {name: dataset[np.flatnonzero(labels == name)] for name in ("train", "validation", "test")}, assignments
 
 
-def split_by_smiles(dataset: MSDataset, column: str, ratio: float, seed: int) -> tuple[MSDataset, MSDataset]:
+def split_by_smiles(dataset: ms.Dataset, column: str, ratio: float, seed: int) -> tuple[ms.Dataset, ms.Dataset]:
     if not 0 < ratio < 1:
         raise ValueError("Validation ratio must be between 0 and 1.")
     splits, _ = split_dataset(dataset, column, ratio, seed=seed)
@@ -127,13 +105,13 @@ def split_by_smiles(dataset: MSDataset, column: str, ratio: float, seed: int) ->
 
 
 def dedupe_validation(
-    train: MSDataset,
-    validation: MSDataset,
+    train: ms.Dataset,
+    validation: ms.Dataset,
     train_column: str,
     validation_column: str,
     ratio: float | None = None,
     seed: int = 0,
-) -> tuple[MSDataset, dict]:
+) -> tuple[ms.Dataset, dict]:
     """Remove validation records whose SMILES also appears in training, then
     optionally cap validation to `ratio` of training's unique SMILES count.
 
@@ -142,17 +120,17 @@ def dedupe_validation(
     than the requested ratio (or empty) is reported back for the caller to
     warn about, never a reason to abort an otherwise valid run.
     """
-    train_smiles = set(canonical_keys(train[train_column].astype(str)))
+    train_smiles = set(canonical_keys(train[train_column]))
     overlap_mask = canonical_column(validation, validation_column).isin(train_smiles)
     report = {"removedOverlapRecords": int(overlap_mask.sum())}
     validation = validation[~overlap_mask]
     if ratio is not None:
         if not 0 < ratio < 1:
             raise ValueError("Validation ratio must be between 0 and 1.")
-        target_smiles = list(dict.fromkeys(canonical_keys(train[train_column].astype(str))))
+        target_smiles = list(dict.fromkeys(canonical_keys(train[train_column])))
         target_count = max(1, round(len(target_smiles) * ratio))
         available = list(
-            dict.fromkeys(canonical_keys(validation[validation_column].astype(str)))
+            dict.fromkeys(canonical_keys(validation[validation_column]))
         )
         report["targetSmiles"] = target_count
         report["availableSmiles"] = len(available)
@@ -163,5 +141,5 @@ def dedupe_validation(
                 canonical_column(validation, validation_column).isin(kept)
             ]
     report["remainingRecords"] = len(validation)
-    report["remainingSmiles"] = len(set(canonical_keys(validation[validation_column].astype(str))))
+    report["remainingSmiles"] = len(set(canonical_keys(validation[validation_column])))
     return validation, report

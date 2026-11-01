@@ -1,4 +1,6 @@
 """Regression checks for GUI/CLI configuration precedence and forwarding."""
+
+from fredis.msdata import with_metadata, dataset_from_arrays
 import argparse
 import json
 import tempfile
@@ -11,11 +13,13 @@ from .TestReactionPipeline import chemistry
 def preparation_dataset(smiles_column='SMILES'):
     import pandas as pd
     import numpy as np
-    from fredis.data import MSDataset
-    from fredis.data.core.PeakSeries import PeakSeries
-    return MSDataset(pd.DataFrame({smiles_column:['CCO'],'AdductType':['[M+H]+'],
+
+    import msentity as ms
+
+    import msentity as ms
+    return with_metadata(pd.DataFrame({smiles_column:['CCO'],'AdductType':['[M+H]+'],
                                    'CollisionEnergy':[20],'PrecursorMZ':[47]}),
-                     PeakSeries(np.array([[47.,1.]]),np.array([0,1],dtype=np.int64)))
+                     dataset_from_arrays(np.array([[47.,1.]]),np.array([0,1],dtype=np.int64)))
 
 class TestConfigOptions(unittest.TestCase):
     def parser(self):
@@ -70,7 +74,7 @@ class TestConfigOptions(unittest.TestCase):
                                '--max-reaction-count','2','--max-unique-fragment-smiles','500','--max-reaction-combinations','1000','--overwrite','1','--num-workers','2','--chunk-size','3','--symbols-json','["C","O"]','--smiles-column','CanonicalSMILES',
                                '--set','precursor_candidate_max_reaction_count=1'])
         import pandas as pd
-        with tempfile.TemporaryDirectory() as directory, patch.object(preparation.MSDataset,'load',return_value=preparation_dataset('CanonicalSMILES')), patch.object(preparation,'create_reaction_training_data') as run:
+        with tempfile.TemporaryDirectory() as directory, patch.object(preparation.ms,'load',return_value=preparation_dataset('CanonicalSMILES')), patch.object(preparation,'create_reaction_training_data') as run:
             args.output_dir=directory
             CreateFragmentTreeDataCommand().run(args)
         kwargs=run.call_args.kwargs
@@ -145,6 +149,6 @@ class TestOutputDirectoryIsRequired(unittest.TestCase):
                 with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                     parser.parse_args(argv + extra)
         for extra in ([], ['--output-dir', '']):
-            with patch.object(sys, 'argv', ['predict_spectrum.py', '--model', 'm.pt', '--input', 'a.msds', *extra]), \
+            with patch.object(sys, 'argv', ['predict_spectrum.py', '--model', 'm.pt', '--input', 'a.msds', *extra]),\
                  self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                 predict_spectrum.parse_args()

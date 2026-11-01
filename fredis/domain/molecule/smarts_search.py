@@ -100,7 +100,8 @@ def count_matches(values, smarts, include_compounds=False):
 
 
 def search(file, smarts, column="SMILES", include_compounds=False):
-    from fredis.data import MSDataset
+
+    import msentity as ms
 
     filename = Path(file).expanduser()
     if filename.suffix.lower() != ".msds" or not filename.is_file():
@@ -113,8 +114,8 @@ def search(file, smarts, column="SMILES", include_compounds=False):
     # Validate before loading a potentially large dataset.
     count_matches([], smarts)
     column = column.strip()
-    dataset = MSDataset.load(str(filename), load_peak_metadata=False)
-    metadata = dataset.metadata
+    dataset = ms.load(str(filename))
+    metadata = dataset.to_pandas()
     if column not in metadata.columns:
         raise ValueError(
             f"SMILES column {column!r} not found. Available: {', '.join(map(str, metadata.columns))}"

@@ -1,4 +1,6 @@
 """Canonical molecule partitioning and CLI agreement."""
+
+from fredis.msdata import with_metadata, dataset_from_arrays
 import contextlib
 import io
 import json
@@ -9,8 +11,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from fredis.data import MSDataset
-from fredis.data.core.PeakSeries import PeakSeries
+
 from fredis.libs.mmkit.mmkit import Compound
 from fredis.ml.data_preparation.fragment_tree.datasets import (
     canonical_keys, canonical_smiles, dedupe_validation, split_assignments, split_dataset,
@@ -23,7 +24,7 @@ def dataset(smiles):
     mzs=[Compound.from_smiles(value).formula.exact_mass+1.007276466 for value in smiles]
     metadata=pd.DataFrame({'SMILES':smiles,'AdductType':['[M+H]+']*len(smiles),
                            'CollisionEnergy':[20]*len(smiles),'PrecursorMZ':mzs})
-    return MSDataset(metadata,PeakSeries(np.array([[mz,1] for mz in mzs]),np.arange(len(smiles)+1,dtype=np.int64)))
+    return with_metadata(metadata,dataset_from_arrays(np.array([[mz,1] for mz in mzs]),np.arange(len(smiles)+1,dtype=np.int64)))
 
 
 class TestDatasetSplits(unittest.TestCase):
@@ -37,7 +38,7 @@ class TestDatasetSplits(unittest.TestCase):
             self.assertTrue(all(assignments[key]==name for key in keys))
             for other,other_keys in groups.items():
                 if name!=other: self.assertFalse(keys & other_keys)
-        _, reordered=split_assignments(list(reversed(data['SMILES'].tolist())),0.2,0.2,7)
+        _, reordered=split_assignments(list(reversed(list(data['SMILES']))),0.2,0.2,7)
         self.assertEqual(assignments,reordered)
         self.assertEqual(canonical_smiles('[CH3:4][CH2:5][OH:6]'),canonical_smiles('OCC'))
         self.assertNotEqual(canonical_smiles('F[C@H](Cl)Br'),canonical_smiles('F[C@@H](Cl)Br'))
@@ -58,7 +59,7 @@ class TestDatasetSplits(unittest.TestCase):
 
     def test_external_validation_overlap_uses_canonical_identity(self):
         validation, report=dedupe_validation(dataset(['CCO']),dataset(['OCC','CCC']),'SMILES','SMILES')
-        self.assertEqual(validation['SMILES'].tolist(),['CCC'])
+        self.assertEqual(list(validation['SMILES']),['CCC'])
         self.assertEqual(report['removedOverlapRecords'],1)
 
 

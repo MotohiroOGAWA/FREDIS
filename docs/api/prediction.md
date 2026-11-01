@@ -84,10 +84,10 @@ inspecting explanation/state ownership.
 ## Predict an MSDataset with provenance
 
 ```python
-from fredis.data.core.MSDataset import MSDataset
+import msentity as ms
 from fredis.ml.specgen.predict_spectrum import predict_msdataset
 
-measured = MSDataset.load("runs/demo-input/train.msds")
+measured = ms.load("runs/demo-input/train.msds")
 predicted, failures = predict_msdataset(
     dataset=measured, generator=generator,
     model_path="runs/demo-model/last.pt", db="Example",

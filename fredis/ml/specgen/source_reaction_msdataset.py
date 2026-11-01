@@ -144,12 +144,12 @@ def predict_source_msdataset(
     if not 0 <= peak_intensity_threshold <= 1:
         raise ValueError("Peak intensity threshold must be between 0 and 1.")
     total = len(dataset)
-    smiles_values = dataset[smiles_column].tolist()
-    adduct_values = dataset[adduct_type_column].tolist()
-    ce_values = dataset[collision_energy_column].tolist()
-    mz_values = dataset[precursor_mz_column].tolist()
+    smiles_values = list(dataset[smiles_column])
+    adduct_values = list(dataset[adduct_type_column])
+    ce_values = list(dataset[collision_energy_column])
+    mz_values = list(dataset[precursor_mz_column])
     instrument_values = (
-        None if instrument_column is None else dataset[instrument_column].tolist()
+        None if instrument_column is None else list(dataset[instrument_column])
     )
 
     # Phase 1: cheap, RDKit-free per-row validation only (adduct syntax, this
@@ -439,7 +439,7 @@ def predict_source_msdataset(
             peak.sample_id = sample_id
         spectra.append(spectrum)
     successful_indices = [valid_indices[position] for position in successful_positions]
-    metadata = dataset.metadata.iloc[successful_indices].reset_index(drop=True)
+    metadata = dataset.to_pandas().iloc[successful_indices].reset_index(drop=True)
     # Values actually fed to the model, not re-derived afterward from the raw
     # columns: the resolved main adduct (the base ion rule the model used,
     # e.g. [M+H-H2O]+ -> [M+H]+) and the numeric collision energy in eV.

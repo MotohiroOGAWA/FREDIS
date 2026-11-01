@@ -24,7 +24,7 @@ def atomic_json(path, value):
 def spec_ids(dataset, column="SpecID"):
     if column not in dataset.columns:
         raise ValueError(f"Missing SpecID column: {column}")
-    values = dataset.metadata[column].tolist()
+    values = dataset[column]
     result = []
     seen = set()
     for index, value in enumerate(values):

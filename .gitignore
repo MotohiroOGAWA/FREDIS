@@ -221,7 +221,3 @@ data/
 
 # Local personal files
 *.local.*
-
-# FREDIS pandas compatibility source is part of the package.
-!fredis/data/
-!fredis/data/**

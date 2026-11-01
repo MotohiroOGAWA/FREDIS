@@ -66,7 +66,17 @@ for name in modules:
     copied = False
     for lib in build.rglob('lib' + name.replace('-', '_') + '_c.*'):
         if lib.suffix in {'.so', '.dylib'}:
-            shutil.copy2(lib, libdir / lib.name)
+            # Never overwrite a mapped shared library in place: existing
+            # Python processes may still be using the previous build.
+            import os
+            import tempfile
+            fd, temporary = tempfile.mkstemp(prefix='.' + lib.name + '.', dir=libdir)
+            os.close(fd)
+            try:
+                shutil.copy2(lib, temporary)
+                os.replace(temporary, libdir / lib.name)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
             copied = True
     if not copied:
         raise SystemExit(f'No native shared library found in {build}')

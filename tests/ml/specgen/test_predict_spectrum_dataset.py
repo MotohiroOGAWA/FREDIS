@@ -1,10 +1,11 @@
 from __future__ import annotations
+from fredis.msdata import with_metadata
 
 import pandas as pd
 import pytest
 import torch
 
-from fredis.data import MSDataset
+import msentity as ms
 from msentity_similarity import load as load_similarity
 from fredis.ml.specgen import predict_spectrum
 from fredis.ml.specgen.predict_spectrum import (
@@ -40,10 +41,10 @@ def test_prediction_metadata_preserves_source_values_and_adds_provenance(tmp_pat
         spec_id_column="SpecID",
         instrument_column=None,
     )
-    original_precursor = dataset.metadata["PrecursorMZ"].copy()
-    original_exact_mass = dataset.metadata["ExactMass"].copy()
+    original_precursor = dataset.to_pandas()["PrecursorMZ"].copy()
+    original_exact_mass = dataset.to_pandas()["ExactMass"].copy()
     result = prediction_metadata(
-        dataset.metadata,
+        dataset.to_pandas(),
         db="MoNA",
         model_path="/models/fredis-model.pt",
         spec_id_column="SpecID",
@@ -68,9 +69,9 @@ def test_prediction_metadata_preserves_source_values_and_adds_provenance(tmp_pat
     pd.testing.assert_series_equal(result["ExactMass"], original_exact_mass, check_names=False)
     assert result["PredictedPrecursorMZ"].notna().all()
 
-    output = MSDataset(
-        spectrum_metadata=result,
-        peak_series=dataset.peaks.copy(),
+    output = with_metadata(
+        metadata=result,
+        dataset=dataset.copy(),
         description="Predicted spectra",
         attributes={"prediction_tool": "FREDIS"},
         tags=["predicted", "FREDIS"],
@@ -78,9 +79,9 @@ def test_prediction_metadata_preserves_source_values_and_adds_provenance(tmp_pat
     validate_prediction_output(output)
     output_path = tmp_path / "predicted.msds"
     output.save(str(output_path))
-    restored = MSDataset.load(str(output_path))
-    assert restored.metadata["SourceSpecID"].tolist() == ["source-1", "source-2"]
-    assert restored.metadata["PredictionCollisionEnergyUnit"].tolist() == ["eV", "eV"]
+    restored = ms.load(str(output_path))
+    assert restored.to_pandas()["SourceSpecID"].tolist() == ["source-1", "source-2"]
+    assert restored.to_pandas()["PredictionCollisionEnergyUnit"].tolist() == ["eV", "eV"]
     assert restored.attributes["prediction_tool"] == "FREDIS"
     assert restored.tags == ["predicted", "FREDIS"]
 
@@ -112,9 +113,9 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     assert msds_path.exists()
     assert mssim_path.exists()
 
-    predicted = MSDataset.load(str(msds_path))
-    assert predicted.metadata["SpecID"].tolist() == ["FREDIS_orig-1", "FREDIS_orig-2"]
-    assert predicted.metadata["SourceSpecID"].tolist() == ["orig-1", "orig-2"]
+    predicted = ms.load(str(msds_path))
+    assert predicted.to_pandas()["SpecID"].tolist() == ["FREDIS_orig-1", "FREDIS_orig-2"]
+    assert predicted.to_pandas()["SourceSpecID"].tolist() == ["orig-1", "orig-2"]
 
     similarity = load_similarity(str(mssim_path))
     assert similarity.has_matched_data
@@ -226,8 +227,8 @@ def test_main_saves_successes_and_failure_report_for_unsupported_atoms(tmp_path,
         predict_spectrum.main()
     assert exit_info.value.code == 3
 
-    predicted = MSDataset.load(str(output_dir / "predicted.msds"))
-    assert predicted.metadata["SourceSpecID"].tolist() == ["valid"]
+    predicted = ms.load(str(output_dir / "predicted.msds"))
+    assert predicted.to_pandas()["SourceSpecID"].tolist() == ["valid"]
     failures = pd.read_csv(output_dir / "run" / "failures.tsv", sep="\t")
     assert failures["index"].tolist() == [1]
     assert "Unsupported atom symbol(s): Na" in failures.iloc[0]["error"]

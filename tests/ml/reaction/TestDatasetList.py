@@ -1,3 +1,4 @@
+import numpy as np
 """Multiple input datasets: assigned roles and canonical union splitting."""
 import contextlib
 import io
@@ -44,7 +45,7 @@ class TestDatasetList(unittest.TestCase):
         self.assertEqual(sum(item['records'] for item in plan['summary'].values()),5)
         keys=canonical_keys(plan['combined']['SMILES'])
         self.assertEqual(keys.count('CCO'),2)
-        self.assertEqual(plan['combined'].peaks.lengths.tolist(),[1]*5)
+        self.assertEqual(np.diff(plan['combined'].offsets).tolist(),[1]*5)
         memberships={name:set(canonical_keys(data['SMILES'])) for name,data in plan['splits'].items()}
         self.assertEqual(sum('CCO' in group for group in memberships.values()),1)
         reordered=self.plan(list(reversed(entries)),'automatic',validation_ratio=0.25,test_ratio=0.25,seed=2)
@@ -65,9 +66,9 @@ class TestDatasetList(unittest.TestCase):
     def test_independent_column_mappings_and_source_provenance(self):
         entries=[self.source('a',['CCO']),self.source('b',['CCN'],mapping={'smilesColumn':'Structure','adductTypeColumn':'Adduct'})]
         plan=self.plan(entries,'automatic')
-        self.assertEqual(plan['splits']['train']['SMILES'].tolist(),['CCO','CCN'])
-        self.assertEqual(plan['combined']['_fredis_source_record'].tolist(),[0,0])
-        self.assertEqual(plan['combined']['_fredis_dataset_path'].tolist(),[entry['path'] for entry in entries])
+        self.assertEqual(list(plan['splits']['train']['SMILES']),['CCO','CCN'])
+        self.assertEqual(list(plan['combined']['_fredis_source_record']),[0,0])
+        self.assertEqual(list(plan['combined']['_fredis_dataset_path']),[entry['path'] for entry in entries])
 
     def test_invalid_records_filtered_before_union_and_kept_peaks_match(self):
         source=self.source('a',['CCO','CCC','CCN'])
@@ -75,10 +76,10 @@ class TestDatasetList(unittest.TestCase):
         data=load_spectrum_dataset(source['path']);data['SMILES']=['CCO','invalid','CCN'];data.save(source['path'])
         plan=self.plan([source,self.source('b',['COC'])],'automatic')
         self.assertEqual(plan['sources'][0]['excludedRecords'],1)
-        self.assertEqual(plan['combined']['_fredis_source_record'].tolist(),[0,2,0])
+        self.assertEqual(list(plan['combined']['_fredis_source_record']),[0,2,0])
         self.assertEqual(len(plan['combined']),3)
-        self.assertEqual(len(plan['combined'].peaks.mz),3)
-        self.assertEqual(plan['combined'].peaks.mz[:2].tolist(),data[[0,2]].peaks.mz.tolist())
+        self.assertEqual(len(plan['combined'].mz),3)
+        self.assertEqual(list(plan['combined'].mz[:2]),data[[0,2]].mz.tolist())
 
 
     def test_assigned_train_only_has_no_other_outputs(self):

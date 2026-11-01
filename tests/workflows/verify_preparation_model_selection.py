@@ -69,6 +69,7 @@ with torch.no_grad():
     before=reference.feature_model.encode_static(prepared)[0];after=updated.feature_model.encode_static(prepared)[0]
     torch.testing.assert_close(before,after,rtol=0,atol=0)
 run('predict',['-m','fredis.ml.specgen.predict_spectrum','--model',str(checkpoint),'--smiles','O=C1CC(OC2=CC=CC=C12)C1=CC=CC=C1','--ce','30','--adduct-type','[M+H]+','--output-dir',str(out/'prediction'),'--strict','--device','cpu','--max-fragment-nodes','30','--ion-prediction-threshold','0'])
-from fredis.data.core.MSDataset import MSDataset
-assert MSDataset.load(str(next((out/'prediction').glob('*.msds')))).n_peaks_total>0
+
+import msentity as ms
+assert ms.load(str(next((out/'prediction').glob('*.msds')))).n_peaks_total>0
 (out/'report.json').write_text(json.dumps(dict(commands=commands,patterns_fixed_during_preparation=True,original_pretrained_files_removed=True,dataset_relocated=True,imported_weights_preserved=True,new_architecture_chosen_during_training=True,reaction_hidden_dim=12,max_edge_dist=4,head_training_feature_difference=float((before-after).abs().max())),indent=2));print(out/'report.json')

@@ -31,11 +31,11 @@ The input creator is included as
 one file:
 
 ```python
-from fredis.data.core.MSDataset import MSDataset
+import msentity as ms
 
-dataset = MSDataset.load("runs/demo-input/train.msds")
-print(dataset.metadata[["SpecID", "SMILES", "CollisionEnergy"]].to_string(index=False))
-print(dataset.peaks[0].data)
+dataset = ms.load("runs/demo-input/train.msds")
+print(dataset.to_pandas()[["SpecID", "SMILES", "CollisionEnergy"]].to_string(index=False))
+print(dataset[0].peaks)
 ```
 
 ## 2. Prepare chemical structures and supervision
@@ -128,14 +128,14 @@ python -m fredis.ml.specgen.predict_spectrum \
 
 ```python
 import numpy as np
-from fredis.data.core.MSDataset import MSDataset
+import msentity as ms
 
-single = MSDataset.load("runs/demo-single/predicted.msds")
-batch = MSDataset.load("runs/demo-batch/predicted.msds")
+single = ms.load("runs/demo-single/predicted.msds")
+batch = ms.load("runs/demo-batch/predicted.msds")
 assert len(single) == 1
 assert len(batch) == 2
 assert batch.n_peaks_total > 0
-np.testing.assert_allclose(single.peaks[0].data, batch.peaks[0].data, rtol=1e-4, atol=1e-5)
+np.testing.assert_allclose(np.column_stack(single[0].peaks), np.column_stack(batch[0].peaks), rtol=1e-4, atol=1e-5)
 print("Single and batch predictions agree.")
 ```
 

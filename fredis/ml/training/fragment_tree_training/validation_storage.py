@@ -1,5 +1,7 @@
 """MSDataset export for the union of validation quantile representatives."""
 
+from fredis.msdata import with_metadata, dataset_from_arrays
+
 from pathlib import Path
 import json
 import os
@@ -7,7 +9,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from fredis.data import MSDataset, PeakSeries
+import msentity as ms
 
 
 def save_validation_msdataset(
@@ -57,9 +59,9 @@ def save_validation_msdataset(
                 )
             offsets.append(len(peaks))
     frame = pd.DataFrame(metadata)
-    dataset = MSDataset(
-        spectrum_metadata=frame,
-        peak_series=PeakSeries(
+    dataset = with_metadata(
+        metadata=frame,
+        dataset=dataset_from_arrays(
             data=np.asarray(peaks, dtype=np.float64).reshape(-1, 2),
             offsets=np.asarray(offsets, dtype=np.int64),
             metadata=pd.DataFrame(
@@ -87,7 +89,7 @@ def save_validation_msdataset(
     path = Path(path)
     temporary = path.with_name("." + path.name + ".tmp")
     try:
-        dataset.save(str(temporary))
+        dataset.save(str(temporary), format="msds")
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -96,16 +98,17 @@ def save_validation_msdataset(
 
 def read_validation_msdataset(path):
     """Read paired representative spectra and their selection metadata from MSDS."""
-    dataset = MSDataset.load(str(path))
+    dataset = ms.load(str(path))
     records = {}
     selected = {}
-    for position, row in dataset.metadata.iterrows():
+    for position, row in dataset.to_pandas().iterrows():
         record = json.loads(row.to_json())
         index = int(record["RepresentativeIndex"])
         target = records.setdefault(index, dict(record))
-        spectrum = dataset.peaks[position]
+        spectrum = dataset[position]
         peaks = []
-        metadata = spectrum.metadata
+        start, stop = map(int, dataset.offsets[position:position + 2])
+        metadata = dataset.peak_metadata_to_arrow().to_pandas().iloc[start:stop]
         for offset, (mz, intensity) in enumerate(zip(spectrum.mz, spectrum.intensity)):
             extra = (
                 json.loads(metadata.iloc[offset].to_json())

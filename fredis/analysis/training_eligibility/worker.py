@@ -7,7 +7,8 @@ from pathlib import Path
 import sys
 import traceback
 import torch
-from fredis.data.core.MSDataset import MSDataset
+
+import msentity as ms
 from fredis.ml.input.structure_builder import ReactionStructureBuilder
 from fredis.ml.input.reaction_batching import select_samples
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
@@ -42,7 +43,7 @@ def finite_backward(model, data, seed):
 
 
 def evaluate(task, config, generator, model):
-    dataset = MSDataset.load(task["input"], load_peak_metadata=False)
+    dataset = ms.load(task["input"])
     positions = task.get("positions", list(range(len(dataset))))
     dataset = dataset[positions]
     indices = [task["record_indices"][i] for i in positions]

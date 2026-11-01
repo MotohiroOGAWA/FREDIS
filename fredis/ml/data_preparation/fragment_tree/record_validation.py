@@ -53,9 +53,9 @@ def inspect_records(
         "collisionEnergyColumn": "Cannot parse collision energy to finite non-negative eV",
         "precursorMzColumn": "Cannot parse precursor m/z to a finite positive number",
     }
-    values = {key: dataset[name].tolist() for key, name in mapping.items()}
+    values = {key: list(dataset[name]) for key, name in mapping.items()}
     ids = (
-        dataset["SpecID"].astype(str).tolist() if "SpecID" in dataset.columns else None
+        [str(value) for value in dataset["SpecID"]] if "SpecID" in dataset.columns else None
     )
     total = len(dataset)
     progress_step = max(1, total // 100)

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 
-from fredis.data import MSDataset, load_ms_dataset
+import msentity as ms
 
 
 def default_output_file(input_file: str) -> str:
@@ -17,7 +17,7 @@ def default_output_file(input_file: str) -> str:
 
 
 def save_dataset(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     output_file: str,
     *,
     add_finished_tag: bool = False,
@@ -27,18 +27,9 @@ def save_dataset(
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if add_finished_tag and hasattr(dataset, "add_tag"):
-        dataset.add_tag("finished")
-
-    if hasattr(dataset, "save"):
-        dataset.save(str(output_path))
-        return
-
-    if hasattr(dataset, "to_hdf5"):
-        dataset.to_hdf5(str(output_path), mode="w")
-        return
-
-    raise AttributeError("MSDataset must provide either save() or to_hdf5().")
+    if add_finished_tag:
+        dataset.add_tag('finished')
+    dataset.save(str(output_path))
 
 
 def prepare_dataset_io(
@@ -46,10 +37,10 @@ def prepare_dataset_io(
     input_file: str,
     output_file: Optional[str],
     overwrite: bool,
-) -> Tuple[MSDataset, str]:
+) -> Tuple[ms.Dataset, str]:
     """Load dataset and determine output file."""
 
-    dataset = load_ms_dataset(input_file)
+    dataset = ms.load(input_file)
 
     if output_file is None:
         output_file = default_output_file(input_file)
@@ -69,19 +60,15 @@ def is_finished_dataset(path: str) -> bool:
     if not os.path.exists(path):
         return False
 
-    if not hasattr(MSDataset, "read_dataset_meta"):
-        return False
-
     try:
-        meta = MSDataset.read_dataset_meta(path)
-        tags = getattr(meta, "tags", [])
-        return "finished" in tags
-    except Exception:
+        with ms.load(path) as dataset:
+            return 'finished' in dataset.tags
+    except (OSError, ms.MsEntityError):
         return False
 
 
 def validate_columns(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     *,
     smiles_column: str,
     adduct_type_column: str,
@@ -117,7 +104,7 @@ def infer_calc_formula_column(
 
 
 def initialize_output_columns(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     *,
     calc_formula_coverage_column: str,
     overwrite: bool = False,
@@ -135,34 +122,24 @@ def initialize_output_columns(
 
     if overwrite:
         dataset[calc_formula_coverage_column] = ""
-        dataset.peaks[calc_formula_column] = ""
+        dataset.set_peak_column(calc_formula_column, [""] * dataset.n_peaks_total)
         return calc_formula_column, calc_formula_coverage_column
 
     if calc_formula_coverage_column not in dataset.columns:
         dataset[calc_formula_coverage_column] = ""
 
-    peak_meta_columns = []
-    if getattr(dataset.peaks, "_metadata_ref", None) is not None:
-        peak_meta_columns = list(dataset.peaks._metadata_ref.columns)
-
-    if calc_formula_column not in peak_meta_columns:
-        dataset.peaks[calc_formula_column] = ""
+    if calc_formula_column not in dataset.peak_columns:
+        dataset.set_peak_column(calc_formula_column, [''] * dataset.n_peaks_total)
 
     return calc_formula_column, calc_formula_coverage_column
 
 
 def try_move_peak_column_to_front(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     column: str,
 ) -> None:
     """Move one peak metadata column to the front if possible."""
 
-    try:
-        peak_meta = dataset.peaks._metadata_ref
-        if peak_meta is None:
-            return
-
-        columns = [column] + [c for c in peak_meta.columns if c != column]
-        dataset.peaks.meta_columns = columns
-    except Exception:
-        return
+    # Native peak columns retain their insertion order. The formula column is
+    # inserted before annotation work begins; no private pandas state is used.
+    return

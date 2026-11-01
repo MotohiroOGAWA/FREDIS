@@ -64,7 +64,8 @@ def test_each_metric_selects_from_its_own_full_validation_distribution():
 
 def test_msds_roundtrip_keeps_paired_peaks_scores_smiles_and_selection(tmp_path):
     import json
-    from fredis.data import MSDataset
+
+    import msentity as ms
     from fredis.ml.training.fragment_tree_training.validation_storage import (
         save_validation_msdataset,
     )
@@ -95,9 +96,9 @@ def test_msds_roundtrip_keeps_paired_peaks_scores_smiles_and_selection(tmp_path)
     target = save_validation_msdataset(
         saved, representatives, tmp_path / "epoch_2.msds", epoch=2, global_step=10
     )
-    dataset = MSDataset.load(str(target))
+    dataset = ms.load(str(target))
     assert len(dataset) == 2 * len(saved)
-    meta = dataset.metadata
+    meta = dataset.to_pandas()
     assert set(meta["SpectrumRole"]) == {"generated", "observed"}
     assert set(meta["SMILES"]) == {"CCO"}
     assert set(meta["Epoch"]) == {2}

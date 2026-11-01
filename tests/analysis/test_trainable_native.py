@@ -1,10 +1,11 @@
+from fredis.msdata import with_metadata, dataset_from_arrays
 import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from fredis.data.core.MSDataset import MSDataset
-from fredis.data.core.PeakSeries import PeakSeries
+
+
 from fredis.analysis.training_eligibility.native import extract
 from tests.ml.reaction.TestReactionPipeline import config,chemistry
 
@@ -13,7 +14,7 @@ from tests.ml.reaction.TestReactionPipeline import config,chemistry
 def test_native_backward_metadata_failure_and_resume(tmp_path,compact):
     meta=pd.DataFrame(dict(SpecID=['first','second','bad-adduct','bad-peaks'],SMILES=['CCO']*4,AdductType=['[M+H]+','[M+H]+','invalid','[M+H]+'],CollisionEnergy=[10.,40.,20.,20.],PrecursorMZ=[47.0494]*4))
     peaks=np.array([[47.0494,1.],[31.0184,.5]]*4);peaks[-1,1]=np.nan
-    data=MSDataset(meta,PeakSeries(peaks,np.arange(0,9,2)));file=tmp_path/'data.msds';data.save(str(file))
+    data=with_metadata(meta,dataset_from_arrays(peaks,np.arange(0,9,2)));file=tmp_path/'data.msds';data.save(str(file))
     cfg=None if compact else config()
     out=tmp_path/'fredis'
     def check_saved_architecture(event):
@@ -46,6 +47,6 @@ def test_native_backward_metadata_failure_and_resume(tmp_path,compact):
 
 def test_empty_and_duplicate_ids_fail_before_output(tmp_path):
     meta=pd.DataFrame(dict(SpecID=['same','same'],SMILES=['CCO']*2,AdductType=['[M+H]+']*2,CollisionEnergy=[20.]*2,PrecursorMZ=[47.]*2))
-    data=MSDataset(meta,PeakSeries(np.array([[47.,1.]]*2),np.arange(3)));file=tmp_path/'input.msds';data.save(str(file))
+    data=with_metadata(meta,dataset_from_arrays(np.array([[47.,1.]]*2),np.arange(3)));file=tmp_path/'input.msds';data.save(str(file))
     with pytest.raises(ValueError,match='Duplicate'):extract(file,tmp_path/'out',chemistry())
     assert not (tmp_path/'out').exists()

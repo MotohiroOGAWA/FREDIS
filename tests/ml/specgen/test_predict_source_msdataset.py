@@ -35,7 +35,7 @@ def test_predict_source_msdataset_skips_bad_records_and_reports_them():
     assert len(failures) == 1
     assert failures.iloc[0]['index'] == 1
     assert "'Cat'" in failures.iloc[0]['error']
-    assert list(predicted.metadata['SMILES']) == ['CCCO', 'CCCO']
+    assert list(predicted.to_pandas()['SMILES']) == ['CCCO', 'CCCO']
 
 
 def test_predict_source_msdataset_survives_unexpected_exception_types():
@@ -96,8 +96,8 @@ def test_predict_source_msdataset_adds_main_adduct_and_model_collision_energy_co
         instrument_column=None,
     )
     assert failures.empty
-    assert predicted.metadata['MainAdduct'].tolist() == ['[M+H]+']
-    assert predicted.metadata['ModelCollisionEnergyEV'].tolist() == [20.0]
+    assert predicted.to_pandas()['MainAdduct'].tolist() == ['[M+H]+']
+    assert predicted.to_pandas()['ModelCollisionEnergyEV'].tolist() == [20.0]
 
 
 def test_predict_source_msdataset_skips_adducts_unsupported_by_this_model():
@@ -199,7 +199,7 @@ def test_predict_source_msdataset_skips_atoms_unsupported_by_the_checkpoint():
     )
 
     assert len(predicted) == 2
-    assert predicted.metadata['SMILES'].tolist() == ['CCCO', 'c1ccccc1']
+    assert predicted.to_pandas()['SMILES'].tolist() == ['CCCO', 'c1ccccc1']
     assert failures['index'].tolist() == [1]
     assert "Unsupported atom symbol(s): Na" in failures.iloc[0]['error']
 
@@ -229,7 +229,7 @@ def test_predict_source_msdataset_isolates_unexpected_prediction_errors(monkeypa
     )
 
     assert len(predicted) == 2
-    assert predicted.metadata['SMILES'].tolist() == ['CCCO', 'c1ccccc1']
+    assert predicted.to_pandas()['SMILES'].tolist() == ['CCCO', 'c1ccccc1']
     assert failures['index'].tolist() == [1]
     assert failures.iloc[0]['error'] == 'RuntimeError: simulated record-specific inference failure'
 
@@ -255,7 +255,7 @@ def test_predict_source_msdataset_parallel_prepare_matches_serial(num_workers, c
     )
 
     assert len(predicted) == 3
-    assert list(predicted.metadata['SMILES']) == ['CCCO', 'CCN', 'c1ccccc1']
+    assert list(predicted.to_pandas()['SMILES']) == ['CCCO', 'CCN', 'c1ccccc1']
     assert len(failures) == 1
     assert failures.iloc[0]['index'] == 3
 
@@ -337,17 +337,17 @@ def test_prediction_intensity_threshold_defaults_to_zero_and_excludes_boundary()
         instrument_column=None,
     )
     baseline, failures = predict_source_msdataset(dataset, generator, **kwargs)
-    assert failures.empty and len(baseline.peaks.intensity) > 0
+    assert failures.empty and len(baseline.intensity) > 0
     # Every peak is at or below the maximum: inclusive cutoff removes all of them.
-    cutoff = float(max(baseline.peaks.intensity))
+    cutoff = float(max(baseline.intensity))
     generator.set_generation(
         replace(generator.generation, peak_intensity_threshold=cutoff)
     )
     unfiltered, failures = predict_source_msdataset(dataset, generator, **kwargs)
     assert failures.empty
-    assert len(unfiltered.peaks.intensity) == len(baseline.peaks.intensity)
+    assert len(unfiltered.intensity) == len(baseline.intensity)
     filtered, failures = predict_source_msdataset(
         dataset, generator, peak_intensity_threshold=cutoff, **kwargs
     )
     assert failures.empty
-    assert len(filtered.peaks.intensity) == 0
+    assert len(filtered.intensity) == 0

@@ -5,8 +5,9 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Sequence
 
 from tqdm import tqdm
+from fredis.msdata import set_record_peak_column
 
-from fredis.data import MSDataset
+import msentity as ms
 from fredis.libs.mmkit.mmkit import Adduct, Compound, Formula
 from fredis.domain.mass.tolerance import MassTolerance
 
@@ -85,7 +86,7 @@ def precursor_grouping_formula(
 
 
 def group_record_indexes_by_precursor_formula(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     *,
     smiles_column: str,
     adduct_type_column: str,
@@ -179,8 +180,8 @@ def assign_record_formulas(
         Matched-intensity coverage.
     """
 
-    peaks_mz = [float(peak.mz) for peak in record.peaks]
-    peak_intensities = [float(peak.intensity) for peak in record.peaks]
+    peaks_mz = record.mz.tolist()
+    peak_intensities = record.intensity.tolist()
 
     total_intensity = sum(peak_intensities)
 
@@ -203,7 +204,7 @@ def assign_record_formulas(
 
     coverage = matched_intensity / total_intensity if total_intensity > 0 else 0.0
 
-    record.peaks[calc_formula_column] = assigned_formula_texts
+    set_record_peak_column(record, calc_formula_column, assigned_formula_texts)
     record[calc_formula_coverage_column] = str(coverage)
 
     return coverage

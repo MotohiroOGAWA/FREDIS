@@ -1,4 +1,5 @@
 from __future__ import annotations
+from fredis.msdata import with_metadata, dataset_from_arrays
 
 import argparse
 from datetime import datetime, timezone
@@ -15,11 +16,14 @@ import pandas as pd
 import torch
 from msentity_similarity import format_mz_tolerance, parse_mz_tolerance
 from torch import Tensor
+from msentity_similarity import similarity_by_key as calculate_similarity
+DEFAULT_MZ_TOLERANCE = "0.01Da,10ppm"
 
 from fredis.libs.mmkit.mmkit import Adduct, Compound
-from fredis.data import MSDataset
-from fredis.data.core.PeakSeries import PeakSeries
-from fredis.data.similarity import DEFAULT_MZ_TOLERANCE, calculate_similarity
+
+import msentity as ms
+
+
 from fredis.domain.mass.parse_ce import parse_ce_to_ev
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from fredis.ml.specgen.generation import GenerationSettings
@@ -270,7 +274,7 @@ def direct_input_dataset(
     smiles_values: Sequence[str],
     collision_energy: str,
     adduct_type: str,
-) -> MSDataset:
+) -> ms.Dataset:
     """Create metadata-only samples for direct CLI prediction."""
     adduct = Adduct.parse(adduct_type)
     rows = []
@@ -285,31 +289,31 @@ def direct_input_dataset(
             }
         )
     metadata = pd.DataFrame(rows)
-    peaks = PeakSeries(
+    peaks = dataset_from_arrays(
         data=np.empty((0, 2), dtype=np.float64),
         offsets=np.zeros(len(metadata) + 1, dtype=np.int64),
     )
-    return MSDataset(
-        spectrum_metadata=metadata,
-        peak_series=peaks,
+    return with_metadata(
+        metadata=metadata,
+        dataset=peaks,
         columns=metadata.columns.tolist(),
         description="Direct spectrum prediction input",
     )
 
 
 def select_smiles_values(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     *,
     smiles_column: str,
     smiles_values: Optional[Sequence[str]],
 ) -> List[str]:
     if smiles_values:
         return [str(value) for value in smiles_values]
-    return [str(value) for value in dataset[smiles_column].dropna().unique()]
+    return [str(value) for value in pd.Series(dataset[smiles_column], dtype=object).dropna().unique()]
 
 
 def validate_prediction_input(
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     *,
     smiles_column: str,
     precursor_mz_column: str,
@@ -330,7 +334,7 @@ def validate_prediction_input(
     missing = [column for column in required if column not in dataset.columns]
     if missing:
         raise ValueError(f"Input MSDataset is missing required columns: {missing}")
-    spec_ids = dataset[spec_id_column]
+    spec_ids = pd.Series(dataset[spec_id_column], dtype=object)
     if spec_ids.isna().any() or spec_ids.astype(str).str.strip().eq("").any():
         raise ValueError(f"{spec_id_column} must not contain null or empty values.")
     duplicated = spec_ids.astype(str).duplicated(keep=False)
@@ -418,7 +422,7 @@ def prediction_metadata(
     return result
 
 
-def validate_prediction_output(dataset: MSDataset) -> None:
+def validate_prediction_output(dataset: ms.Dataset) -> None:
     required = [
         "SpecID",
         "SourceSpecID",
@@ -435,19 +439,19 @@ def validate_prediction_output(dataset: MSDataset) -> None:
     missing = [column for column in required if column not in dataset.columns]
     if missing:
         raise ValueError(f"Predicted MSDataset is missing required columns: {missing}")
-    spec_ids = dataset["SpecID"].astype(str)
+    spec_ids = pd.Series(dataset["SpecID"], dtype=object).astype(str)
     if spec_ids.str.strip().eq("").any() or spec_ids.duplicated().any():
         raise ValueError("Predicted SpecID values must be non-empty and unique.")
     if (
-        dataset["SourceSpecID"].isna().any()
-        or dataset["SourceSpecID"].astype(str).str.strip().eq("").any()
+        pd.Series(dataset["SourceSpecID"], dtype=object).isna().any()
+        or pd.Series(dataset["SourceSpecID"], dtype=object).astype(str).str.strip().eq("").any()
     ):
         raise ValueError("Predicted SourceSpecID values must be non-empty.")
 
 
 def predict_msdataset(
     *,
-    dataset: MSDataset,
+    dataset: ms.Dataset,
     generator: SourceAnchoredFragmentSpectrumGenerator,
     model_path: str,
     db: str,
@@ -466,7 +470,7 @@ def predict_msdataset(
     validate_desc: str = "Validating records",
     prepare_desc: str = "Preparing molecules",
     predict_desc: str = "Predicting spectra",
-) -> tuple[MSDataset, pd.DataFrame]:
+) -> tuple[ms.Dataset, pd.DataFrame]:
     """Predict every selected compound in one batched forward, then apply the
     shared provenance contract (SpecID/PredictionTool/... columns)."""
     from .source_reaction_msdataset import predict_source_msdataset
@@ -491,7 +495,7 @@ def predict_msdataset(
     )
     timestamp = datetime.now(timezone.utc).isoformat()
     enriched_metadata = prediction_metadata(
-        predicted.metadata,
+        predicted.to_pandas(),
         db=db,
         model_path=model_path,
         spec_id_column=spec_id_column,
@@ -511,9 +515,9 @@ def predict_msdataset(
         "prediction_db": str(db).strip() or "unspecified",
         "prediction_timestamp": timestamp,
     }
-    enriched = MSDataset(
-        spectrum_metadata=enriched_metadata,
-        peak_series=predicted.peaks,
+    enriched = with_metadata(
+        metadata=enriched_metadata,
+        dataset=predicted,
         description="In silico MS/MS spectra generated by FREDIS",
         attributes=attributes,
         tags=tags,
@@ -553,10 +557,10 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
-def _atomic_save(dataset: MSDataset, output_path: Path) -> None:
+def _atomic_save(dataset: ms.Dataset, output_path: Path) -> None:
     temporary = output_path.with_name(f".{output_path.name}.tmp")
     try:
-        dataset.save(str(temporary))
+        dataset.save(str(temporary), format="msds")
         os.replace(temporary, output_path)
     finally:
         if temporary.exists():
@@ -595,7 +599,7 @@ def main() -> None:
 
     print("[1/6] Loading input MSDataset")
     dataset = (
-        MSDataset.load(args.input)
+        ms.load(args.input)
         if args.input is not None
         else direct_input_dataset(
             smiles_values=args.smiles,
@@ -699,10 +703,10 @@ def main() -> None:
         key1="SourceSpecID",
         key2=args.spec_id_column,
         include_matched_data=True,
-        mz_tolerance=args.similarity_mz_tolerance,
+        **parse_mz_tolerance(args.similarity_mz_tolerance),
     )
     # SimilarityDataset.save() already writes via a same-directory tempfile
-    # and renames into place, unlike MSDataset.save(); reusing _atomic_save's
+    # and renames into place, unlike ms.Dataset.save(); reusing _atomic_save's
     # ".name.tmp" wrapper here would break its own ".mssim"-suffix check.
     similarity.save(str(similarity_path))
 

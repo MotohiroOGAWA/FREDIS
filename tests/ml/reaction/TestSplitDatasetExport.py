@@ -63,8 +63,8 @@ class TestSplitDatasetExport(unittest.TestCase):
         self.assertFalse((self.root/'out/validation.msds').exists())
         self.assertFalse((self.root/'out/test.msds').exists())
         exported=load_spectrum_dataset(result['files']['train'])
-        self.assertEqual(exported['SMILES'].tolist(),plan['combined']['SMILES'].tolist())
-        self.assertEqual(exported.peaks.mz.tolist(),plan['combined'].peaks.mz.tolist())
+        self.assertEqual(list(exported['SMILES']),list(plan['combined']['SMILES']))
+        self.assertEqual(exported.mz.tolist(),plan['combined'].mz.tolist())
 
     def test_changed_source_requires_rechecking_without_publishing_outputs(self):
         config=self.configuration();_,snapshot=self.check(config)
@@ -83,7 +83,7 @@ class TestSplitDatasetExport(unittest.TestCase):
 
     def test_failed_save_does_not_publish_partial_datasets(self):
         _,snapshot=self.check(self.configuration());output=self.root/'out'
-        with patch('fredis.data.MSDataset.save',side_effect=OSError('disk full')):
+        with patch('msentity.Dataset.save',side_effect=OSError('disk full')):
             with self.assertRaisesRegex(OSError,'disk full'):
                 export_checked(snapshot,output)
         self.assertEqual(list(output.iterdir()),[])

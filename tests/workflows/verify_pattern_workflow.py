@@ -2,6 +2,8 @@
 
 Usage: PYTHONPATH=. python tests/workflows/verify_pattern_workflow.py --output data/workflow_verification
 """
+
+from fredis.msdata import with_metadata
 import argparse
 from copy import deepcopy
 from dataclasses import replace
@@ -16,7 +18,8 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from fredis.data.core.MSDataset import MSDataset
+
+import msentity as ms
 from fredis.domain.fragment import Fragmenter
 from fredis.ml.specgen.predict_spectrum import load_generator
 from fredis.ml.training.fragment_tree_training.integration import PATTERN_KEY
@@ -24,23 +27,23 @@ from fredis.ml.training.fragment_tree_training.integration import PATTERN_KEY
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', required=True)
 parser.add_argument('--continue-run',action='store_true')
-parser.add_argument('--source', default='/workspaces/CLEFTS/raw_data/MoNA/flavonoids/mona_pos_cf_flavonoids.msds')
+parser.add_argument('--source', default=str(ROOT.parents[1] / 'raw_data/MoNA/flavonoids/mona_pos_cf_flavonoids.msds'))
 args = parser.parse_args()
 out = Path(args.output).resolve()
 out.mkdir(parents=True, exist_ok=args.continue_run)
 torch.set_num_threads(1)
-records = MSDataset.load(args.source, load_peak_metadata=False)
+records = ms.load(args.source)
 # Experimental peaks and original metadata are retained. Add a numeric CE
 # column parsed from MoNA's unit-bearing text, as supported by column mapping.
 for split, indexes in [('train', [4305, 4358]), ('validation', [3765, 3762])]:
     view = records[indexes]
     raw = out / f'raw_{split}.msds'
     view.save(str(raw))
-    view = MSDataset.load(str(raw),load_peak_metadata=False)
-    metadata = view.metadata.copy()
+    view = ms.load(str(raw))
+    metadata = view.to_pandas().copy()
     metadata['SmokeCollisionEnergy'] = [float(str(value).split()[0]) for value in metadata.CollisionEnergy]
     metadata['OriginalRecordIndex'] = indexes
-    dataset = MSDataset(metadata, view.peaks, columns=metadata.columns.tolist())
+    dataset = with_metadata(metadata, view, columns=metadata.columns.tolist())
     dataset.save(str(out / f'{split}.msds'))
 
 base = json.loads((ROOT / 'fredis/presets/fragment/single_bond_cleavage_m_h_plus.fragmenter.pft').read_text())
@@ -171,7 +174,7 @@ for name,path in [('base',base_ckpt),('fine_tuned',sequential_ckpt),('integrated
          '--smiles','O=C1CC(OC2=CC=CC=C12)C1=CC=CC=C1','--ce','30','--adduct-type','[M+H]+',
          '--output-dir',str(out/f'prediction_{name}'),'--overwrite','--device','cpu','--strict',
          '--max-fragment-nodes','30','--ion-prediction-threshold','0'])
-    predicted = MSDataset.load(str(next((out/f'prediction_{name}').glob('*.msds'))))
+    predicted = ms.load(str(next((out/f'prediction_{name}').glob('*.msds'))))
     assert len(predicted) == 1 and predicted.n_peaks_total > 0
 report = {'source':args.source,'train_record_indexes':[4305,4358],'validation_record_indexes':[3765,3762],
           'steps':steps,'immutable_feature_tensors':True,'identical_final_reaction_features_after_head_training':True,

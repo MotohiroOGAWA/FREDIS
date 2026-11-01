@@ -1,5 +1,7 @@
 """Real dataset inspection and train/validation preparation regressions."""
 
+from fredis.msdata import with_metadata, dataset_from_arrays
+
 from fredis.ml.input.adduct_data import AdductData
 import contextlib
 import importlib.util
@@ -12,8 +14,8 @@ import unittest.mock
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from fredis.data import MSDataset
-from fredis.data.core.PeakSeries import PeakSeries
+
+
 from fredis.libs.mmkit.mmkit import Compound, Adduct
 from fredis.ml.data_preparation.fragment_tree.datasets import (
     load_spectrum_dataset,
@@ -43,7 +45,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             }
         )
         peaks = np.array([[mz, 1] for mz in mzs], dtype=float)
-        return MSDataset(metadata, PeakSeries(peaks, np.arange(6, dtype=np.int64)))
+        return with_metadata(metadata, dataset_from_arrays(peaks, np.arange(6, dtype=np.int64)))
 
     def test_existing_output_is_confirmed_before_processing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -69,7 +71,7 @@ class TestPreparationWorkflow(unittest.TestCase):
         train2, validation2 = split_by_smiles(data, "SMILES", 0.5, 7)
         self.assertFalse(set(train["SMILES"]) & set(validation["SMILES"]))
         self.assertEqual(len(train) + len(validation), len(data))
-        self.assertEqual(validation["SMILES"].tolist(), validation2["SMILES"].tolist())
+        self.assertEqual(list(validation["SMILES"]), list(validation2["SMILES"]))
 
     def test_csv_loader_uses_official_spectrum_table_parser(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,8 +80,8 @@ class TestPreparationWorkflow(unittest.TestCase):
                 file, index=False
             )
             data = load_spectrum_dataset(file)
-            self.assertEqual(data[0].peaks.mz.tolist(), [100, 150])
-            self.assertEqual(data[0].peaks.intensity.tolist(), [0.5, 1])
+            self.assertEqual(data[0].mz.tolist(), [100, 150])
+            self.assertEqual(data[0].intensity.tolist(), [0.5, 1])
 
 
 
@@ -128,9 +130,9 @@ class TestPreparationWorkflow(unittest.TestCase):
                 "PrecursorMZ": [47, 47, 17],
             }
         )
-        data = MSDataset(
+        data = with_metadata(
             metadata,
-            PeakSeries(
+            dataset_from_arrays(
                 np.array([[47.0, 1.0], [47.0, 1.0], [17.0, 1.0]]),
                 np.arange(4, dtype=np.int64),
             ),

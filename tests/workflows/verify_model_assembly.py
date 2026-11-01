@@ -63,8 +63,9 @@ with torch.no_grad():
     a,b=[g.feature_model.encode_static(prepared)[0] for g in generators]
     torch.testing.assert_close(a,b,rtol=0,atol=0)
 run('predict',['-m','fredis.ml.specgen.predict_spectrum','--model',str(heads),'--smiles','O=C1CC(OC2=CC=CC=C12)C1=CC=CC=C1','--ce','30','--adduct-type','[M+H]+','--output-dir',str(out/'predictions'),'--device','cpu','--strict','--max-fragment-nodes','30','--ion-prediction-threshold','0'])
-from fredis.data.core.MSDataset import MSDataset
-predicted=MSDataset.load(str(next((out/'predictions').glob('*.msds'))))
+
+import msentity as ms
+predicted=ms.load(str(next((out/'predictions').glob('*.msds'))))
 assert len(predicted)==1 and predicted.n_peaks_total>0
 
 (out/'report.json').write_text(json.dumps(dict(commands=commands,complete_pattern_features_preserved=True,head_training_feature_difference=float((a-b).abs().max()),pattern_architectures=inspect_model(merged)['patterns'],scope='Workflow verification on four experimental MoNA spectra, not predictive accuracy'),indent=2))

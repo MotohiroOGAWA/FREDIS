@@ -1,7 +1,7 @@
 """Shared dataset-list loading, validation and canonical molecule assignment."""
 from pathlib import Path
 
-from fredis.data import MSDataset
+import msentity as ms
 from .datasets import canonical_keys, load_spectrum_dataset, split_dataset
 from .record_validation import inspect_records
 
@@ -82,7 +82,7 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
         sources.append(dict(id=entry["id"], path=entry["path"], split=entry["split"],
                             records=len(data), excludedRecords=report["excludedRecords"]))
     notify("combining", 72)
-    combined = MSDataset.concat(datasets) if len(datasets) > 1 else datasets[0]
+    combined = ms.concat(datasets) if len(datasets) > 1 else datasets[0]
     if mode == "automatic":
         splits, assignments = split_dataset(combined, "SMILES", validation_ratio, test_ratio, seed,
                                               progress=(lambda current, total: notify("splitting", 75 + current / max(1, total) * 24, current=current, total=total)) if progress else None)
@@ -96,7 +96,7 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
                 assignments[key] = entry["split"]
             grouped[entry["split"]].append(data)
         empty = combined[[]]
-        splits = {name: (MSDataset.concat(parts) if len(parts) > 1 else parts[0]) if parts else empty
+        splits = {name: (ms.concat(parts) if len(parts) > 1 else parts[0]) if parts else empty
                   for name, parts in grouped.items()}
     summary = {name: dict(molecules=sum(split == name for split in assignments.values()), records=len(data))
                for name, data in splits.items()}

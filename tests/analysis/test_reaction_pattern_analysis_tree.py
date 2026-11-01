@@ -20,6 +20,7 @@ Tree::
     C ─── O              (C, C+O)
 """
 from __future__ import annotations
+from fredis.msdata import with_metadata, dataset_from_arrays
 
 import json
 import math
@@ -64,13 +65,15 @@ def _tree(*extra_nodes: dict, extra_sets=()) -> dict:
 
 
 def _dataset(path: Path, rows: list[tuple[dict, list]]) -> Path:
-    from fredis.data import MSDataset
-    from fredis.data.core.PeakSeries import PeakSeries
+
+    import msentity as ms
+
+    import msentity as ms
 
     peaks = [peak for _, values in rows for peak in values]
     offsets = np.cumsum([0] + [len(values) for _, values in rows])
-    MSDataset(pd.DataFrame([row for row, _ in rows]),
-              PeakSeries(np.asarray(peaks, dtype=float), np.asarray(offsets, dtype=np.int64))).save(str(path))
+    with_metadata(pd.DataFrame([row for row, _ in rows]),
+              dataset_from_arrays(np.asarray(peaks, dtype=float), np.asarray(offsets, dtype=np.int64))).save(str(path))
     return path
 
 
