@@ -103,6 +103,7 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     monkeypatch.setattr("sys.argv", [
         "predict_spectrum.py", "--input", str(input_path), "--output-dir", str(output_dir),
         "--model", str(model_path), "--device", "cpu", "--spec-id-column", "SpecID",
+        "--similarity-mz-tolerance", "20ppm, 0.02da",
     ])
     predict_spectrum.main()
 
@@ -117,6 +118,8 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
 
     similarity = load_similarity(str(mssim_path))
     assert similarity.has_matched_data
+    parameters = similarity.metadata["parameters"]
+    assert (parameters["mz_tolerance_da"], parameters["mz_tolerance_ppm"]) == (0.02, 20.0)
 
     # Mirrors training/data-prep's own .pft convention, so the
     # Workbench's "Load From Run" can restore this run's settings.
@@ -128,6 +131,7 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     assert pft["numWorkers"] == 1
     assert pft["chunkSize"] == 1
     assert pft["keepTemp"] is False
+    assert pft["similarityMzTolerance"] == "0.02Da,20ppm"
 
 
 def test_main_keeps_prepare_temp_files_under_output_dir_only_with_keep_temp(tmp_path, monkeypatch) -> None:

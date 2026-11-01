@@ -13,12 +13,13 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 import torch
+from msentity_similarity import format_mz_tolerance, parse_mz_tolerance
 from torch import Tensor
 
 from fredis.libs.mmkit.mmkit import Adduct, Compound
 from fredis.data import MSDataset
 from fredis.data.core.PeakSeries import PeakSeries
-from fredis.data.similarity import calculate_similarity
+from fredis.data.similarity import DEFAULT_MZ_TOLERANCE, calculate_similarity
 from fredis.domain.mass.parse_ce import parse_ce_to_ev
 from fredis.ml.specgen.spectrum_generator import create_spectrum_generator
 from fredis.ml.specgen.generation import GenerationSettings
@@ -147,6 +148,14 @@ def parse_args() -> argparse.Namespace:
         help="Remove output peaks at or below this relative intensity (default: 0).",
     )
     parser.add_argument(
+        "--similarity-mz-tolerance",
+        default=DEFAULT_MZ_TOLERANCE,
+        help=(
+            "m/z tolerance of the predicted.mssim similarity, e.g. 0.01Da,10ppm, "
+            "0.01Da or 10ppm; peaks match within either term (default: %(default)s)."
+        ),
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="Keep the temporary task/result files exchanged with --num-workers subprocesses (for inspection), instead of deleting them once every chunk completes.",
@@ -158,6 +167,13 @@ def parse_args() -> argparse.Namespace:
         parser.error("--num-workers must be positive")
     if args.chunk_size < 1:
         parser.error("--chunk-size must be positive")
+    try:
+        tolerance = parse_mz_tolerance(args.similarity_mz_tolerance)
+    except ValueError as exc:
+        parser.error(f"--similarity-mz-tolerance: {exc}")
+    args.similarity_mz_tolerance = format_mz_tolerance(
+        tolerance["mz_tolerance_da"], tolerance["mz_tolerance_ppm"]
+    )
     if args.input is None:
         missing = [
             name
@@ -533,6 +549,7 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "branchPathThreshold": args.branch_path_threshold,
         "maxFragmentNodes": args.max_fragment_nodes,
         "peakIntensityThreshold": args.peak_intensity_threshold,
+        "similarityMzTolerance": args.similarity_mz_tolerance,
     }
 
 
@@ -682,6 +699,7 @@ def main() -> None:
         key1="SourceSpecID",
         key2=args.spec_id_column,
         include_matched_data=True,
+        mz_tolerance=args.similarity_mz_tolerance,
     )
     # SimilarityDataset.save() already writes via a same-directory tempfile
     # and renames into place, unlike MSDataset.save(); reusing _atomic_save's

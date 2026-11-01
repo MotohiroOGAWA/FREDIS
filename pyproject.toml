@@ -20,6 +20,7 @@ dependencies = [
     "h5py",
     "pyarrow",
     "msentity>=0.1.0",
+    "msentity-similarity>=1.2.1",
 ]
 
 [project.scripts]
@@ -31,7 +32,8 @@ msentity-predict-fredis = "fredis.ml.specgen.predict_spectrum:main"
 include = ["fredis*"]
 
 [project.optional-dependencies]
-similarity = ["msentity-similarity>=0.1.0"]
+# Kept for existing install commands; msentity-similarity is now a core dependency.
+similarity = []
 dev = ["black==26.10.1", "pytest"]
 
 docs = [

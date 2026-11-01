@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import ClassVar
-import re
+
+import msentity_similarity as mss
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,99 +283,43 @@ class DaOrPpmTolerance(MassTolerance):
         )
 
 
-_NUMBER_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
-
-
-_DA_RE = re.compile(
-    rf"""
-    ^\s*
-    (?P<tolerance>{_NUMBER_PATTERN})
-    \s*
-    da
-    \s*$
-    """,
-    re.VERBOSE | re.IGNORECASE,
-)
-
-
-_PPM_RE = re.compile(
-    rf"""
-    ^\s*
-    (?P<tolerance>{_NUMBER_PATTERN})
-    \s*
-    ppm
-    \s*$
-    """,
-    re.VERBOSE | re.IGNORECASE,
-)
-
-
-_DA_OR_PPM_RE = re.compile(
-    rf"""
-    ^\s*
-    (?P<da_tolerance>{_NUMBER_PATTERN})
-    \s*
-    da
-    \s*
-    ,
-    \s*
-    (?P<ppm_tolerance>{_NUMBER_PATTERN})
-    \s*
-    ppm
-    \s*$
-    """,
-    re.VERBOSE | re.IGNORECASE,
-)
-
-
 def parse_mass_tolerance(value: str) -> MassTolerance:
-    """Parse a string into a MassTolerance.
+    """Parse a string into a MassTolerance with msentity-similarity's parser.
 
     Supported formats
     -----------------
     0.01Da
     10ppm
-    0.01Da,10ppm
+    0.01Da,10ppm (either order; peaks match within either term)
     """
     if not isinstance(value, str):
         raise TypeError("value must be a string.")
 
-    value = value.strip()
+    parsed = mss.parse_mz_tolerance(value)
+    da_tolerance = parsed["mz_tolerance_da"]
+    ppm_tolerance = parsed["mz_tolerance_ppm"]
 
-    match = _DA_OR_PPM_RE.match(value)
-    if match:
+    if da_tolerance > 0 and ppm_tolerance > 0:
         return DaOrPpmTolerance(
-            tolerance=float(match.group("da_tolerance")),
-            ppm_tolerance=float(match.group("ppm_tolerance")),
+            tolerance=da_tolerance,
+            ppm_tolerance=ppm_tolerance,
         )
 
-    match = _DA_RE.match(value)
-    if match:
-        return DaTolerance(
-            tolerance=float(match.group("tolerance")),
-        )
+    if da_tolerance > 0:
+        return DaTolerance(tolerance=da_tolerance)
 
-    match = _PPM_RE.match(value)
-    if match:
-        return PpmTolerance(
-            tolerance=float(match.group("tolerance")),
-        )
-
-    raise ValueError(
-        "Invalid mass tolerance format. Supported formats are: "
-        "'0.01Da', '10ppm', or '0.01Da,10ppm'."
-    )
+    return PpmTolerance(tolerance=ppm_tolerance)
 
 
 def format_mass_tolerance(tolerance: MassTolerance) -> str:
-    """Convert a MassTolerance object to a string representation."""
+    """Convert a MassTolerance object to msentity-similarity's canonical text."""
     if isinstance(tolerance, DaOrPpmTolerance):
-        return f"{tolerance.da_tolerance:g}Da," f"{tolerance.ppm_tolerance:g}ppm"
+        return mss.format_mz_tolerance(tolerance.da_tolerance, tolerance.ppm_tolerance)
 
     if isinstance(tolerance, DaTolerance):
-        return f"{tolerance.tolerance:g}Da"
+        return mss.format_mz_tolerance(tolerance.tolerance, 0.0)
 
     if isinstance(tolerance, PpmTolerance):
-        return f"{tolerance.tolerance:g}ppm"
+        return mss.format_mz_tolerance(0.0, tolerance.tolerance)
 
     raise TypeError(f"Unsupported tolerance type: {type(tolerance).__name__}")

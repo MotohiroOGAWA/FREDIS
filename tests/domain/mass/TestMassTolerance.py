@@ -328,6 +328,18 @@ class TestParseMassTolerance(unittest.TestCase):
         self.assertEqual(tolerance.tolerance, 0.01)
         self.assertEqual(tolerance.ppm_tolerance, 10.0)
 
+    def test_parse_accepts_either_order(self) -> None:
+        tolerance = parse_mass_tolerance("10ppm,0.01Da")
+
+        self.assertIsInstance(tolerance, DaOrPpmTolerance)
+        self.assertEqual(tolerance.da_tolerance, 0.01)
+        self.assertEqual(tolerance.ppm_tolerance, 10.0)
+        self.assertEqual(format_mass_tolerance(tolerance), "0.01Da,10ppm")
+
+    def test_parse_treats_zero_term_as_off(self) -> None:
+        self.assertIsInstance(parse_mass_tolerance("0.01Da,0ppm"), DaTolerance)
+        self.assertIsInstance(parse_mass_tolerance("0Da,10ppm"), PpmTolerance)
+
     def test_parse_rejects_invalid_format(self) -> None:
         invalid_values = [
             "",
@@ -335,7 +347,9 @@ class TestParseMassTolerance(unittest.TestCase):
             "Da",
             "ppm",
             "0.01Da,",
-            "10ppm,0.01Da",
+            "0.01Da,0.02Da",
+            "0Da",
+            "-0.01Da",
             "0.01Da,10",
             "any:0.01Da,10ppm",
         ]
