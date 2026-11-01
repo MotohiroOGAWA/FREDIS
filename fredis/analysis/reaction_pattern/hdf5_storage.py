@@ -257,6 +257,25 @@ TABLE_SCHEMAS: dict[str, list[tuple[str, str]]] = {
         ("alias_of", I),
     ],
 }
+# Written only when present: formula x pattern comparison of a run with formula assignment.
+_FORMULA_CATEGORIES = ("both", "formula_only", "pattern_only", "neither")
+OPTIONAL_TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "node_summary": [
+        ("formula_sample_count", I),
+        *_both(
+            [
+                (f"formula_{category}_{metric}", kind)
+                for category in _FORMULA_CATEGORIES
+                for metric, kind in (
+                    ("peak_count", I),
+                    ("peak_fraction", F),
+                    ("intensity_fraction", F),
+                )
+            ]
+        ),
+    ],
+}
+
 LARGE_TABLES = frozenset(
     {
         "compounds",
@@ -394,7 +413,9 @@ class ResultWriter:
         )
 
     def write_table(self, name: str, columns: dict[str, list]) -> None:
-        schema = TABLE_SCHEMAS[name]
+        schema = TABLE_SCHEMAS[name] + [
+            item for item in OPTIONAL_TABLE_COLUMNS.get(name, []) if item[0] in columns
+        ]
         lengths = {len(values) for values in columns.values()}
         if len(lengths) > 1:
             raise ValueError(f"Columns of {name} have different lengths.")

@@ -24,6 +24,9 @@ DEFAULT_COLUMNS = {
     "precursor_mz": "PrecursorMZ",
 }
 
+# Peak table column: comma-joined formulas matched by formula assignment ("" when none).
+FORMULA_COLUMN = "formula"
+
 COMPLETED = "completed"
 SKIPPED = "skipped"
 FAILED = "failed"

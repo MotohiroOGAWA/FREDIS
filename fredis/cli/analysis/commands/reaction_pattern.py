@@ -158,6 +158,13 @@ class ReactionPatternAnalysisCommand(CLICommand):
         parser.add_argument("--num-workers", type=int, default=None)
         parser.add_argument("--chunk-size", type=int, default=None)
         parser.add_argument(
+            "--formula-assignment-json",
+            default=None,
+            help="Also assign peak formulas with these Assign Formula settings, e.g. "
+            '\'{"maxFormulaCandidates":100000,"hydrogenDelta":1}\'. The Fragmenter mass '
+            "tolerance and the source columns are used. With --extend, defaults to the existing result's.",
+        )
+        parser.add_argument(
             "--overwrite",
             type=int,
             choices=(0, 1),
@@ -212,6 +219,10 @@ class ReactionPatternAnalysisCommand(CLICommand):
             tree = None
         sources = [{"path": value, "kind": "auto"} for value in args.source]
         sources.extend(parse_source_specs(args.source_spec))
+        if args.formula_assignment_json is not None:
+            formula_assignment = json.loads(args.formula_assignment_json)
+        else:
+            formula_assignment = (previous.run or {}).get("formulaAssignment") if previous else None
         result = generate_reaction_pattern_analysis(
             sources=sources,
             output_dir=args.output_dir,
@@ -221,6 +232,7 @@ class ReactionPatternAnalysisCommand(CLICommand):
             adduct_type_column=args.adduct_type_column,
             collision_energy_column=args.collision_energy_column,
             precursor_mz_column=args.precursor_mz_column,
+            formula_assignment=formula_assignment,
             overwrite=bool(args.overwrite),
             extend=extend,
             **run_settings(args, previous.run if previous else None),

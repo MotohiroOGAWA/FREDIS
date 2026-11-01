@@ -144,6 +144,69 @@ def _sample_row(item, metric_source: dict, suffix: str, is_root: bool) -> dict:
     return row
 
 
+FORMULA_CATEGORIES = ("both", "formula_only", "pattern_only", "neither")
+
+
+def formula_node_totals(comparisons: list[CompoundComparison]) -> dict[int, dict] | None:
+    """Peaks and intensity of every node by formula x pattern assignment.
+
+    Only samples whose formula assignment succeeded count; None when formula
+    assignment was not requested.
+    """
+    if not any(
+        sample.formula_status
+        for comparison in comparisons
+        for sample in comparison.group.samples
+    ):
+        return None
+    totals: dict[int, dict] = defaultdict(lambda: defaultdict(float))
+    for comparison in comparisons:
+        for item in comparison.nodes:
+            if not item.evaluated or not (item.is_root or item.applicable):
+                continue
+            aggregate = totals[item.node.node_row]
+            for result in item.samples:
+                sample = result.sample
+                if sample.formulas is None:
+                    continue
+                aggregate["formula_sample_count"] += 1
+                formula = np.asarray([bool(value) for value in sample.formulas], dtype=bool)
+                pattern = np.asarray(result.assigned, dtype=bool)
+                categories = {
+                    "both": formula & pattern,
+                    "formula_only": formula & ~pattern,
+                    "pattern_only": ~formula & pattern,
+                    "neither": ~formula & ~pattern,
+                }
+                for suffix, flag in SUFFIXES:
+                    mask = ~sample.is_precursor if flag else np.ones(len(sample.mz), dtype=bool)
+                    aggregate["peaks" + suffix] += int(mask.sum())
+                    aggregate["intensity" + suffix] += float(sample.intensity[mask].sum())
+                    for name, selected in categories.items():
+                        aggregate[f"{name}_peaks{suffix}"] += int((selected & mask).sum())
+                        aggregate[f"{name}_intensity{suffix}"] += float(
+                            sample.intensity[selected & mask].sum()
+                        )
+    return totals
+
+
+def formula_node_row(aggregate: dict | None) -> dict:
+    """node_summary columns: ``formula_<category>_{peak,intensity}_fraction[_without_precursor]``."""
+    aggregate = aggregate or {}
+    row = {"formula_sample_count": int(aggregate.get("formula_sample_count", 0))}
+    for suffix, _ in SUFFIXES:
+        for name in FORMULA_CATEGORIES:
+            row[f"formula_{name}_peak_count{suffix}"] = int(aggregate.get(f"{name}_peaks{suffix}", 0))
+            row[f"formula_{name}_peak_fraction{suffix}"] = _ratio(
+                aggregate.get(f"{name}_peaks{suffix}", 0), aggregate.get("peaks" + suffix, 0)
+            )
+            row[f"formula_{name}_intensity_fraction{suffix}"] = _ratio(
+                aggregate.get(f"{name}_intensity{suffix}", 0),
+                aggregate.get("intensity" + suffix, 0),
+            )
+    return row
+
+
 def summarize(
     comparisons: list[CompoundComparison],
     *,
@@ -154,6 +217,7 @@ def summarize(
     """Return every A table plus the overall summary document."""
     tables = Tables()
     nodes = tree.nodes
+    formula_totals = formula_node_totals(comparisons)
     node_samples: dict[int, list[dict]] = defaultdict(list)
     node_totals: dict[int, dict] = {node.node_row: defaultdict(float) for node in nodes}
     dataset_stats = {int(row["dataset_id"]): defaultdict(int) for row in datasets}
@@ -560,6 +624,8 @@ def summarize(
         for name in MEAN_METRICS:
             for suffix, _ in SUFFIXES:
                 row.setdefault("mean_" + name + suffix, math.nan)
+        if formula_totals is not None:
+            row.update(formula_node_row(formula_totals.get(node.node_row)))
         tables.add("node_summary", **row)
 
     for row in datasets:

@@ -35,6 +35,7 @@ from .constants import (
     SKIPPED,
     TREE_CONFIG_NAME,
 )
+from .formula import FormulaAssignmentOptions, assign_sample_formulas
 from .hdf5_storage import ResultWriter
 from .previous import PreviousResult, chemistry_signature, compare_signatures
 from .sources import expand_dataset_inputs, load_samples, normalize_analysis_sources
@@ -68,6 +69,7 @@ def run_configuration(
     minimum_relative_intensity: float,
     num_workers: int,
     chunk_size: int,
+    formula_assignment: dict | None = None,
     overwrite: bool = False,
     extend: bool = False,
 ) -> dict:
@@ -90,6 +92,7 @@ def run_configuration(
         "minimumRelativeIntensity": minimum_relative_intensity,
         "numWorkers": num_workers,
         "chunkSize": chunk_size,
+        "formulaAssignment": formula_assignment,
         "overwrite": overwrite,
         "extend": extend,
     }
@@ -306,6 +309,7 @@ def generate_reaction_pattern_analysis(
     max_reaction_combinations: int = -1,
     num_workers: int = 1,
     chunk_size: int = 1,
+    formula_assignment: dict | None = None,
     overwrite: bool = False,
     extend: bool = False,
 ) -> Path:
@@ -314,6 +318,10 @@ def generate_reaction_pattern_analysis(
     With ``extend`` the result already in ``output_dir`` is kept: conditions
     it calculated are reused and only new ones are calculated.  Sources,
     chemistry configuration and tree default to the existing result's.
+
+    ``formula_assignment`` (Assign Formula settings: maxFormulaCandidates,
+    timeoutSec, hydrogenDelta, enableNeutralLoss) also assigns peak formulas
+    with the Fragmenter mass tolerance and compares them with the patterns.
     """
     started = time.monotonic()
     columns = {
@@ -346,6 +354,12 @@ def generate_reaction_pattern_analysis(
             "No input spectra: add at least one --source <dataset|prepared|result> "
             "(repeatable) or --source-spec."
         )
+    formula_options = (
+        FormulaAssignmentOptions.from_dict(formula_assignment)
+        if formula_assignment is not None
+        else None
+    )
+    formula_assignment = formula_options.to_dict() if formula_options else None
     if chemistry_config is None:
         if previous is None:
             raise ValueError("A Fragmenter configuration is required.")
@@ -374,6 +388,7 @@ def generate_reaction_pattern_analysis(
             "maxUniqueFragmentSmiles": max_unique_fragment_smiles,
             "maxReactionCombinations": max_reaction_combinations,
             "minimumRelativeIntensity": minimum_relative_intensity,
+            "formulaAssignment": formula_assignment,
         }
         differences = compare_signatures(
             chemistry_signature(previous.chemistry_config, previous.run),
@@ -409,6 +424,7 @@ def generate_reaction_pattern_analysis(
         source_rows,
         tree,
         chemistry_config,
+        formula_assignment=formula_assignment,
         overwrite=overwrite,
         extend=extend,
         **settings,
@@ -457,6 +473,29 @@ def generate_reaction_pattern_analysis(
     groups = group_compounds(samples)
     mark_precursor_peaks(groups, fragmenter.mass_tolerance)
     _note(f"{len(samples):,} spectra belong to {len(groups):,} unique compounds.")
+    formula_status_counts: dict[str, int] = {}
+    if formula_options is not None:
+        assigned = assign_sample_formulas(
+            groups,
+            fragmenter.mass_tolerance,
+            formula_options,
+            num_workers=num_workers,
+            chunk_size=chunk_size,
+        )
+        for group in groups:
+            for sample in group.samples:
+                value = assigned[sample.sample_id]
+                sample.formula_status = value.status
+                sample.precursor_formula = value.precursor_formula
+                sample.formulas = value.formulas
+                formula_status_counts[value.status] = (
+                    formula_status_counts.get(value.status, 0) + 1
+                )
+        _note(
+            "Peak formulas: "
+            + ", ".join(f"{count:,} {status}" for status, count in sorted(formula_status_counts.items()))
+            + "."
+        )
 
     # Phase 4 ---------------------------------------------------------------
     _section(4, "Precursor SMARTS applicability")
@@ -607,6 +646,8 @@ def generate_reaction_pattern_analysis(
         comparisons, tree=resolved, datasets=dataset_rows, relative_path=relative
     )
     overall.update(calculatedConditionTrees=steps, reusedConditionTrees=reused)
+    if formula_options is not None:
+        overall.update(formulaStatusCounts=formula_status_counts)
 
     # Phase 9 ---------------------------------------------------------------
     _section(9, "A / B / C persistence")
@@ -640,6 +681,7 @@ def generate_reaction_pattern_analysis(
         "minimumRelativeIntensity": minimum_relative_intensity,
         "numWorkers": num_workers,
         "chunkSize": chunk_size,
+        "formulaAssignment": formula_assignment,
     }
     result_path = output / RESULT_NAME
     writer = ResultWriter(result_path)

@@ -142,6 +142,7 @@ def chemistry_signature(chemistry_config: dict, settings: dict) -> dict:
         "maxUniqueFragmentSmiles",
         "maxReactionCombinations",
         "minimumRelativeIntensity",
+        "formulaAssignment",
     )
     return {
         "fragmenter_params": chemistry.get("fragmenter_params"),

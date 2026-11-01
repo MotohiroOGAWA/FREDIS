@@ -440,3 +440,84 @@ def test_cli_builds_the_tree_from_pattern_sets_and_nodes(monkeypatch, capsys, tm
     with pytest.raises(ValueError, match="either --tree-config or --tree-config-json"):
         command.run(parser.parse_args(["--output-dir", str(tmp_path / "x"), "--tree-config", "t.json",
                                        "--tree-config-json", "{}"]))
+
+
+# -- peak formula assignment ------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def formula_analysis(tmp_path_factory, inputs):
+    return _run(tmp_path_factory.mktemp("formula-result") / "result", inputs,
+                formula_assignment={"hydrogenDelta": 1}, num_workers=2)
+
+
+def test_formula_assignment_adds_peak_formulas_grouped_by_precursor_formula(formula_analysis):
+    peaks = pd.read_parquet(formula_analysis.parent / "compounds" / f"{CCO}.peaks.parquet")
+    assert set(peaks["formula_status"]) == {"assigned"}
+    # [M+H]+ and [M+Na]+ spectra of one compound belong to different precursor formulas.
+    assert dict(peaks.groupby("adduct")["precursor_formula"].first()) == {"[M+H]+": "C2H7O", "[M+Na]+": "C2H6NaO"}
+    first = peaks[peaks["sample_index"] == 0].set_index("mz")["formula"]
+    assert first[31.018] == "CH3O" and first[29.039] == "C2H5"
+    with ReactionPatternAnalysisResult(formula_analysis) as reader:
+        assert reader.configuration()["formulaAssignment"] == {
+            "maxFormulaCandidates": None, "timeoutSec": None, "hydrogenDelta": 1, "enableNeutralLoss": False}
+        assert reader.overall_summary()["formulaStatusCounts"] == {"assigned": 5}
+        assert "formula" in reader.compound_peaks(CCO)["rows"][0]
+
+
+def test_formula_assignment_compares_formula_and_pattern_peaks_per_node(formula_analysis, analysis):
+    with ReactionPatternAnalysisResult(formula_analysis) as reader:
+        rows = {row["node_id"]: row for row in reader.node_summary()}
+    for key, row in rows.items():
+        # Pattern metrics are unchanged by formula assignment.
+        assert row["weighted_peak_coverage"] == analysis["nodes"][key]["weighted_peak_coverage"]
+        if not row["formula_sample_count"]:
+            continue
+        for suffix in ("", "_without_precursor"):
+            for metric in ("peak", "intensity"):
+                total = sum(row[f"formula_{name}_{metric}_fraction{suffix}"]
+                            for name in ("both", "formula_only", "pattern_only", "neither"))
+                assert math.isclose(total, 1.0)
+            assigned = row[f"formula_both_peak_count{suffix}"] + row[f"formula_pattern_only_peak_count{suffix}"]
+            assert math.isclose(assigned / sum(row[f"formula_{name}_peak_count{suffix}"]
+                                for name in ("both", "formula_only", "pattern_only", "neither")),
+                                row["weighted_peak_coverage" + suffix])
+    assert rows["hn"]["formula_sample_count"] == 0
+    assert "formula_sample_count" not in analysis["nodes"]["h"]
+
+
+def test_formula_assignment_respects_candidate_limits(inputs, tmp_path):
+    result = _run(tmp_path / "limited", inputs, formula_assignment={"maxFormulaCandidates": 1})
+    peaks = pd.read_parquet(result.parent / "compounds" / f"{CCO}.peaks.parquet")
+    assert set(peaks["formula_status"]) == {"TooManyFormulaCandidates"} and set(peaks["formula"]) == {""}
+    with pytest.raises(ValueError, match="maxFormulaCandidates"):
+        _run(tmp_path / "invalid", inputs, formula_assignment={"maxFormulaCandidates": 0})
+
+
+def test_extension_rejects_different_formula_settings(formula_analysis, tmp_path):
+    import shutil
+
+    output = tmp_path / "extended"
+    shutil.copytree(formula_analysis.parent, output)
+    with pytest.raises(ValueError, match="formulaAssignment"):
+        generate_reaction_pattern_analysis(output_dir=output, extend=True, formula_assignment={"hydrogenDelta": 0})
+
+
+def test_cli_formula_assignment_is_kept_when_extending(capsys, tmp_path, inputs):
+    from fredis.cli.analysis.commands.reaction_pattern import ReactionPatternAnalysisCommand
+    import argparse
+
+    chemistry = tmp_path / "chemistry.json"
+    chemistry.write_text(json.dumps(_chemistry()))
+    parser = argparse.ArgumentParser()
+    command = ReactionPatternAnalysisCommand()
+    command.configure(parser)
+    tree = {"patternSets": [_set("H"), _set("O")], "nodes": [{"id": "r", "patternSet": "H", "parent": None}]}
+    command.run(parser.parse_args([
+        "--source", str(inputs[0]), "--output-dir", str(tmp_path / "out"), "--params", str(chemistry),
+        "--tree-config-json", json.dumps(tree), "--overwrite", "1",
+        "--formula-assignment-json", json.dumps({"hydrogenDelta": 1, "timeoutSec": ""})]))
+    tree["nodes"].append({"id": "o", "patternSet": "O", "parent": "r"})
+    command.run(parser.parse_args(["--output-dir", str(tmp_path / "out"), "--tree-config-json", json.dumps(tree),
+                                   "--extend", "1"]))
+    with ReactionPatternAnalysisResult(tmp_path / "out" / "result.reactionpatternanalysis.pft") as reader:
+        assert reader.configuration()["formulaAssignment"]["hydrogenDelta"] == 1
+        assert {row["node_id"]: row["formula_sample_count"] for row in reader.node_summary()} == {"r": 4, "o": 3}

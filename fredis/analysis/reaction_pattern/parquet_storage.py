@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .comparison import CompoundComparison
-from .constants import assigned_column, count_column
+from .constants import FORMULA_COLUMN, assigned_column, count_column
 
 IDENTITY_COLUMNS = {
     "compound_id": object,
@@ -39,6 +39,7 @@ IDENTITY_COLUMNS = {
 def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
     group = comparison.group
     conditions = sorted(comparison.outcomes)
+    formula_enabled = any(sample.formula_status for sample in group.samples)
     parts = []
     for index in comparison.population:
         sample = group.samples[index]
@@ -61,6 +62,15 @@ def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
             "relative_intensity": sample.relative_intensity.astype(np.float64),
             "is_precursor": sample.is_precursor.astype(bool),
         }
+        if formula_enabled:
+            part["formula_status"] = np.full(count, sample.formula_status, dtype=object)
+            part["precursor_formula"] = np.full(
+                count, sample.precursor_formula, dtype=object
+            )
+            part[FORMULA_COLUMN] = np.asarray(
+                sample.formulas if sample.formulas is not None else [""] * count,
+                dtype=object,
+            )
         for condition_id in conditions:
             outcome = comparison.outcomes[condition_id]
             part[assigned_column(condition_id)] = np.asarray(
@@ -75,6 +85,9 @@ def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
     frame = pd.DataFrame(
         {name: pd.Series(dtype=dtype) for name, dtype in IDENTITY_COLUMNS.items()}
     )
+    if formula_enabled:
+        for name in ("formula_status", "precursor_formula", FORMULA_COLUMN):
+            frame[name] = pd.Series(dtype=object)
     for condition_id in conditions:
         frame[assigned_column(condition_id)] = pd.Series(dtype=bool)
         frame[count_column(condition_id)] = pd.Series(dtype="int32")

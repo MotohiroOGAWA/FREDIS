@@ -46,6 +46,44 @@ def formula_to_label(formula: Formula) -> str:
     return str(formula)
 
 
+class PrecursorMZMismatch(ValueError):
+    """The observed precursor m/z does not match the SMILES and adduct."""
+
+
+def precursor_grouping_formula(
+    smiles: str,
+    adduct_type: str,
+    precursor_mz: float,
+    mass_tolerance: MassTolerance,
+) -> str:
+    """Return the precursor formula label used to group records.
+
+    Raises PrecursorMZMismatch when the observed precursor m/z is outside the
+    tolerance of the calculated one.
+    """
+
+    compound = Compound.from_smiles(smiles)
+    adduct = Adduct.parse(adduct_type)
+
+    original_formula = compound.formula.plain
+    precursor_formula = adduct.apply_to_formula(compound.formula)
+    grouping_formula = max_neutral_precursor_formula(
+        original_formula=original_formula,
+        precursor_formula=precursor_formula,
+    )
+    calculated_precursor_mz = adduct.apply_to_mz(compound.formula.exact_mass)
+
+    if not mass_tolerance.within(precursor_mz, calculated_precursor_mz):
+        raise PrecursorMZMismatch(
+            f"observed={precursor_mz}, "
+            f"calculated={calculated_precursor_mz}, "
+            f"smiles={smiles}, "
+            f"adduct={adduct_type}"
+        )
+
+    return formula_to_label(grouping_formula)
+
+
 def group_record_indexes_by_precursor_formula(
     dataset: MSDataset,
     *,
@@ -83,32 +121,15 @@ def group_record_indexes_by_precursor_formula(
             adduct_type_str = str(record[adduct_type_column])
             precursor_mz = float(record[precursor_mz_column])
 
-            compound = Compound.from_smiles(smiles)
-            adduct_type = Adduct.parse(adduct_type_str)
-
-            original_formula = compound.formula.plain
-            precursor_formula = adduct_type.apply_to_formula(compound.formula)
-            grouping_formula = max_neutral_precursor_formula(
-                original_formula=original_formula,
-                precursor_formula=precursor_formula,
+            grouping_formula = precursor_grouping_formula(
+                smiles, adduct_type_str, precursor_mz, mass_tolerance
             )
-            calculated_precursor_mz = adduct_type.apply_to_mz(
-                compound.formula.exact_mass
-            )
+            groups[grouping_formula].append(record_index)
+            success_count += 1
 
-            if mass_tolerance.within(precursor_mz, calculated_precursor_mz):
-                groups[formula_to_label(grouping_formula)].append(record_index)
-                success_count += 1
-            else:
-                message = (
-                    "PrecursorMZMismatch: "
-                    f"record_index={record_index}, "
-                    f"observed={precursor_mz}, "
-                    f"calculated={calculated_precursor_mz}, "
-                    f"smiles={smiles}, "
-                    f"adduct={adduct_type_str}"
-                )
-                print(f"[WARN] {message}", file=sys.stderr)
+        except PrecursorMZMismatch as e:
+            message = f"PrecursorMZMismatch: record_index={record_index}, {e}"
+            print(f"[WARN] {message}", file=sys.stderr)
 
         except Exception as e:
             message = (

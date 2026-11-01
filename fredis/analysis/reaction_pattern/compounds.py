@@ -30,6 +30,10 @@ class SampleRecord:
     sample_id: int = -1
     sample_index: int = -1
     is_precursor: np.ndarray | None = None
+    # Peak formula assignment (empty status when it was not requested).
+    formula_status: str = ""
+    precursor_formula: str = ""
+    formulas: list[str] | None = None
 
 
 @dataclass
