@@ -93,3 +93,16 @@ requires `--smiles`, `--ce`, and `--adduct-type` when `--input` is absent.
 
 ```{fredis-cli} split
 ```
+
+
+### Assign Formula output directory
+
+```bash
+fredis assign-formula run input.msds --output-dir results/formulas --num_workers 4 --chunk_size 10
+```
+
+`-o` and `--output_dir` are aliases for `--output-dir`. The directory contains `input_assigned_formula.msds` and `input_assigned_formula_assign_formula_report.tsv`. If omitted, the directory defaults to `input_assign_formula/` next to the input. The TSV report is generated automatically. Existing output datasets or reports require `--overwrite`; unrelated files in the directory are not removed.
+
+Parallel chunk datasets and reports are stored in a unique temporary subdirectory and removed when processing finishes or raises an error. Pass `--keep-temp` to retain the temporary files. An abrupt process termination (for example SIGKILL) can leave temporary files behind.
+
+The explicit `--output_file` and `--report_file` flags remain available for legacy file-based invocations. `-o` now selects a directory; use `--output_file` for an explicit filename.

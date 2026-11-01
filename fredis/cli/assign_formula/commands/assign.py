@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from ...base import CLICommand
 from fredis.domain.mass.tolerance import parse_mass_tolerance
@@ -22,7 +23,13 @@ class AssignFormulaCommand(CLICommand):
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("input_file", type=str)
-        parser.add_argument("-o", "--output_file", type=str, default=None)
+        output = parser.add_mutually_exclusive_group()
+        output.add_argument("-o", "--output-dir", "--output_dir", type=str, default=None,
+                            help="Directory for the assigned .msds dataset and automatic TSV report.")
+        output.add_argument("--output_file", type=str, default=None,
+                            help="Legacy explicit output file (prefer --output-dir).")
+        parser.add_argument("--keep-temp", action="store_true",
+                            help="Keep parallel chunk datasets and reports after execution (default: remove).")
 
         parser.add_argument(
             "-col_cov",
@@ -101,6 +108,23 @@ class AssignFormulaCommand(CLICommand):
     def run(self, args: argparse.Namespace) -> None:
         mass_tolerance = parse_mass_tolerance(args.tolerance)
 
+        input_path = Path(args.input_file).resolve()
+        if args.output_file is not None:
+            output_file = Path(args.output_file).resolve()
+        else:
+            directory = Path(args.output_dir).resolve() if args.output_dir else input_path.with_name(input_path.stem + "_assign_formula")
+            directory.mkdir(parents=True, exist_ok=True)
+            output_file = directory / (input_path.stem + "_assigned_formula.msds")
+            if args.report_file:
+                raise ValueError("--report_file is only supported with legacy --output_file; directory output generates its report automatically.")
+        from fredis.domain.formula._report import default_report_file
+        report_file = Path(args.report_file).resolve() if args.report_file else Path(default_report_file(str(output_file)))
+        if len({input_path, output_file.resolve(), report_file.resolve()}) != 3:
+            raise ValueError("Input dataset, output dataset and report must have different paths.")
+        if not args.overwrite:
+            for target in (output_file, report_file):
+                if target.exists():
+                    raise FileExistsError(f"Output already exists: {target}. Use --overwrite to replace it.")
         start_time = time.time()
 
         if args.num_workers > 1:
@@ -117,7 +141,7 @@ class AssignFormulaCommand(CLICommand):
                 num_workers=args.num_workers,
                 chunk_size=args.chunk_size,
                 input_file=args.input_file,
-                output_file=args.output_file,
+                output_file=str(output_file),
                 mass_tolerance=mass_tolerance,
                 calc_formula_coverage_column=args.calc_formula_coverage_column,
                 smiles_column=args.smiles_column,
@@ -127,13 +151,14 @@ class AssignFormulaCommand(CLICommand):
                 timeout_sec=args.timeout_sec,
                 max_formula_candidates=args.max_formula_candidates,
                 hydrogen_delta=args.hydrogen_delta,
-                report_file=args.report_file,
+                report_file=str(report_file),
                 enable_neutral_loss=args.enable_neutral_loss,
+                keep_temp=args.keep_temp,
             )
         else:
             assign_formulas(
                 input_file=args.input_file,
-                output_file=args.output_file,
+                output_file=str(output_file),
                 mass_tolerance=mass_tolerance,
                 calc_formula_coverage_column=args.calc_formula_coverage_column,
                 smiles_column=args.smiles_column,
@@ -144,7 +169,7 @@ class AssignFormulaCommand(CLICommand):
                 max_formula_candidates=args.max_formula_candidates,
                 hydrogen_delta=args.hydrogen_delta,
                 add_finished_tag=args.add_finished_tag,
-                report_file=args.report_file,
+                report_file=str(report_file),
                 enable_neutral_loss=args.enable_neutral_loss,
             )
 

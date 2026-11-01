@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 import time
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -362,12 +364,15 @@ def parallel_assign_formulas(
     hydrogen_delta: int = 1,
     report_file: Optional[str] = None,
     enable_neutral_loss: bool = False,
+    keep_temp: bool = False,
 ) -> None:
     """Assign formulas in parallel by precursor-formula chunks.
 
     Each subprocess saves:
         - successful records to part_*_done.msds
         - skipped/error records to part_*_report.tsv
+
+    Temporary chunk files are removed on return or error unless keep_temp is True.
 
     This function merges:
         - all part_*_done.msds files into output_file
@@ -425,156 +430,178 @@ def parallel_assign_formulas(
     )
 
     output_path = Path(output_file)
-    temp_dir = output_path.parent / f"{output_path.stem}_temp_parallel_assign_formula"
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"{output_path.stem}_temp_parallel_assign_formula_", dir=output_path.parent))
 
-    parallel_infos: List[Dict[str, object]] = []
+    try:
+        parallel_infos: List[Dict[str, object]] = []
 
-    for chunk_index, record_indexes in enumerate(
-        tqdm(chunks, desc="Preparing parallel tasks", mininterval=1.0)
-    ):
-        temp_input = temp_dir / f"part_{chunk_index}.msds"
-        temp_output = temp_dir / f"part_{chunk_index}_done.msds"
-        temp_report = temp_dir / f"part_{chunk_index}_report.tsv"
+        for chunk_index, record_indexes in enumerate(
+            tqdm(chunks, desc="Preparing parallel tasks", mininterval=1.0)
+        ):
+            temp_input = temp_dir / f"part_{chunk_index}.msds"
+            temp_output = temp_dir / f"part_{chunk_index}_done.msds"
+            temp_report = temp_dir / f"part_{chunk_index}_report.tsv"
 
-        subset = dataset[record_indexes]
+            subset = dataset[record_indexes]
 
-        cmd_args = argv.copy()
+            cmd_args = argv.copy()
 
-        if input_file in cmd_args:
-            cmd_args[cmd_args.index(input_file)] = str(temp_input)
-        else:
-            raise ValueError(
-                "input_file was not found in argv. "
-                f"input_file={input_file}, argv={argv}"
-            )
+            if input_file in cmd_args:
+                cmd_args[cmd_args.index(input_file)] = str(temp_input)
+            else:
+                raise ValueError(
+                    "input_file was not found in argv. "
+                    f"input_file={input_file}, argv={argv}"
+                )
 
-        replace_arg(cmd_args, "-o", str(temp_output))
-        replace_arg(cmd_args, "--output_file", str(temp_output))
+            # Workers always write explicit chunk files, independent of the parent's directory mode.
+            value_flags = {"-o", "--output-dir", "--output_dir", "--output_file", "--report_file",
+                           "--num_workers", "-n_workers", "--chunk_size"}
+            filtered = []
+            index = 0
+            while index < len(cmd_args):
+                token = cmd_args[index]
+                flag = token.split("=", 1)[0]
+                if flag in value_flags:
+                    index += 1 if "=" in token else 2
+                    continue
+                if flag == "--keep-temp":
+                    index += 1
+                    continue
+                filtered.append(token)
+                index += 1
+            cmd_args = filtered
+            cmd_args.extend(["--output_file", str(temp_output), "--num_workers", "1"])
 
-        replace_arg(cmd_args, "--num_workers", "1")
-        replace_arg(cmd_args, "-n_workers", "1")
-        delete_arg(cmd_args, "--chunk_size")
+            replace_arg(cmd_args, "--num_workers", "1")
+            replace_arg(cmd_args, "-n_workers", "1")
+            delete_arg(cmd_args, "--chunk_size")
 
-        replace_arg(cmd_args, "--report_file", str(temp_report))
-        try_add_arg(cmd_args, "--report_file", str(temp_report))
+            replace_arg(cmd_args, "--report_file", str(temp_report))
+            try_add_arg(cmd_args, "--report_file", str(temp_report))
 
-        try_add_arg(cmd_args, "--overwrite")
-        try_add_arg(cmd_args, "--add_finished_tag")
+            try_add_arg(cmd_args, "--overwrite")
+            try_add_arg(cmd_args, "--add_finished_tag")
 
-        if max_formula_candidates is not None:
+            if max_formula_candidates is not None:
+                try_add_arg(
+                    cmd_args,
+                    "--max_formula_candidates",
+                    str(max_formula_candidates),
+                )
+
             try_add_arg(
                 cmd_args,
-                "--max_formula_candidates",
-                str(max_formula_candidates),
+                "--hydrogen_delta",
+                str(hydrogen_delta),
             )
 
-        try_add_arg(
-            cmd_args,
-            "--hydrogen_delta",
-            str(hydrogen_delta),
-        )
+            if enable_neutral_loss:
+                try_add_arg(cmd_args, "--enable-neutral-loss")
 
-        if enable_neutral_loss:
-            try_add_arg(cmd_args, "--enable-neutral-loss")
+            if timeout_sec != float("inf"):
+                try_add_arg(
+                    cmd_args,
+                    "--timeout_sec",
+                    str(timeout_sec),
+                )
 
-        if timeout_sec != float("inf"):
-            try_add_arg(
-                cmd_args,
-                "--timeout_sec",
-                str(timeout_sec),
+            command = [
+                executable,
+                "-m",
+                "fredis.cli.main",
+                *cmd_args[1:],
+            ]
+
+            enabled = True
+
+            if temp_output.exists() and not overwrite:
+                enabled = not is_finished_dataset(str(temp_output))
+
+            if enabled:
+                save_dataset(
+                    subset,
+                    str(temp_input),
+                    add_finished_tag=False,
+                )
+
+            parallel_infos.append(
+                {
+                    "command": command,
+                    "temp_input": str(temp_input),
+                    "temp_output": str(temp_output),
+                    "temp_report": str(temp_report),
+                    "enabled": enabled,
+                }
             )
 
-        command = [
-            executable,
-            "-m",
-            "fredis.cli.main",
-            *cmd_args[1:],
+        commands_list = [
+            info["command"] for info in parallel_infos if bool(info["enabled"])
         ]
 
-        enabled = True
-
-        if temp_output.exists() and not overwrite:
-            enabled = not is_finished_dataset(str(temp_output))
-
-        if enabled:
-            save_dataset(
-                subset,
-                str(temp_input),
-                add_finished_tag=False,
+        if len(commands_list) == 0:
+            print("No parallel tasks to run. All chunks are already finished.")
+        else:
+            run_parallel_subprocesses(
+                commands_list=commands_list,
+                max_workers=num_workers,
             )
 
-        parallel_infos.append(
-            {
-                "command": command,
-                "temp_input": str(temp_input),
-                "temp_output": str(temp_output),
-                "temp_report": str(temp_report),
-                "enabled": enabled,
-            }
-        )
+        output_datasets: List[MSDataset] = []
 
-    commands_list = [
-        info["command"] for info in parallel_infos if bool(info["enabled"])
-    ]
+        for info in tqdm(
+            parallel_infos,
+            desc="Merging chunk outputs",
+            mininterval=1.0,
+        ):
+            temp_output = str(info["temp_output"])
 
-    if len(commands_list) == 0:
-        print("No parallel tasks to run. All chunks are already finished.")
-    else:
-        run_parallel_subprocesses(
-            commands_list=commands_list,
-            max_workers=num_workers,
-        )
+            if not os.path.exists(temp_output):
+                print(
+                    f"[WARN] Chunk output file was not created: {temp_output}",
+                    file=sys.stderr,
+                )
+                continue
 
-    output_datasets: List[MSDataset] = []
+            chunk_dataset = load_ms_dataset(temp_output)
 
-    for info in tqdm(
-        parallel_infos,
-        desc="Merging chunk outputs",
-        mininterval=1.0,
-    ):
-        temp_output = str(info["temp_output"])
+            if len(chunk_dataset) == 0:
+                continue
 
-        if not os.path.exists(temp_output):
-            print(
-                f"[WARN] Chunk output file was not created: {temp_output}",
-                file=sys.stderr,
+            output_datasets.append(chunk_dataset)
+
+        if len(output_datasets) == 0:
+            merge_report_tsvs(
+                [str(info["temp_report"]) for info in parallel_infos],
+                report_file,
             )
-            continue
 
-        chunk_dataset = load_ms_dataset(temp_output)
+            raise RuntimeError(
+                "No successful chunk outputs were produced. "
+                f"See report file: {report_file}"
+            )
 
-        if len(chunk_dataset) == 0:
-            continue
+        if hasattr(MSDataset, "concat"):
+            merged_dataset = MSDataset.concat(output_datasets)
+        else:
+            raise AttributeError("MSDataset.concat() is required for merging chunks.")
 
-        output_datasets.append(chunk_dataset)
+        save_dataset(
+            merged_dataset,
+            output_file,
+            add_finished_tag=False,
+        )
 
-    if len(output_datasets) == 0:
         merge_report_tsvs(
             [str(info["temp_report"]) for info in parallel_infos],
             report_file,
         )
 
-        raise RuntimeError(
-            "No successful chunk outputs were produced. "
-            f"See report file: {report_file}"
-        )
-
-    if hasattr(MSDataset, "concat"):
-        merged_dataset = MSDataset.concat(output_datasets)
-    else:
-        raise AttributeError("MSDataset.concat() is required for merging chunks.")
-
-    save_dataset(
-        merged_dataset,
-        output_file,
-        add_finished_tag=False,
-    )
-
-    merge_report_tsvs(
-        [str(info["temp_report"]) for info in parallel_infos],
-        report_file,
-    )
-
-    print(f"Saved merged successful records to: {output_file}")
-    print(f"Saved merged skipped/error report to: {report_file}")
+        print(f"Saved merged successful records to: {output_file}")
+        print(f"Saved merged skipped/error report to: {report_file}")
+    finally:
+        if not keep_temp:
+            shutil.rmtree(temp_dir)
+        else:
+            print(f"Kept parallel temporary files: {temp_dir}")
