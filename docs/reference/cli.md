@@ -106,3 +106,5 @@ fredis assign-formula run input.msds --output-dir results/formulas --num_workers
 Parallel chunk datasets and reports are stored in a unique temporary subdirectory and removed when processing finishes or raises an error. Pass `--keep-temp` to retain the temporary files. An abrupt process termination (for example SIGKILL) can leave temporary files behind.
 
 The explicit `--output_file` and `--report_file` flags remain available for legacy file-based invocations. `-o` now selects a directory; use `--output_file` for an explicit filename.
+
+Assign Formula runs also write `config.assign-formula.pft` to the output directory. Clicking this file opens the saved assignment settings in FREDIS Workbench, with links to the dataset and report. Legacy `--output_file` runs use `<output stem>.assign-formula.pft` beside the output file.

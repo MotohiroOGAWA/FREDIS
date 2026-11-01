@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -125,6 +126,26 @@ class AssignFormulaCommand(CLICommand):
             for target in (output_file, report_file):
                 if target.exists():
                     raise FileExistsError(f"Output already exists: {target}. Use --overwrite to replace it.")
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file = output_file.parent / (output_file.stem + ".assign-formula.pft" if args.output_file is not None else "config.assign-formula.pft")
+        config = {
+            "inputFile": str(input_path), "outputDir": str(output_file.parent),
+            "outputFile": str(output_file), "reportFile": str(report_file),
+            "numWorkers": args.num_workers, "chunkSize": max(1, args.chunk_size),
+            "overwrite": args.overwrite, "keepTemp": args.keep_temp,
+            "addFinishedTag": args.add_finished_tag,
+            "settings": {
+                "tolerance": args.tolerance, "smilesColumn": args.smiles_column,
+                "adductColumn": args.adduct_type_column, "precursorMzColumn": args.precursor_mz_column,
+                "coverageColumn": args.calc_formula_coverage_column,
+                "maxFormulaCandidates": args.max_formula_candidates if args.max_formula_candidates is not None else "",
+                "timeoutSec": args.timeout_sec if args.timeout_sec != float("inf") else "",
+                "hydrogenDelta": args.hydrogen_delta, "enableNeutralLoss": args.enable_neutral_loss,
+            },
+        }
+        config_file.write_text(json.dumps({"schema": "fredis.workbench.configuration", "schemaVersion": 1,
+                                          "kind": "assign-formula", "config": config}, ensure_ascii=False, indent=2) + "\n")
+        print(f"Saved assignment settings: {config_file}")
         start_time = time.time()
 
         if args.num_workers > 1:
