@@ -253,3 +253,29 @@ def test_prediction_input_rejects_duplicate_source_ids() -> None:
             spec_id_column="SpecID",
             instrument_column=None,
         )
+
+
+def test_load_gpu_tagged_checkpoint_on_cpu(tmp_path, monkeypatch):
+    model_config = config()
+    generator = create_spectrum_generator(model_config).eval()
+    from fredis.ml.training.fragment_tree_training.model import ReactionFragmentTreeTrainingModel
+    training_model = ReactionFragmentTreeTrainingModel(
+        generator.feature_model, spectrum_model=generator.spectrum_model
+    )
+    checkpoint = tmp_path / "gpu-trained.pt"
+    # Save genuine CUDA storage tags without requiring a GPU on the test host.
+    with monkeypatch.context() as patch:
+        patch.setattr(torch.serialization, "_package_registry", list(torch.serialization._package_registry))
+        torch.serialization.register_package(0, lambda storage: "cuda:0", lambda storage, location: None)
+        torch.save({"model_config": model_config, "model_state_dict": training_model.state_dict()}, checkpoint)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="CUDA device"):
+        torch.load(checkpoint, weights_only=False)
+    restored = predict_spectrum.load_generator(model_path=str(checkpoint), params_path=None,
+                                              device=torch.device("cpu"), strict=True)
+    assert all(parameter.device.type == "cpu" for parameter in restored.parameters())
+    for key, tensor in generator.state_dict().items():
+        torch.testing.assert_close(restored.state_dict()[key], tensor)
+    with pytest.raises(ValueError, match="--device cpu"):
+        predict_spectrum.load_generator(model_path=str(checkpoint), params_path=None,
+                                        device=torch.device("cuda"), strict=True)

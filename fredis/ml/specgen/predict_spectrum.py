@@ -246,7 +246,16 @@ def load_generator(
     device: torch.device,
     strict: bool,
 ) -> SourceAnchoredFragmentSpectrumGenerator:
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    # Restore independently of the training device, then move the model to the
+    # explicitly selected inference device after checking its availability.
+    device = torch.device(device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError(
+            "CUDA was requested but is not available. Select Device: cpu "
+            "in Prediction Model, or use --device cpu. GPU-trained checkpoints "
+            "can be loaded on CPU."
+        )
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
     params = model_params_from_checkpoint(checkpoint, params_path=params_path)
     generator = create_spectrum_generator(params).to(device)
     state_dict = extract_state_dict(checkpoint)
