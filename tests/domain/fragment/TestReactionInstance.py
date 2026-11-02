@@ -1,6 +1,7 @@
 import unittest
 from dataclasses import replace
 from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
 from fredis.domain.fragment.reaction import ReactionInstance, ReactionSequence
 from fredis.domain.fragment.reaction._ReactionPattern import _ReactionPattern, ProductRule
 from fredis.libs.mmkit.mmkit import Compound
@@ -122,6 +123,22 @@ class TestReactionInstance(unittest.TestCase):
             ReactionInstance.from_match(source=source, reaction_pattern=pattern,
                 reaction_pattern_id=0, product_molecule_id=2,
                 source_atom_maps=(10, 20, 30), retained_atom_maps=(30,))
+
+    def test_aromatic_ring_opening_uses_kekule_form(self):
+        # Retro-Diels-Alder 1,3A cleavage of the aromatic chromone C ring.
+        source = Chem.MolFromSmiles(
+            '[O:1]=[c:2]1[cH:3][cH:4][o:5][c:6]2[cH:7][cH:8][cH:9][cH:10][c:11]12')
+        pattern = _ReactionPattern.from_rules(
+            reactant_smarts='[#8:5]1~[#6:4]~[#6:3]~[#6:2](=[#8:1])~[c:11]2:[c:10]:[c:9]:[c:8]:[c:7]:[c:6]:2~1',
+            products=(ProductRule('1,3A', '[*:5]~[*:6]1~[*:7]~[*:8]~[*:9]~[*:10]~[*:11]~1~[*:2]~[*:1]'),))
+        a = ReactionInstance.from_match(source=source, reaction_pattern=pattern,
+            reaction_pattern_id=0, product_molecule_id=0,
+            source_atom_maps=(5, 4, 3, 2, 1, 11, 10, 9, 8, 7, 6),
+            retained_atom_maps=(1, 2, 5, 6, 7, 8, 9, 10, 11))
+        self.assertEqual(a.bond_updates, frozenset())
+        product = ReactionSequence((a,)).compile(source).run(source)[0]
+        self.assertEqual(rdMolDescriptors.CalcMolFormula(product), 'C7H6O2')
+        self.assertEqual(sum(atom.GetIsAromatic() for atom in product.GetAtoms()), 6)
 
     def test_order_change_overlap_rejected(self):
         a = replace(self.reaction(retained=(1, 2, 3)),

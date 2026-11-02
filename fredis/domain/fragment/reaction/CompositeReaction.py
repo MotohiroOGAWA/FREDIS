@@ -49,16 +49,6 @@ class CompositeReaction:
         retained = reaction_sequence.retained_atom_maps
         if not retained:
             raise ValueError("Composite reaction must retain at least one Source atom")
-        target = Chem.RWMol(mol)
-        for u, v in sorted(reaction_sequence.cut_bond_maps):
-            target.RemoveBond(by_map[u], by_map[v])
-        for u, v, order in sorted(reaction_sequence.bond_updates):
-            if {u, v} <= retained:
-                target.GetBondBetweenAtoms(by_map[u], by_map[v]).SetBondType(order)
-        for atom in reversed(list(mol.GetAtoms())):
-            if atom.GetAtomMapNum() not in retained:
-                target.RemoveAtom(atom.GetIdx())
-        target = target.GetMol()
         removed_edges = reaction_sequence.cut_bond_maps | frozenset(
             edge for edge in source_bonds if not set(edge) <= retained
         )
@@ -66,12 +56,14 @@ class CompositeReaction:
             {m for edge in removed_edges for m in edge}
             | {m for u, v, _ in reaction_sequence.bond_updates for m in (u, v)}
         ) & retained
-        # Recompute hydrogens at deletion boundaries, including bracketed mapped SMILES.
-        for atom in target.GetAtoms():
-            if atom.GetAtomMapNum() in affected and not atom.GetNumRadicalElectrons():
-                atom.SetNumExplicitHs(0)
-                atom.SetNoImplicit(False)
-        Chem.SanitizeMol(target)
+        try:
+            target = cls._edit(mol, by_map, reaction_sequence, retained, affected)
+        except Chem.rdchem.MolSanitizeException:
+            # Opening an aromatic ring leaves aromatic atoms outside any ring.
+            # Edit the Kekule form so the retained atoms keep explicit bond orders.
+            kekule = Chem.Mol(mol)
+            Chem.Kekulize(kekule, clearAromaticFlags=True)
+            target = cls._edit(kekule, by_map, reaction_sequence, retained, affected)
         # Canonical SMILES orders atoms consistently, independent of source indices.
         ordered_source = Chem.MolFromSmiles(Chem.MolToSmiles(mol, canonical=True))
         ordered_target = Chem.MolFromSmiles(Chem.MolToSmiles(target, canonical=True))
@@ -100,6 +92,32 @@ class CompositeReaction:
             rxn,
             Chem.MolToSmiles(mol, canonical=True),
         )
+
+    @staticmethod
+    def _edit(
+        mol: Chem.Mol,
+        by_map: dict[int, int],
+        reaction_sequence: ReactionSequence,
+        retained: frozenset[int],
+        affected: set[int],
+    ) -> Chem.Mol:
+        target = Chem.RWMol(mol)
+        for u, v in sorted(reaction_sequence.cut_bond_maps):
+            target.RemoveBond(by_map[u], by_map[v])
+        for u, v, order in sorted(reaction_sequence.bond_updates):
+            if {u, v} <= retained:
+                target.GetBondBetweenAtoms(by_map[u], by_map[v]).SetBondType(order)
+        for atom in reversed(list(mol.GetAtoms())):
+            if atom.GetAtomMapNum() not in retained:
+                target.RemoveAtom(atom.GetIdx())
+        target = target.GetMol()
+        # Recompute hydrogens at deletion boundaries, including bracketed mapped SMILES.
+        for atom in target.GetAtoms():
+            if atom.GetAtomMapNum() in affected and not atom.GetNumRadicalElectrons():
+                atom.SetNumExplicitHs(0)
+                atom.SetNoImplicit(False)
+        Chem.SanitizeMol(target)
+        return target
 
     def run(self, source: Compound | Chem.Mol) -> tuple[Chem.Mol, ...]:
         """Run once on the exact mapped Source and restore Source atom identities."""
