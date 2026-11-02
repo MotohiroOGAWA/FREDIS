@@ -839,7 +839,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", help="Legacy single input; use --datasets-json for dataset lists.")
     parser.add_argument("--datasets-json", help="JSON list of dataset paths, per-file mappings and split assignments.")
-    parser.add_argument("--dataset-mode", choices=("automatic", "assigned"), default="automatic")
+    parser.add_argument("--dataset-mode", choices=("automatic", "per-dataset", "assigned"), default="automatic")
+    parser.add_argument("--validation-max-train-ratio", type=float, help="Assigned mode: cap validation molecules at floor(train molecules * ratio); omitted means unlimited.")
+    parser.add_argument("--test-max-train-ratio", type=float, help="Assigned mode: cap test molecules at floor(train molecules * ratio); omitted means unlimited.")
     parser.add_argument("--output-dir", required=True, type=output_directory)
     parser.add_argument(
         "--save-all-edges", action="store_true",
@@ -957,7 +959,9 @@ def main(argv: list[str] | None = None) -> None:
 
         plan = plan_datasets(json.loads(args.datasets_json), args.dataset_mode,
                              create_preparation_context(config).fragmenter, config["symbols"],
-                             args.validation_ratio or 0, args.test_ratio, args.validation_seed)
+                             args.validation_ratio or 0, args.test_ratio, args.validation_seed,
+                             validation_max_train_ratio=args.validation_max_train_ratio,
+                             test_max_train_ratio=args.test_max_train_ratio)
         dataset = plan["combined"]
         reports = plan["reports"]
         validation_mapping = DEFAULT_MAPPING
@@ -1041,6 +1045,8 @@ def main(argv: list[str] | None = None) -> None:
         validation_ratio=args.validation_ratio,
         test_ratio=args.test_ratio,
         validation_seed=args.validation_seed,
+        validation_max_train_ratio=args.validation_max_train_ratio,
+        test_max_train_ratio=args.test_max_train_ratio,
         output_dir=args.output_dir,
         # Blank means "same as the training column"; only a real override is persisted,
         # so reloading a saved configuration keeps showing it as inherited, not explicit.
@@ -1177,6 +1183,8 @@ def main(argv: list[str] | None = None) -> None:
         "validation_input": "validationInput",
         "validation_ratio": "validationRatio",
         "test_ratio": "testRatio",
+        "validation_max_train_ratio": "validationMaxTrainRatio",
+        "test_max_train_ratio": "testMaxTrainRatio",
         "dataset_mode": "datasetMode",
         "validation_seed": "validationSeed",
         "output_dir": "outputDir",
@@ -1225,6 +1233,8 @@ def main(argv: list[str] | None = None) -> None:
         "version": 1, "key": "rdkit-canonical-isomeric-smiles", "seed": args.validation_seed,
         "validationRatio": args.validation_ratio, "testRatio": args.test_ratio,
         "mode": args.dataset_mode if plan is not None else "legacy",
+        "validationMaxTrainRatio": args.validation_max_train_ratio,
+        "testMaxTrainRatio": args.test_max_train_ratio,
         "sources": relative_paths(plan["sources"], output) if plan is not None else [],
         "assignments": dict(sorted(assignments.items())),
     }, indent=2))

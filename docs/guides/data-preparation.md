@@ -72,6 +72,48 @@ rejects a canonical molecule assigned to different splits. Workbench's dataset
 table writes the same configuration. See the
 [CLI options](../reference/cli.md#prepare-training-data) for all mapping flags.
 
+Automatic splitting offers two choices in Workbench and the CLI:
+
+- `--dataset-mode automatic`: combine all inputs, then split their unique canonical molecules.
+- `--dataset-mode per-dataset`: apply the validation/test fractions to each dataset's
+  unique canonical molecules before combining. Integer counts use the same rounding
+  as automatic mode. Shared molecules keep the split assigned by the first dataset;
+  later datasets fill their remaining quotas with new molecules. With overlapping
+  inputs, exact fractions may be impossible and dataset order can affect the result.
+
+Both modes keep all spectra of a canonical molecule in one split across all inputs.
+For 90% train / 10% validation, use `--validation-ratio 0.1 --test-ratio 0`.
+Check Split Summary shows the resulting combined counts before preparation.
+
+In **Assign each dataset to Train / Validation / Test** mode, optional
+`--validation-max-train-ratio` and `--test-max-train-ratio` cap held-out molecule
+counts relative to the combined unique training molecules. In Workbench these
+controls are initially collapsed; expand **Validation / Test molecule limits**
+and enable the checkbox for each desired limit. Expanding alone does not apply a
+limit. For example,
+`--validation-max-train-ratio 0.1` keeps at most `floor(train molecules * 0.1)`
+validation molecules. Omit either option (leave its Workbench checkbox off) for
+no limit; zero excludes that split entirely. Counts use canonical SMILES after
+metadata validation, rather than spectrum counts. For each limited split,
+molecules also present in Train are removed before sampling. Structural
+similarity is not used. Unrestricted assigned splits retain their existing
+overlap validation. All spectra of each selected
+molecule are retained; excess molecules are excluded rather than moved to train.
+Sampling uses the split seed. The checked plan and exported manifest preserve the
+selection, and Split Summary shows the resulting counts.
+
+Workbench's **Output & Run** page includes **Export Filtered Input Datasets**.
+Run Check Split Summary / Preflight Check first, then choose an export directory.
+This exports the checked selection without generating training structures. Each
+input is written separately under `train/`, `validation/` or `test/`, for example
+`train/001_input.msds`. Only rows are filtered: original metadata column names,
+values, dataset attributes, description, tags and peak arrays are retained.
+Keeping inputs separate also preserves differing column schemas. Empty selections
+are omitted. Existing export files are never overwritten.
+
+The equivalent CLI option for `fredis train split-datasets` is
+`--preserve-input-metadata`; it works with either an input list or a checked plan.
+
 ## Map metadata columns
 
 ```bash

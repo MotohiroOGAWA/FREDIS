@@ -49,13 +49,17 @@ def check_split(config, progress=None):
     plan = plan_datasets(entries, config.get('datasetMode', 'automatic'), context.fragmenter,
                          chemistry['symbols'], float(config.get('validationRatio') or 0),
                          float(config.get('testRatio') or 0), seed, invalid_detail_limit=5000,
-                         progress=progress)
+                         progress=progress,
+                         validation_max_train_ratio=config.get("validationMaxTrainRatio"),
+                         test_max_train_ratio=config.get("testMaxTrainRatio"))
     validate_peaks(plan['combined'])
     if before != {entry['id']: fingerprint(entry['path']) for entry in entries}:
         raise ValueError('Input files changed while checking. Run Check Split Summary again.')
     snapshot = dict(schema=SCHEMA, version=1, mode=config.get('datasetMode', 'automatic'),
                     seed=seed, validationRatio=config.get('validationRatio') or 0,
-                    testRatio=config.get('testRatio') or 0, entries=plan['entries'],
+                    testRatio=config.get('testRatio') or 0,
+                    validationMaxTrainRatio=config.get('validationMaxTrainRatio'),
+                    testMaxTrainRatio=config.get('testMaxTrainRatio'), entries=plan['entries'],
                     fingerprints=before, validIndexes=plan['valid_indexes'],
                     assignments=plan['assignments'], splits=plan['summary'], sources=plan['sources'])
     return plan, snapshot
@@ -113,28 +117,69 @@ def restore_checked(snapshot, progress=None):
     return splits
 
 
-def export_checked(snapshot, output_dir, progress=None, splits=None):
+def filtered_input_jobs(snapshot, progress=None):
+    """Select source rows without renaming columns or adding preparation metadata."""
+    import numpy as np
+
+    entries = normalize_entries(snapshot['entries'])
+    jobs, counts, molecules = [], dict.fromkeys(SPLITS, 0), {name: set() for name in SPLITS}
+    for index, entry in enumerate(entries):
+        if fingerprint(entry['path']) != snapshot['fingerprints'][entry['id']]:
+            raise ValueError('Input changed since checking. Run Check Split Summary again.')
+        data = load_spectrum_dataset(entry['path'])
+        if fingerprint(entry['path']) != snapshot['fingerprints'][entry['id']]:
+            raise ValueError('Input changed since checking. Run Check Split Summary again.')
+        rows = snapshot['validIndexes'][entry['id']]
+        structures = data[entry['mapping']['smilesColumn']]
+        keys = canonical_keys([structures[row] for row in rows])
+        labels = np.array([snapshot['assignments'][key] for key in keys])
+        for name in SPLITS:
+            selected = np.flatnonzero(labels == name)
+            if not len(selected):
+                continue
+            original_rows = [rows[i] for i in selected]
+            filename = f"{name}/{index + 1:03d}_{Path(entry['path']).stem}.msds"
+            jobs.append((filename, data[original_rows].copy()))
+            counts[name] += len(selected)
+            molecules[name].update(keys[i] for i in selected)
+        if progress:
+            progress(dict(stage='restoring', percent=75 * (index + 1) / len(entries)))
+    actual = {name: dict(records=counts[name], molecules=len(molecules[name])) for name in SPLITS}
+    if actual != snapshot['splits']:
+        raise ValueError('Checked split counts no longer match. Run Check Split Summary again.')
+    return jobs
+
+
+def export_checked(snapshot, output_dir, progress=None, splits=None, preserve_input_metadata=False):
     output = Path(output_dir).resolve()
-    reserved = [output / (name + '.msds') for name in SPLITS] + [output / 'dataset_split_manifest.json']
+    if preserve_input_metadata:
+        jobs = filtered_input_jobs(snapshot, progress)
+    else:
+        splits = restore_checked(snapshot, progress) if splits is None else splits
+        jobs = [(name + '.msds', data) for name, data in splits.items() if len(data)]
+    reserved = [output / name for name, _ in jobs] + [output / 'dataset_split_manifest.json']
+    if not preserve_input_metadata:
+        reserved.extend(output / (name + '.msds') for name in SPLITS)
     if any(file.exists() for file in reserved):
         raise FileExistsError('Output already contains split datasets. Choose another directory.')
-    splits = restore_checked(snapshot, progress) if splits is None else splits
-    nonempty = [(name, data) for name, data in splits.items() if len(data)]
     output.mkdir(parents=True, exist_ok=True)
     written = []
     # Stage every file before publishing and never overwrite existing user data.
     with tempfile.TemporaryDirectory(prefix='.fredis-split-', dir=output) as directory:
         staging = Path(directory)
-        for index, (name, data) in enumerate(nonempty):
+        for index, (name, data) in enumerate(jobs):
             if progress:
-                progress(dict(stage='writing', split=name, percent=75 + 24 * index / len(nonempty),
-                              current=index, total=len(nonempty)))
-            data.save(str(staging / (name + '.msds')))
+                progress(dict(stage='writing', split=name, percent=75 + 24 * index / len(jobs),
+                              current=index, total=len(jobs)))
+            (staging / name).parent.mkdir(parents=True, exist_ok=True)
+            data.save(str(staging / name))
         manifest = {key: value for key, value in snapshot.items() if key != 'validIndexes'}
+        manifest['exportMode'] = 'preserve-input-metadata' if preserve_input_metadata else 'combined'
         (staging / 'dataset_split_manifest.json').write_text(json.dumps(manifest, indent=2))
         try:
-            for name in [name + '.msds' for name, _ in nonempty] + ['dataset_split_manifest.json']:
+            for name in [name for name, _ in jobs] + ['dataset_split_manifest.json']:
                 target = output / name
+                target.parent.mkdir(parents=True, exist_ok=True)
                 os.link(staging / name, target)
                 written.append(target)
         except BaseException:
@@ -143,7 +188,7 @@ def export_checked(snapshot, output_dir, progress=None, splits=None):
             raise
     if progress:
         progress(dict(stage='complete', percent=100))
-    return dict(outputDir=str(output), files={name: str(output / (name + '.msds')) for name, _ in nonempty},
+    return dict(outputDir=str(output), files={(name if preserve_input_metadata else Path(name).stem): str(output / name) for name, _ in jobs},
                 splits=snapshot['splits'])
 
 
@@ -153,12 +198,16 @@ def build_arg_parser():
     inputs.add_argument('--datasets-json', help='JSON list of input dataset paths, mappings and roles.')
     inputs.add_argument('--config-stdin', action='store_true', help='Read Workbench dataset configuration JSON from stdin.')
     inputs.add_argument('--checked-plan', help='Export a previously checked split, without repeating validation.')
-    parser.add_argument('--dataset-mode', choices=('automatic', 'assigned'), default='automatic')
+    parser.add_argument('--dataset-mode', choices=('automatic', 'per-dataset', 'assigned'), default='automatic')
+    parser.add_argument("--validation-max-train-ratio", type=float, help="Assigned mode: maximum validation/train molecule ratio; omitted means unlimited.")
+    parser.add_argument("--test-max-train-ratio", type=float, help="Assigned mode: maximum test/train molecule ratio; omitted means unlimited.")
     parser.add_argument('--validation-ratio', type=float, default=0.1)
     parser.add_argument('--test-ratio', type=float, default=0)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--plan-output', help='Save a checked plan for subsequent export.')
     parser.add_argument('--output-dir', help='Write non-empty train.msds / validation.msds / test.msds here.')
+    parser.add_argument('--preserve-input-metadata', action='store_true',
+                        help='Export each input separately per split, filtering rows only and preserving original metadata and peaks.')
     configure_chemistry_options(parser)
     return parser
 
@@ -173,7 +222,7 @@ def main(argv=None):
                 if not args.output_dir:
                     raise ValueError('--checked-plan requires --output-dir.')
                 snapshot = json.loads(Path(args.checked_plan).read_text())
-                result = export_checked(snapshot, args.output_dir, progress)
+                result = export_checked(snapshot, args.output_dir, progress, preserve_input_metadata=args.preserve_input_metadata)
             else:
                 if args.config_stdin:
                     config = json.load(sys.stdin)
@@ -181,6 +230,7 @@ def main(argv=None):
                     chemistry = resolve_chemistry_options(args)
                     config = dict(datasets=json.loads(args.datasets_json), datasetMode=args.dataset_mode,
                                   validationRatio=args.validation_ratio, testRatio=args.test_ratio, validationSeed=args.seed,
+                                  validationMaxTrainRatio=args.validation_max_train_ratio, testMaxTrainRatio=args.test_max_train_ratio,
                                   fragmenterParams=chemistry['fragmenter_params'], symbols=chemistry['symbols'])
                 plan, snapshot = check_split(config, lambda event: progress({**event, 'percent':event['percent'] * 0.7 if args.output_dir else event['percent'] * 0.95}))
                 if args.plan_output:
@@ -190,7 +240,7 @@ def main(argv=None):
                 if args.plan_output:
                     result['checkedPlan'] = str(Path(args.plan_output).resolve())
                 if args.output_dir:
-                    result.update(export_checked(snapshot, args.output_dir, progress, splits=plan['splits']))
+                    result.update(export_checked(snapshot, args.output_dir, progress, splits=plan['splits'], preserve_input_metadata=args.preserve_input_metadata))
                 else:
                     progress(dict(stage='complete', percent=100))
         print(json.dumps(dict(ok=True, result=result)), flush=True)

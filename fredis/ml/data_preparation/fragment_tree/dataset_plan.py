@@ -1,8 +1,12 @@
 """Shared dataset-list loading, validation and canonical molecule assignment."""
 from pathlib import Path
+from collections import Counter
+import random
+import math
+from decimal import Decimal, ROUND_FLOOR
 
 import msentity as ms
-from .datasets import canonical_keys, load_spectrum_dataset, split_dataset
+from .datasets import canonical_keys, load_spectrum_dataset, split_dataset, split_assignments
 from .record_validation import inspect_records
 
 DEFAULT_MAPPING = dict(smilesColumn="SMILES", adductTypeColumn="AdductType",
@@ -33,15 +37,30 @@ def normalize_entries(entries):
     return normalized
 
 
-def validate_list_config(entries, mode, validation_ratio=0, test_ratio=0):
+def train_ratio_limit(value):
+    if value is None or value == "":
+        return None
+    try:
+        ratio = float(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Assigned split limits must be finite, non-negative ratios or blank.") from exc
+    if isinstance(value, bool) or not math.isfinite(ratio) or ratio < 0:
+        raise ValueError("Assigned split limits must be finite, non-negative ratios or blank.")
+    return ratio
+
+
+def validate_list_config(entries, mode, validation_ratio=0, test_ratio=0,
+                         validation_max_train_ratio=None, test_max_train_ratio=None):
     from .datasets import validate_split_ratios
 
     entries = normalize_entries(entries)
-    if mode not in ("automatic", "assigned"):
-        raise ValueError("Dataset mode must be automatic or assigned.")
-    if mode == "automatic":
+    if mode not in ("automatic", "per-dataset", "assigned"):
+        raise ValueError("Dataset mode must be automatic, per-dataset or assigned.")
+    if mode != "assigned":
         validate_split_ratios(validation_ratio, test_ratio)
     else:
+        train_ratio_limit(validation_max_train_ratio)
+        train_ratio_limit(test_max_train_ratio)
         if any(entry["split"] not in SPLITS for entry in entries):
             raise ValueError("Assign each dataset to train, validation or test.")
         if not any(entry["split"] == "train" for entry in entries):
@@ -50,8 +69,10 @@ def validate_list_config(entries, mode, validation_ratio=0, test_ratio=0):
 
 
 def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_ratio=0, seed=0,
-                  invalid_detail_limit=None, progress=None):
-    entries = validate_list_config(entries, mode, validation_ratio, test_ratio)
+                  invalid_detail_limit=None, progress=None,
+                  validation_max_train_ratio=None, test_max_train_ratio=None):
+    entries = validate_list_config(entries, mode, validation_ratio, test_ratio,
+                                   validation_max_train_ratio, test_max_train_ratio)
     datasets, reports, sources, valid_indexes = [], {}, [], {}
     def notify(stage, percent, **details):
         if progress:
@@ -86,7 +107,60 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
     if mode == "automatic":
         splits, assignments = split_dataset(combined, "SMILES", validation_ratio, test_ratio, seed,
                                               progress=(lambda current, total: notify("splitting", 75 + current / max(1, total) * 24, current=current, total=total)) if progress else None)
+    elif mode == "per-dataset":
+        import numpy as np
+
+        assignments, all_keys = {}, []
+        for source_index, (entry, data) in enumerate(zip(entries, datasets)):
+            try:
+                keys, proposed = split_assignments(
+                    data["SMILES"], validation_ratio, test_ratio, seed,
+                    progress=(lambda current, total: notify(
+                        "splitting", 75 + (source_index + current / max(1, total)) * 24 / len(entries),
+                        current=current, total=total)) if progress else None,
+                )
+            except ValueError as exc:
+                raise ValueError(f"{entry['path']}: {exc}") from exc
+            # Keep earlier assignments of shared molecules to prevent leakage.
+            # Allocate new molecules toward this dataset's remaining quotas.
+            molecules = set(keys)
+            targets = Counter(proposed.values())
+            counts = Counter(assignments[key] for key in molecules if key in assignments)
+            unseen = sorted(molecules - assignments.keys())
+            random.Random(seed).shuffle(unseen)
+            for key in unseen:
+                split = max(SPLITS, key=lambda name: targets[name] - counts[name])
+                assignments[key] = split
+                counts[split] += 1
+            sources[source_index]["splits"] = {
+                name: dict(molecules=counts[name], records=sum(assignments[key] == name for key in keys))
+                for name in SPLITS
+            }
+            all_keys.extend(keys)
+        labels = np.array([assignments[key] for key in all_keys])
+        splits = {name: combined[np.flatnonzero(labels == name)] for name in SPLITS}
     else:
+        import numpy as np
+
+        capped_splits = {
+            name for name, value in (("validation", validation_max_train_ratio), ("test", test_max_train_ratio))
+            if train_ratio_limit(value) is not None
+        }
+        if capped_splits:
+            # Remove held-out duplicates before counting or sampling. Filter
+            # source row indexes too so checked-plan export cannot reintroduce
+            # those spectra under their training molecule's global assignment.
+            source_keys = [canonical_keys(data["SMILES"]) for data in datasets]
+            train_keys = {key for entry, keys in zip(entries, source_keys)
+                          if entry["split"] == "train" for key in keys}
+            for i, (entry, data, keys) in enumerate(zip(entries, datasets, source_keys)):
+                if entry["split"] not in capped_splits:
+                    continue
+                keep = [row for row, key in enumerate(keys) if key not in train_keys]
+                sources[i]["trainOverlapExcludedRecords"] = len(data) - len(keep)
+                valid_indexes[entry["id"]] = [valid_indexes[entry["id"]][row] for row in keep]
+                datasets[i] = data[keep]
+            combined = ms.concat(datasets) if len(datasets) > 1 else datasets[0]
         assignments, grouped = {}, {name: [] for name in SPLITS}
         for source_index, (entry, data) in enumerate(zip(entries, datasets)):
             keys = canonical_keys(data["SMILES"], progress=(lambda current, total: notify("splitting", 75 + (source_index + current / max(1, total)) * 24 / len(entries), current=current, total=total)) if progress else None)
@@ -98,6 +172,22 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
         empty = combined[[]]
         splits = {name: (ms.concat(parts) if len(parts) > 1 else parts[0]) if parts else empty
                   for name, parts in grouped.items()}
+        train_count = sum(split == "train" for split in assignments.values())
+        rng = random.Random(seed)
+        for name, value in (("validation", validation_max_train_ratio), ("test", test_max_train_ratio)):
+            ratio = train_ratio_limit(value)
+            if ratio is None:
+                continue
+            limit = int((Decimal(str(ratio)) * train_count).to_integral_value(rounding=ROUND_FLOOR))
+            molecules = sorted(key for key, split in assignments.items() if split == name)
+            if len(molecules) <= limit:
+                continue
+            rng.shuffle(molecules)
+            for key in molecules[limit:]:
+                assignments[key] = "excluded"
+            import numpy as np
+            keys = canonical_keys(splits[name]["SMILES"])
+            splits[name] = splits[name][np.flatnonzero([assignments[key] == name for key in keys])]
     summary = {name: dict(molecules=sum(split == name for split in assignments.values()), records=len(data))
                for name, data in splits.items()}
     notify("complete", 100)

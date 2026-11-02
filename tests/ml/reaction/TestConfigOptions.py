@@ -22,6 +22,20 @@ def preparation_dataset(smiles_column='SMILES'):
                      dataset_from_arrays(np.array([[47.,1.]]),np.array([0,1],dtype=np.int64)))
 
 class TestConfigOptions(unittest.TestCase):
+    def test_removed_precursor_limit_is_not_forwarded_or_accepted_as_override(self):
+        document = chemistry()
+        document['fragmenter_params']['precursor_candidate_max_reaction_count'] = 2
+        parser = self.parser()
+        args = parser.parse_args(['--params-json', json.dumps(document)])
+        resolved = resolve_chemistry_options(args)
+        self.assertNotIn('precursor_candidate_max_reaction_count', resolved['fragmenter_params'])
+        self.assertEqual(document['fragmenter_params']['precursor_candidate_max_reaction_count'], 2)
+        args = parser.parse_args(['--params-json', json.dumps(document), '--set',
+                                  'precursor_candidate_max_reaction_count=1'])
+        with self.assertRaisesRegex(ValueError, 'was removed'):
+            resolve_chemistry_options(args)
+        self.assertNotIn('--precursor-max-reaction-count', parser._option_string_actions)
+
     def parser(self):
         parser=argparse.ArgumentParser()
         configure_chemistry_options(parser)

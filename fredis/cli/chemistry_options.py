@@ -122,6 +122,8 @@ def resolve_chemistry_options(
     if "fragmenter_params" not in config:
         raise ValueError("Specify the Fragmenter with --params or --params-json")
     fragmenter = config["fragmenter_params"]
+    # Old files remain readable, but the removed setting is never forwarded.
+    fragmenter.pop("precursor_candidate_max_reaction_count", None)
     for key, path in OPTIONS.items():
         value = getattr(args, key, None)
         if value is not None:
@@ -130,6 +132,11 @@ def resolve_chemistry_options(
         key, separator, raw = override.partition("=")
         if not separator:
             raise ValueError("--set requires PATH=JSON")
+        if key.split(".")[0] == "precursor_candidate_max_reaction_count":
+            raise ValueError(
+                "precursor_candidate_max_reaction_count was removed; use "
+                "fragment_ion_tree_builder.max_reaction_count instead"
+            )
         set_parameter(fragmenter, key.split("."), json.loads(raw))
     if args.symbols_json:
         config["symbols"] = json.loads(args.symbols_json)
