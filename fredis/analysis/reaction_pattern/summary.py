@@ -237,10 +237,10 @@ def summarize(
             without = ~sample.is_precursor
             values = dict(
                 peak_count=everything,
-                total_intensity=float(sample.intensity.sum()),
+                total_intensity=float(sample.coverage_intensity.sum()),
                 peak_count_without_precursor=int(without.sum()),
                 total_intensity_without_precursor=float(
-                    sample.intensity[without].sum()
+                    sample.coverage_intensity[without].sum()
                 ),
             )
             tables.add(
@@ -263,8 +263,9 @@ def summarize(
             stats["peak_count"] += everything
             dataset_compounds[sample.dataset_id].add(compound_id)
 
+        samples_by_index = {sample.sample_index: sample for sample in group.samples}
         union_new = {
-            index: np.zeros(len(group.samples[index].mz), dtype=bool)
+            group.samples[index].sample_index: np.zeros(len(group.samples[index].mz), dtype=bool)
             for index in population
         }
         evaluated_nodes = improving_edges = 0
@@ -287,13 +288,13 @@ def summarize(
                         assigned = effective.assigned[index] & mask
                         aggregate["overall_peaks" + suffix] += int(mask.sum())
                         aggregate["overall_intensity" + suffix] += float(
-                            sample.intensity[mask].sum()
+                            sample.coverage_intensity[mask].sum()
                         )
                         aggregate["overall_assigned_peaks" + suffix] += int(
                             assigned.sum()
                         )
                         aggregate["overall_assigned_intensity" + suffix] += float(
-                            sample.intensity[assigned].sum()
+                            sample.coverage_intensity[assigned].sum()
                         )
                 aggregate["overall_compound_count"] += 1
                 aggregate["overall_sample_count"] += len(effective.kept)
@@ -476,7 +477,7 @@ def summarize(
 
         new_peaks = sum(int(mask.sum()) for mask in union_new.values())
         new_intensity = sum(
-            float(group.samples[index].intensity[mask].sum())
+            float(samples_by_index[index].coverage_intensity[mask].sum())
             for index, mask in union_new.items()
         )
         if new_peaks:

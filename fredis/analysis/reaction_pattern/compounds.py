@@ -34,6 +34,21 @@ class SampleRecord:
     formula_status: str = ""
     precursor_formula: str = ""
     formulas: list[str] | None = None
+    intensity_coverage_formula_only: bool = False
+
+    @property
+    def coverage_intensity(self) -> np.ndarray:
+        """Intensity population for coverage; keep original peak intensities intact.
+
+        Failed/skipped formula assignments have no eligible peaks, yielding NaN
+        coverage rather than silently falling back to all peaks.
+        """
+        if not self.intensity_coverage_formula_only:
+            return self.intensity
+        eligible = (np.asarray([bool(value) for value in self.formulas], dtype=bool)
+                    if self.formulas is not None else np.zeros(len(self.mz), dtype=bool))
+        return np.where(eligible, self.intensity, 0.0)
+
 
 
 @dataclass

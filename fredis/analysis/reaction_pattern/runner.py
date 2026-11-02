@@ -488,6 +488,7 @@ def generate_reaction_pattern_analysis(
                 sample.formula_status = value.status
                 sample.precursor_formula = value.precursor_formula
                 sample.formulas = value.formulas
+                sample.intensity_coverage_formula_only = formula_options.intensity_coverage_formula_only
                 formula_status_counts[value.status] = (
                     formula_status_counts.get(value.status, 0) + 1
                 )

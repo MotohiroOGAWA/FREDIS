@@ -44,6 +44,7 @@ class FormulaAssignmentOptions:
     timeout_sec: float | None = None
     hydrogen_delta: int = 1
     enable_neutral_loss: bool = False
+    intensity_coverage_formula_only: bool = False
 
     @classmethod
     def from_dict(cls, value: dict) -> "FormulaAssignmentOptions":
@@ -53,6 +54,7 @@ class FormulaAssignmentOptions:
             "timeoutSec",
             "hydrogenDelta",
             "enableNeutralLoss",
+            "intensityCoverageFormulaOnly",
         }
         if unknown:
             raise ValueError(
@@ -76,11 +78,15 @@ class FormulaAssignmentOptions:
             raise ValueError("hydrogenDelta must be a non-negative integer.")
         if not isinstance(neutral_loss, bool):
             raise ValueError("enableNeutralLoss must be true or false.")
+        formula_only = value.get("intensityCoverageFormulaOnly", False)
+        if not isinstance(formula_only, bool):
+            raise ValueError("intensityCoverageFormulaOnly must be true or false.")
         return cls(
             max_formula_candidates=None if maximum in (None, "") else int(maximum),
             timeout_sec=None if timeout in (None, "") else float(timeout),
             hydrogen_delta=hydrogen,
             enable_neutral_loss=neutral_loss,
+            intensity_coverage_formula_only=formula_only,
         )
 
     def to_dict(self) -> dict:
@@ -89,6 +95,7 @@ class FormulaAssignmentOptions:
             "timeoutSec": self.timeout_sec,
             "hydrogenDelta": self.hydrogen_delta,
             "enableNeutralLoss": self.enable_neutral_loss,
+            **({"intensityCoverageFormulaOnly": True} if self.intensity_coverage_formula_only else {}),
         }
 
 

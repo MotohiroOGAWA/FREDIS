@@ -524,3 +524,162 @@ def test_cli_formula_assignment_is_kept_when_extending(capsys, tmp_path, inputs)
     with ReactionPatternAnalysisResult(tmp_path / "out" / "result.reactionpatternanalysis.pft") as reader:
         assert reader.configuration()["formulaAssignment"]["hydrogenDelta"] == 1
         assert {row["node_id"]: row["formula_sample_count"] for row in reader.node_summary()} == {"r": 4, "o": 3}
+
+
+def test_formula_only_intensity_coverage(inputs, tmp_path):
+    result = _run(tmp_path / "formula-only", inputs,
+                  formula_assignment={"intensityCoverageFormulaOnly": True})
+    with ReactionPatternAnalysisResult(result) as reader:
+        nodes = {row["node_row"]: row for row in reader.node_summary()}
+        for compound in (CCO, CC):
+            peaks = pd.read_parquet(result.parent / "compounds" / f"{compound}.peaks.parquet")
+            for row in reader.table_records("sample_node_summary"):
+                sample = peaks[peaks["sample_id"] == row["sample_id"]]
+                if sample.empty:
+                    continue
+                node = nodes[row["node_row"]]
+                for suffix in ("", "_without_precursor"):
+                    population = sample if not suffix else sample[~sample["is_precursor"]]
+                    eligible = population[population["formula"].astype(bool)]
+                    total = eligible["intensity"].sum()
+                    hit = eligible[eligible[assigned_column(node["condition_id"])]]["intensity"].sum()
+                    expected = hit / total if total else math.nan
+                    if total:
+                        assert row["intensity_coverage" + suffix] == pytest.approx(expected)
+                    else:
+                        assert row["intensity_coverage" + suffix] is None
+                    if not node["is_root"] and total:
+                        before = eligible[eligible[assigned_column(node["parent_condition_id"]) ]]["intensity"].sum()
+                        assert row["delta_intensity_coverage" + suffix] == pytest.approx((hit - before) / total)
+
+
+def test_formula_only_coverage_without_eligible_peaks():
+    from fredis.analysis.reaction_pattern.compounds import SampleRecord
+    from fredis.analysis.reaction_pattern.comparison import coverage
+    from fredis.analysis.reaction_pattern.formula import FormulaAssignmentOptions
+    sample = SampleRecord(0, 0, "CC", "[M+H]+", 10, 31,
+                          np.array([10., 20.]), np.array([.4, .6]), np.array([.4, .6]),
+                          intensity_coverage_formula_only=True)
+    for formulas in (None, ["", ""]):
+        sample.formulas = formulas
+        values = coverage(np.array([True, False]), sample.coverage_intensity, np.ones(2, dtype=bool))
+        assert math.isnan(values["intensity_coverage"])
+        assert values["peak_coverage"] == .5
+        assert sample.intensity.tolist() == [.4, .6]
+    with pytest.raises(ValueError, match="intensityCoverageFormulaOnly"):
+        FormulaAssignmentOptions.from_dict({"intensityCoverageFormulaOnly": "true"})
+
+
+@pytest.mark.parametrize('stored_mode', [False, True])
+@pytest.mark.parametrize('candidate_limit', [None, 1])
+def test_coverage_can_be_recalculated_from_saved_peaks(inputs, tmp_path, monkeypatch, stored_mode, candidate_limit):
+    import hashlib
+    options = {'intensityCoverageFormulaOnly': stored_mode, 'maxFormulaCandidates': candidate_limit}
+    original = _run(tmp_path / 'original', inputs, formula_assignment=options)
+    expected = _run(tmp_path / 'expected', inputs,
+                    formula_assignment={**options, 'intensityCoverageFormulaOnly': not stored_mode})
+    digest = lambda: {str(p.relative_to(original.parent)): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in original.parent.rglob('*') if p.is_file()}
+    before = digest()
+    def no_chemistry(*args, **kwargs):
+        raise AssertionError('Recalculating coverage must not run chemistry')
+    monkeypatch.setattr(chemistry, 'run_task', no_chemistry)
+    from fredis.analysis.reaction_pattern import formula
+    monkeypatch.setattr(formula, 'assign_sample_formulas', no_chemistry)
+    with ReactionPatternAnalysisResult(original) as reader, ReactionPatternAnalysisResult(expected) as other:
+        initial = reader.node_summary()
+        reader.set_intensity_coverage_formula_only(not stored_mode)
+        assert reader.info()['intensityCoverageFormulaOnly'] is not stored_mode
+        for table in ('node_summary', 'node_distribution', 'compound_node_summary',
+                      'compound_node_distribution', 'sample_summary', 'sample_node_summary', 'compounds'):
+            assert reader.table_records(table) == other.table_records(table)
+        assert reader.score_frequency('intensity_coverage') == other.score_frequency('intensity_coverage')
+        assert all(path.endswith('.parquet') for path in reader.loaded_files)
+        temporary = reader._coverage_path
+        reader.set_intensity_coverage_formula_only(stored_mode)
+        assert reader.node_summary() == initial
+        assert not temporary.exists()
+        assert digest() == before
+
+
+def test_formula_only_recalculation_requires_saved_formulas(analysis):
+    with ReactionPatternAnalysisResult(analysis['path']) as reader:
+        with pytest.raises(ValueError, match='no saved peak formulas'):
+            reader.set_intensity_coverage_formula_only(True)
+
+
+def test_peak_formula_annotation_filter(formula_analysis, analysis, tmp_path):
+    import shutil
+    result = tmp_path / formula_analysis.name
+    shutil.copy2(formula_analysis, result)
+    shutil.copytree(formula_analysis.parent / "compounds", tmp_path / "compounds")
+    peak_file = tmp_path / "compounds" / f"{CCO}.peaks.parquet"
+    peaks = pd.read_parquet(peak_file)
+    peaks.loc[0, "formula"] = ""
+    peaks.loc[1, "formula"] = None
+    peaks.loc[2, "formula"] = "  "
+    peaks.loc[0, "formula_status"] = "TooManyFormulaCandidates"
+    peaks.to_parquet(peak_file, index=False)
+    with ReactionPatternAnalysisResult(result) as reader:
+        rows = reader.compound_peaks(CCO, limit=1000)["rows"]
+        for mode, present in (("annotated", True), ("unannotated", False)):
+            expected = [row for row in rows if bool((row["formula"] or "").strip()) == present]
+            assert expected
+            result = reader.compound_peaks(CCO, {"formulaAnnotation": mode}, limit=1000)
+            assert result["rows"] == expected
+            assert result["total"] == len(expected)
+            page = reader.compound_peaks(CCO, {"formulaAnnotation": mode}, offset=1, limit=1)
+            assert page["total"] == len(expected)
+            assert page["rows"] == expected[1:2]
+            combined = reader.compound_peaks(CCO, {"formulaAnnotation": mode, "precursor": "non-precursor"}, limit=1000)
+            assert combined["rows"] == [row for row in expected if not row["is_precursor"]]
+    # A result without formula assignment has no annotated peaks.
+    with ReactionPatternAnalysisResult(analysis["path"]) as reader:
+        assert reader.compound_peaks(CCO, {"formulaAnnotation": "annotated"})["total"] == 0
+        assert reader.compound_peaks(CCO, {"formulaAnnotation": "unannotated"})["rows"] == reader.compound_peaks(CCO)["rows"]
+
+
+@pytest.mark.parametrize('metric', ['intensity_coverage', 'peak_coverage', 'assigned_peak_count'])
+@pytest.mark.parametrize('without_precursor', [False, True])
+def test_score_frequency_formula_annotated_peaks(formula_analysis, metric, without_precursor):
+    with ReactionPatternAnalysisResult(formula_analysis) as reader:
+        result = reader.score_frequency(metric, formula_only=True, without_precursor=without_precursor,
+                                        filters={'smiles': 'CCO'})
+        assert result['formulaOnly'] is True
+        peaks = pd.read_parquet(formula_analysis.parent / 'compounds' / f'{CCO}.peaks.parquet')
+        nodes = {row['node_row']: row for row in reader.nodes()}
+        for series in result['series']:
+            values = []
+            node = nodes[series['nodeRow']]
+            for _, sample in peaks.groupby('sample_id'):
+                population = sample[sample.formula.fillna('').str.strip().ne('')]
+                if without_precursor:
+                    population = population[~population.is_precursor]
+                if population.empty:
+                    continue
+                hits = population[population[assigned_column(node['condition_id'])]]
+                if metric == 'assigned_peak_count':
+                    values.append(len(hits))
+                elif metric == 'peak_coverage':
+                    values.append(len(hits) / len(population))
+                elif population.intensity.sum() > 0:
+                    values.append(hits.intensity.sum() / population.intensity.sum())
+            counts, _ = np.histogram(values, bins=result['edges'])
+            assert series['counts'] == counts.tolist()
+            assert series['n'] == len(values)
+        loaded = list(reader.loaded_files)
+        assert reader.score_frequency(metric, formula_only=True, without_precursor=without_precursor,
+                                      filters={'smiles': 'CCO'}) == result
+        assert reader.loaded_files == loaded
+
+
+def test_formula_score_frequency_requires_formulas_and_excludes_empty_population(analysis, inputs, tmp_path):
+    with ReactionPatternAnalysisResult(analysis['path']) as reader:
+        with pytest.raises(ValueError, match='no saved peak formulas'):
+            reader.score_frequency(formula_only=True)
+    result = _run(tmp_path / 'limited-frequency', inputs, formula_assignment={'maxFormulaCandidates': 1})
+    with ReactionPatternAnalysisResult(result) as reader:
+        for metric in ('intensity_coverage', 'peak_coverage', 'assigned_peak_count'):
+            frequency = reader.score_frequency(metric, formula_only=True)
+            assert all(series['n'] == 0 and series['excludedSamples'] == 5
+                       for series in frequency['series'])

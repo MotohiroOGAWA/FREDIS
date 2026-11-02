@@ -182,6 +182,27 @@ intensity coverage   = assigned peak intensity / total peak intensity
 Δ metric (edge)      = child condition metric − parent condition metric
 ```
 
+When formula assignment is enabled, set
+`formulaAssignment.intensityCoverageFormulaOnly` to `true` (Workbench: Formula
+assignment → Calculate intensity coverage using only peaks with assigned
+formulas). Both intensity sums then include only peaks with a formula. This
+applies to Int. cov., parent and Δ Int. cov., weighted/overall summaries and
+precursor-excluded values. Peak coverage and stored peak intensities stay
+unchanged. Spectra with no formula-assigned intensity, including failed or
+skipped formula assignments, have unavailable intensity coverage. The option
+defaults to false.
+
+The same checkbox is available under **Overall Summary** in the result view.
+It can recalculate coverage after the analysis, using saved peak formulas and
+condition assignments. It updates the summaries, Int. cov., Δ Int. cov. and
+score distributions without rerunning fragmentation or formula assignment.
+This is a temporary view: the original result files remain unchanged. Results
+without saved formula assignments cannot enable it.
+
+Python readers can switch either way with
+`result.set_intensity_coverage_formula_only(True)` or `False`. The setting lasts
+until the reader is closed; the first switch reads the saved peak Parquet files.
+
 Absolute child metrics are always kept next to the deltas. **Without
 precursor** removes peaks within mass tolerance of the theoretical precursor
 m/z from numerator and denominator; every value is stored with and without the
@@ -388,3 +409,17 @@ with ReactionPatternAnalysisResult("output/result.reactionpatternanalysis.pft") 
     result.compound_peaks(compound_id)                      # B
     result.peak_detail(compound_id, sample_id, peak_index, 1)  # C
 ```
+
+The **Peak Filter → Formula annotation** selector shows all peaks, only
+annotated peaks, or only unannotated peaks. It checks for a non-empty formula
+on each peak and combines with the other peak filters before pagination.
+Missing formula data and failed/skipped assignments count as unannotated.
+This filter changes the peak table only, not the coverage calculation mode.
+
+**Score Frequency → Formula-annotated peaks only** restricts each spectrum's
+score to peaks with a non-empty formula. This applies to all three scores:
+intensity coverage, peak coverage, and assigned peak count. Precursor exclusion
+and Data Filter still apply; spectra without eligible peaks are excluded from
+the frequency series. This setting affects Score Frequency only and uses saved
+peak annotations, without rerunning chemistry. It is independent of Peak Filter.
+Python: `result.score_frequency('peak_coverage', formula_only=True)`.

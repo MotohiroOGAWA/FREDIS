@@ -102,6 +102,9 @@ class ReactionPatternAnalysisResult:
         self.root = self.path.parent
         self.loaded_files: list[str] = []
         self._cache: dict = {}
+        self._coverage_temporary = None
+        self._coverage_path = None
+        self._coverage_mode = None
         with h5py.File(self.path, "r") as handle:
             attrs = dict(handle["metadata"].attrs)
         self.metadata = {key: _plain(value) for key, value in attrs.items()}
@@ -122,13 +125,50 @@ class ReactionPatternAnalysisResult:
 
     def close(self) -> None:
         self._cache.clear()
+        if self._coverage_temporary is not None:
+            self._coverage_temporary.cleanup()
+            self._coverage_temporary = None
+        self._coverage_path = None
+        self._coverage_mode = None
 
     @contextmanager
     def _file(self):
         import h5py
 
-        with h5py.File(self.path, "r") as handle:
+        with h5py.File(self._coverage_path or self.path, "r") as handle:
             yield handle
+
+    def set_intensity_coverage_formula_only(self, enabled: bool, progress=None) -> None:
+        """Switch this reader's summaries using saved peak formulas; leave files intact."""
+        import tempfile
+        from .recalculate import recalculate_coverage
+
+        if not isinstance(enabled, bool):
+            raise ValueError("Intensity coverage mode must be true or false.")
+        with ReactionPatternAnalysisResult(self.path) as source:
+            settings = source.configuration().get("formulaAssignment") or {}
+            stored = bool(settings.get("intensityCoverageFormulaOnly"))
+            current = stored if self._coverage_mode is None else self._coverage_mode
+            if enabled == current:
+                return
+            if enabled and not settings:
+                raise ValueError("This result has no saved peak formulas. Run formula assignment first.")
+            if enabled == stored:
+                self.close()
+                return
+            temporary = tempfile.TemporaryDirectory(prefix="fredis-coverage-")
+            target = Path(temporary.name) / self.path.name
+            try:
+                recalculate_coverage(source, target, enabled, progress)
+            except BaseException:
+                temporary.cleanup()
+                raise
+            loaded = list(source.loaded_files)
+        self.close()
+        self._coverage_temporary = temporary
+        self._coverage_path = target
+        self._coverage_mode = enabled
+        self.loaded_files.extend(loaded)
 
     def table_records(self, name: str, columns=None, rows=None) -> list[dict]:
         with self._file() as handle:
@@ -247,6 +287,7 @@ class ReactionPatternAnalysisResult:
                 )
             }
         return {
+            "intensityCoverageFormulaOnly": (self._coverage_mode if self._coverage_mode is not None else bool((self.configuration().get("formulaAssignment") or {}).get("intensityCoverageFormulaOnly"))),
             "format": "hdf5",
             "path": str(self.path),
             "metadata": self.metadata,
@@ -328,6 +369,51 @@ class ReactionPatternAnalysisResult:
             values[row] = base
         return sample_ids, sample_rows, values
 
+    def _formula_frequency_values(self, without_precursor: bool):
+        """Absolute node scores restricted to formula-annotated peaks, cached per view."""
+        import pandas as pd
+
+        key = ("formula_frequency", bool(without_precursor))
+        if key in self._cache:
+            return self._cache[key]
+        if not self.configuration().get("formulaAssignment"):
+            raise ValueError("This result has no saved peak formulas. Run formula assignment first.")
+        suffix = "_without_precursor" if without_precursor else ""
+        with self._file() as handle:
+            sample_ids, sample_rows, evaluated = self._node_values(handle, "assigned_peak_count" + suffix)
+            compounds = Table(handle["compounds"]).records(["peak_summary_file"])
+        positions = {int(sample_id): index for index, sample_id in enumerate(sample_ids)}
+        scores = {metric: {node: np.full(len(sample_ids), np.nan) for node in evaluated}
+                  for metric in FREQUENCY_METRICS}
+        nodes = self.nodes()
+        for compound in compounds:
+            path = self.root / compound["peak_summary_file"]
+            frame = pd.read_parquet(path)
+            self.loaded_files.append(str(path))
+            if len(frame) and "formula" not in frame:
+                raise ValueError("This result has no saved peak formulas. Run formula assignment first.")
+            for sample_id, peaks in frame.groupby("sample_id", sort=False):
+                position = positions[int(sample_id)]
+                eligible = peaks["formula"].fillna("").astype(str).str.strip().ne("")
+                if without_precursor:
+                    eligible &= ~peaks["is_precursor"]
+                population = peaks[eligible]
+                if population.empty:
+                    continue
+                count = len(population)
+                total = float(population["intensity"].sum())
+                for node in nodes:
+                    row = node["node_row"]
+                    if not np.isfinite(evaluated[row][position]):
+                        continue
+                    hit = population[population[assigned_column(node["condition_id"])].astype(bool)]
+                    scores["assigned_peak_count"][row][position] = len(hit)
+                    scores["peak_coverage"][row][position] = len(hit) / count
+                    if total > 0:
+                        scores["intensity_coverage"][row][position] = float(hit["intensity"].sum()) / total
+        self._cache[key] = (sample_ids, sample_rows, scores)
+        return self._cache[key]
+
     def score_frequency(
         self,
         metric: str = "intensity_coverage",
@@ -335,9 +421,12 @@ class ReactionPatternAnalysisResult:
         without_precursor: bool = False,
         bins: int = 20,
         filters: dict | None = None,
+        formula_only: bool = False,
     ) -> dict:
         """Filtered sample-frequency series of every node's absolute value."""
         filters = dict(filters or {})
+        if not isinstance(formula_only, bool):
+            raise ValueError("formula_only must be true or false.")
         if metric not in FREQUENCY_METRICS:
             raise ValueError(
                 "metric must be intensity_coverage, peak_coverage or assigned_peak_count"
@@ -346,9 +435,14 @@ class ReactionPatternAnalysisResult:
             "_without_precursor" if without_precursor else ""
         )
         bins = min(100, max(2, int(bins)))
+        formula_values = self._formula_frequency_values(without_precursor) if formula_only else None
         with self._file() as handle:
             compound_mask = self._compound_mask(handle, filters)
-            sample_ids, sample_rows, values = self._node_values(handle, field)
+            if formula_values is None:
+                sample_ids, sample_rows, values = self._node_values(handle, field)
+            else:
+                sample_ids, sample_rows, scores = formula_values
+                values = scores[metric]
             sample_mask = compound_mask[sample_rows] & self._sample_mask(
                 handle, filters
             )
@@ -390,6 +484,7 @@ class ReactionPatternAnalysisResult:
             )
         return {
             "metric": metric,
+            "formulaOnly": formula_only,
             "withoutPrecursor": bool(without_precursor),
             "bins": bins,
             "filteredSamples": int(np.count_nonzero(sample_mask)),
@@ -777,6 +872,14 @@ class ReactionPatternAnalysisResult:
             frame = frame[
                 frame["is_precursor"] == (filters["precursor"] == "precursor")
             ]
+        formula_filter = filters.get("formulaAnnotation")
+        if formula_filter in ("annotated", "unannotated"):
+            annotated = (
+                frame["formula"].fillna("").astype(str).str.strip().ne("")
+                if "formula" in frame.columns
+                else pd.Series(False, index=frame.index)
+            )
+            frame = frame[annotated if formula_filter == "annotated" else ~annotated]
         node_filter = filters.get("nodeState")
         if node_filter not in (None, "", "all"):
             # "<node_row>:<state>" (state: new | assigned | missing), or "any-new" / "no-new".

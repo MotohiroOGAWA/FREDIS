@@ -182,34 +182,34 @@ def compare_compound(
                 if parent is None:
                     new = None
                     metrics = node_metrics(
-                        coverage(current, sample.intensity, everything),
+                        coverage(current, sample.coverage_intensity, everything),
                         None,
                         None,
-                        sample.intensity,
+                        sample.coverage_intensity,
                         everything,
                     )
                     metrics_without = node_metrics(
-                        coverage(current, sample.intensity, without),
+                        coverage(current, sample.coverage_intensity, without),
                         None,
                         None,
-                        sample.intensity,
+                        sample.coverage_intensity,
                         without,
                     )
                 else:
                     before = parent.assigned[index]
                     new = current & ~before
                     metrics = node_metrics(
-                        coverage(current, sample.intensity, everything),
-                        coverage(before, sample.intensity, everything),
+                        coverage(current, sample.coverage_intensity, everything),
+                        coverage(before, sample.coverage_intensity, everything),
                         new,
-                        sample.intensity,
+                        sample.coverage_intensity,
                         everything,
                     )
                     metrics_without = node_metrics(
-                        coverage(current, sample.intensity, without),
-                        coverage(before, sample.intensity, without),
+                        coverage(current, sample.coverage_intensity, without),
+                        coverage(before, sample.coverage_intensity, without),
                         new,
-                        sample.intensity,
+                        sample.coverage_intensity,
                         without,
                     )
                 item.samples.append(
