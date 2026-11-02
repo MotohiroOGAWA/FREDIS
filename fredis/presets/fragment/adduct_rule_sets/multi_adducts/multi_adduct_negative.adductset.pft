@@ -26,7 +26,7 @@
         ]
       },
       {
-        "name": "neg_2M_H_to_M",
+        "name": "neg_2M_H",
         "adduct_type": "[2M-H]-",
         "fragment_ion_adducts": [
           "[2M-H]-",
