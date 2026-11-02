@@ -72,7 +72,7 @@ class TestConfigOptions(unittest.TestCase):
         args=parser.parse_args(['--input','input.msds','--output-dir','out',
                                '--params-json',json.dumps(chemistry()['fragmenter_params']),
                                '--max-reaction-count','2','--max-unique-fragment-smiles','500','--max-reaction-combinations','1000','--overwrite','1','--num-workers','2','--chunk-size','3','--symbols-json','["C","O"]','--smiles-column','CanonicalSMILES',
-                               '--set','precursor_candidate_max_reaction_count=1'])
+                               '--set','mass_tolerance="0.02Da"'])
         import pandas as pd
         with tempfile.TemporaryDirectory() as directory, patch.object(preparation.ms,'load',return_value=preparation_dataset('CanonicalSMILES')), patch.object(preparation,'create_reaction_training_data') as run:
             args.output_dir=directory
@@ -86,7 +86,7 @@ class TestConfigOptions(unittest.TestCase):
         self.assertEqual(set(kwargs['chemistry_config']),{'fragmenter_params','symbols','adduct_type_strs'})
         self.assertEqual(kwargs['chemistry_config']['symbols'],['C','O'])
         self.assertEqual(kwargs['chemistry_config']['fragmenter_params']['fragment_ion_tree_builder']['max_reaction_count'],2)
-        self.assertEqual(kwargs['chemistry_config']['fragmenter_params']['precursor_candidate_max_reaction_count'],1)
+        self.assertEqual(kwargs['chemistry_config']['fragmenter_params']['mass_tolerance'],'0.02Da')
 
     def test_official_training_command_forwards_explicit_options(self):
         from fredis.cli.train.commands.fragment_tree_detailed import FragmentTreeDetailedTrainCommand

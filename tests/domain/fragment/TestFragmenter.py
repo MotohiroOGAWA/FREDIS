@@ -328,8 +328,6 @@ class TestFragmenter(unittest.TestCase):
     def _build_group_tree(self, group: dict[str, Any]) -> Tuple[Fragmenter, Compound, FragmentIonTree]:
         fragmenter = Fragmenter.from_json(group["fragmenter_json"])
         compound = Compound.from_smiles(group.get("smiles", "CC(=O)N[C@@H](CC1=CC=CC=C1)C2=CC(=CC(=O)O2)OC"))
-        fragmenter = replace(fragmenter, precursor_candidate_max_reaction_count=group.get(
-            "precursor_candidate_max_reaction_count", fragmenter.precursor_candidate_max_reaction_count))
         seeds = self._water_loss_seeds(fragmenter, compound, group.get("seed_water_loss_count", 0))
         fragment_ion_tree = fragmenter.build_fragment_ion_tree(
             compound,
@@ -349,8 +347,7 @@ class TestFragmenter(unittest.TestCase):
         source = Compound.from_smiles("CCCCO")
         seed_result = next(result for result in builder.react_all(source, max_reaction_count=2)
                            if len(result.reaction_sequence.reactions) == 2)
-        fragmenter = Fragmenter(builder, parse_mass_tolerance("0.01Da"),
-                                precursor_candidate_max_reaction_count=1)
+        fragmenter = Fragmenter(builder, parse_mass_tolerance("0.01Da"))
         tree = fragmenter.build_fragment_ion_tree(
             source, seed_reaction_sequences=(seed_result.reaction_sequence,),
             max_reaction_count=2)
@@ -362,18 +359,18 @@ class TestFragmenter(unittest.TestCase):
         loss = (source.formula - seed_result.compound.formula).normalized
         precursor_type = Adduct.parse(str(main_adduct)[:-2] + "-" + str(loss) + "]" + str(main_adduct)[-1])
         with patch.object(FragmentIonTree, "get_nodes_by_depth", side_effect=AssertionError("graph depth used")):
-            self.assertFalse(any(precursor.node_index == index
-                                 for precursor in fragmenter.resolve_precursor_reactions(tree, precursor_type)))
-            allowed = replace(fragmenter, precursor_candidate_max_reaction_count=2)
             self.assertIn(PrecursorReaction(index, seed_result.reaction_sequence),
-                          allowed.resolve_precursor_reactions(tree, precursor_type))
+                          fragmenter.resolve_precursor_reactions(tree, precursor_type))
+            restricted = replace(fragmenter, fragment_ion_tree_builder=replace(builder, max_reaction_count=1))
+            self.assertFalse(any(precursor.node_index == index
+                                 for precursor in restricted.resolve_precursor_reactions(tree, precursor_type)))
         copied = tree.copy()
         self.assertEqual(copied.get_min_reaction_counts(), tree.get_min_reaction_counts())
 
     def test_annotation_combination_must_contain_a_precursor_combination(self) -> None:
         question = make_fragment_tree_builder_questions()[0]
         builder = replace(self._make_fragment_ion_tree_builder(question), max_reaction_count=2)
-        fragmenter = Fragmenter(builder, parse_mass_tolerance("0.01Da"), precursor_candidate_max_reaction_count=1)
+        fragmenter = Fragmenter(builder, parse_mass_tolerance("0.01Da"))
         source = Compound.from_smiles("CCCCC")
         result = next(result for result in builder.react_all(source, max_reaction_count=2)
                       if len(result.reaction_sequence.reactions) == 2)
@@ -395,21 +392,15 @@ class TestFragmenter(unittest.TestCase):
                                fragment_ion_adduct=fragmenter.adduct_types[0], hydrogen_shift=0,
                                formula=result.compound.formula)
 
-    def test_precursor_selection_setting_roundtrip_and_copy(self) -> None:
+    def test_tree_budget_roundtrip_and_copy(self) -> None:
         question = make_fragment_tree_builder_questions()[0]
         builder = self._make_fragment_ion_tree_builder(question)
-        fragmenter = Fragmenter(builder, parse_mass_tolerance('0.01Da'), precursor_candidate_max_reaction_count=1)
+        fragmenter = Fragmenter(builder, parse_mass_tolerance('0.01Da'))
         data = fragmenter.to_dict()
-        self.assertEqual(data['precursor_candidate_max_reaction_count'], 1)
         self.assertEqual(data['fragment_ion_tree_builder']['max_reaction_count'], builder.max_reaction_count)
-        self.assertEqual(Fragmenter.from_dict(data).precursor_candidate_max_reaction_count, 1)
-        self.assertEqual(fragmenter.copy().precursor_candidate_max_reaction_count, 1)
-        for value in (True, 1.5, "1"):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                Fragmenter.from_dict({**data, "precursor_candidate_max_reaction_count": value})
+        self.assertEqual(Fragmenter.from_dict(data).to_dict(), data)
+        self.assertEqual(fragmenter.copy().to_dict(), data)
         self.assertEqual(fragmenter.tree_max_reaction_count, builder.max_reaction_count)
-        with self.assertRaises(ValueError):
-            Fragmenter(builder, fragmenter.mass_tolerance, precursor_candidate_max_reaction_count=-1)
 
     def test_batched_and_individual_assignment_keep_precursor_contexts_separate(self) -> None:
         source = Compound.from_smiles('CC(=O)N[C@@H](CC1=CC=CC=C1)C2=CC(=CC(=O)O2)OC')
@@ -556,30 +547,24 @@ class TestFragmenter(unittest.TestCase):
         preset_dir = Path(__file__).resolve().parents[3] / "tests/domain/fragment/test_data"
         groups = []
         scenarios = (
-            ("primary_alcohol", "CCCO", "positive", 1, 1, "C3H7+", ("CCC",), 1,
+            ("primary_alcohol", "CCCO", "positive", 1, "C3H7+", ("CCC",), 1,
              ("C3H7+", "C2H5+", "CH3+"), ("C2H5O+",)),
-            ("secondary_alcohol", "CC(O)C", "positive", 1, 1, "C3H7+", ("CCC",), 1,
+            ("secondary_alcohol", "CC(O)C", "positive", 1, "C3H7+", ("CCC",), 1,
              ("C3H7+", "C2H5+", "CH3+"), ("C2H5O+",)),
-            ("equivalent_hydroxyl_sites", "OCCO", "positive", 1, 1, "C2H5O+", ("CCO",), 2,
+            ("equivalent_hydroxyl_sites", "OCCO", "positive", 1, "C2H5O+", ("CCO",), 2,
              ("C2H5O+", "CH3+", "C2H3+"), ()),
-            ("different_hydroxyl_sites", "OCC(O)CO", "positive", 1, 1, "C3H7O2+",
+            ("different_hydroxyl_sites", "OCC(O)CO", "positive", 1, "C3H7O2+",
              ("CC(O)CO", "OCCCO"), 3, ("C3H7O2+", "C2H5O+", "CH3+"), ()),
-            ("double_water_loss", "OCCO", "positive", 2, 2, "C2H3+", ("CC",), 2,
+            ("double_water_loss", "OCCO", "positive", 2, "C2H3+", ("CC",), 2,
              ("C2H3+",), ("CH3+", "C2H5O+")),
-            ("seeded_double_water_loss", "OCCO", "positive", 2, 2, "C2H3+", ("CC",), 1,
+            ("seeded_double_water_loss", "OCCO", "positive", 2, "C2H3+", ("CC",), 1,
              ("C2H3+",), ("C2H5O+",)),
-            ("seeded_double_loss_over_budget", "OCCO", "positive", 2, 1, "C2H3+", (), 0,
-             (), ("C2H3+", "C2H5O+")),
-            ("double_loss_over_budget", "OCCO", "positive", 2, 1, "C2H3+", (), 0,
-             (), ("C2H3+", "C2H5O+")),
-            ("zero_precursor_reaction_budget", "CCCO", "positive", 1, 0, "C3H7+", (), 0,
-             (), ("C3H7+", "C2H5+")),
-            ("ether_without_hydroxyl", "CCOCC", "positive", 1, 1, "C4H9+", (), 0,
+            ("ether_without_hydroxyl", "CCOCC", "positive", 1, "C4H9+", (), 0,
              (), ("C4H9+", "C2H5+")),
-            ("negative_water_loss", "CCCO", "negative", 1, 1, "C3H5-", ("CCC",), 1,
+            ("negative_water_loss", "CCCO", "negative", 1, "C3H5-", ("CCC",), 1,
              ("C3H5-", "C2H3-", "CH-"), ("C2H3O-",)),
         )
-        for name, smiles, polarity, loss_count, limit, formula, structures, count, assigned, unassigned in scenarios:
+        for name, smiles, polarity, loss_count, formula, structures, count, assigned, unassigned in scenarios:
             suffix = "+" if polarity == "positive" else "-"
             base = "[M+H]+" if polarity == "positive" else "[M-H]-"
             loss = "H2O" if loss_count == 1 else "2H2O"
@@ -602,7 +587,7 @@ class TestFragmenter(unittest.TestCase):
                     expected_precursor_formula=Formula.parse("C3H9O+")))
             groups.append(dict(name=name, smiles=smiles,
                 fragmenter_json=preset_dir / ("fragmenter_single_bond_pos.json" if polarity == "positive" else "fragmenter_single_bond_neg.json"),
-                precursor_candidate_max_reaction_count=limit, seed_water_loss_count=loss_count if name.startswith("seeded_") else 0, test_cases=cases))
+                seed_water_loss_count=loss_count if name.startswith("seeded_") else 0, test_cases=cases))
         return groups
 
     def _water_loss_seeds(self, fragmenter: Fragmenter, source: Compound, count: int) -> Tuple[ReactionSequence, ...]:

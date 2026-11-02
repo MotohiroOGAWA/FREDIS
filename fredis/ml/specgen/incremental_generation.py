@@ -513,9 +513,7 @@ def _prediction_data(chemistry, precursor_types, energies):
             tuple(str(a) for a in precursor_types),
         ),
         formula_elements=tuple(gen.tensorizer.element_order),
-        max_reaction_role_count=max(
-            (len(r.source_atom_maps) for r in chemistry.reactions), default=0
-        ),
+
         source_atom_capacity=chemistry.source_graph.num_nodes,
     )
     return data

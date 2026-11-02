@@ -57,7 +57,6 @@ class ReactionPreparation:
     collision_energy_eV: Tensor
     # Unique sets of batch-global reaction IDs; no group/Compound/teacher ownership.
     reaction_sets: ReactionSet = field(kw_only=True)
-    max_reaction_role_count: int = field(default=0, kw_only=True)
     source_atom_capacity: int = field(default=0, kw_only=True)
     # Normalized chemical/observational data; independent of branch supervision.
     annotations: AnnotatedSpectrumData | None = field(default=None, kw_only=True)
@@ -363,9 +362,6 @@ def prepare_source_reactions(
             torch.zeros(group_count, dtype=torch.long), main_adduct_index
         ),
         source_atom_capacity=len(maps),
-        max_reaction_role_count=max(
-            (len(a.source_atom_maps) for a in reactions), default=0
-        ),
         states=ReactionContextData(
             branch_group_index=torch.tensor(owners),
             transition_parent_index=transition_parent,

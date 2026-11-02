@@ -13,7 +13,6 @@ from pathlib import Path
 DEFAULT_SYMBOLS = ("C", "N", "O", "P", "S", "F", "Cl", "Br", "I")
 OPTIONS = {
     "max_reaction_count": ("fragment_ion_tree_builder", "max_reaction_count"),
-    "precursor_max_reaction_count": ("precursor_candidate_max_reaction_count",),
     "mass_tolerance": ("mass_tolerance",),
 }
 
@@ -32,11 +31,6 @@ def configure_chemistry_options(parser: argparse.ArgumentParser) -> None:
         "--max-reaction-count",
         type=int,
         help="Override fragment_ion_tree_builder.max_reaction_count.",
-    )
-    parser.add_argument(
-        "--precursor-max-reaction-count",
-        type=int,
-        help="Override precursor_candidate_max_reaction_count.",
     )
     parser.add_argument(
         "--mass-tolerance", help="Override mass_tolerance, e.g. 0.01Da,10ppm."

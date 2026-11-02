@@ -1,0 +1,61 @@
+{
+  "fragment_ion_adduct_rule_set": {
+    "name": "NIST23_plus",
+    "hydrogen_shift_min": -5,
+    "hydrogen_shift_max": 0,
+    "adduct_rules": [
+      {
+        "name": "pos_H",
+        "adduct_type": "[M+H]+",
+        "fragment_ion_adducts": [
+          "[M+H]+"
+        ]
+      },
+      {
+        "name": "pos_H_H2O_loss",
+        "adduct_type": "[M+H-H2O]+",
+        "fragment_ion_adducts": [
+          "[M+H]+"
+        ]
+      },
+      {
+        "name": "pos_H_2H2O_loss",
+        "adduct_type": "[M+H-2H2O]+",
+        "fragment_ion_adducts": [
+          "[M+H]+"
+        ]
+      },
+      {
+        "name": "pos_H_NH3_loss",
+        "adduct_type": "[M+H-NH3]+",
+        "fragment_ion_adducts": [
+          "[M+H]+"
+        ]
+      },
+      {
+        "name": "pos_Na",
+        "adduct_type": "[M+Na]+",
+        "fragment_ion_adducts": [
+          "[M+Na]+",
+          "[M+H]+"
+        ]
+      },
+      {
+        "name": "pos_2M_H_to_M",
+        "adduct_type": "[2M+H]+",
+        "fragment_ion_adducts": [
+          "[2M+H]+",
+          "[M+H]+"
+        ]
+      },
+      {
+        "name": "pos_NH4",
+        "adduct_type": "[M+NH4]+",
+        "fragment_ion_adducts": [
+          "[M+NH4]+",
+          "[M+H]+"
+        ]
+      }
+    ]
+  }
+}

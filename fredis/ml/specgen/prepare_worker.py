@@ -44,13 +44,8 @@ def prepare_compound_cache(smiles: str, adduct_strs, fragmenter) -> dict:
         try:
             adduct = Adduct.parse(adduct_str)
             if precursor_tree is None:
-                # Bounded by precursor_candidate_max_reaction_count, built at
-                # most once per compound regardless of how many adducts it
-                # was requested with.
-                precursor_tree = fragmenter.build_fragment_ion_tree(
-                    source,
-                    max_reaction_count=fragmenter.precursor_candidate_max_reaction_count,
-                )
+                # Use the same reaction budget as training, once per compound.
+                precursor_tree = fragmenter.build_fragment_ion_tree(source)
             sequences = {
                 pa.reaction_sequence
                 for pa in fragmenter.resolve_precursor_reactions(precursor_tree, adduct)

@@ -38,6 +38,8 @@ class SpectrumModelBatch:
     node_smiles: tuple[str, ...] = ()
     canonical_data: object | None = None
     target_mask: Tensor | None = None
+    precursor_state_mask: Tensor | None = None
+    precursor_formula_tensor: Tensor | None = None
 
     @property
     def state_adducts(self) -> tuple[str, ...]:
@@ -59,6 +61,8 @@ class SpectrumModelBatch:
 
     def to(self, device: str | torch.device):
         names = (
+            "precursor_state_mask",
+            "precursor_formula_tensor",
             "state_node_index",
             "state_sample_index",
             "state_formula_tensor",
@@ -174,7 +178,9 @@ def prepare_spectrum_model_batch(
     adduct_indices = []
     hydrogen_shifts = []
     node_offset = 0
+    source_offsets = []
     for branch_group, tree in enumerate(decoded.trees):
+        source_offsets.append(node_offset)
         group_samples = (
             (sample_branch_group_index == branch_group).nonzero().flatten().tolist()
         )
@@ -201,6 +207,18 @@ def prepare_spectrum_model_batch(
         state_mz=torch.empty(len(nodes), dtype=torch.float64),
         state_adduct_index=torch.tensor(adduct_indices, dtype=torch.long),
         state_hydrogen_shift=torch.tensor(hydrogen_shifts, dtype=torch.long),
+        precursor_formula_tensor=tensorizer.formulas_to_tensor(
+            [
+                precursor_types[sample]
+                .apply_to_formula(
+                    decoded.compounds[
+                        source_offsets[int(sample_branch_group_index[sample])]
+                    ].formula
+                )
+                .normalized
+                for sample in range(sample_count)
+            ]
+        ),
         precursor_adducts=tuple(str(a) for a in precursor_types),
         ion_type_strs=tuple(ion_vocab),
         node_smiles=tuple(c.smiles for c in decoded.compounds),
@@ -223,10 +241,12 @@ def annotate_ion_conditions(
         formulas.append(formula)
         mzs.append(formula.exact_mass / abs(ion.charge))
     device = data.state_node_index.device
-    return replace(
-        data,
-        state_formula_tensor=tensorizer.formulas_to_tensor(formulas, device=device),
-        state_mz=torch.tensor(mzs, dtype=torch.float64, device=device),
+    return with_precursor_states(
+        replace(
+            data,
+            state_formula_tensor=tensorizer.formulas_to_tensor(formulas, device=device),
+            state_mz=torch.tensor(mzs, dtype=torch.float64, device=device),
+        )
     )
 
 
@@ -314,6 +334,16 @@ def collate_spectrum_model_batches(
         state_adduct_index=torch.cat(adduct_indices),
         state_hydrogen_shift=torch.cat(hydrogen_shifts),
         target_intensity=torch.cat(targets) if targets else None,
+        precursor_state_mask=(
+            torch.cat([item.precursor_state_mask for item in items])
+            if all(item.precursor_state_mask is not None for item in items)
+            else None
+        ),
+        precursor_formula_tensor=(
+            torch.cat([item.precursor_formula_tensor for item in items])
+            if all(item.precursor_formula_tensor is not None for item in items)
+            else None
+        ),
         precursor_adducts=tuple(
             a for item in items for a in getattr(item, "precursor_adducts", ())
         ),
@@ -374,20 +404,48 @@ def spectrum_batch_from_input(data, targets=None):
             targets.supervision_mask
         )
         mask = available[samples, formula]
-    return SpectrumModelBatch(
-        decoded=compound_graph_display(data),
-        state_node_index=e.compound_index[explanation],
-        state_sample_index=samples,
-        state_formula_tensor=data.formulas.composition[formula].float(),
-        state_mz=data.formulas.mz[formula],
-        state_adduct_index=e.fragment_ion_adduct_index[explanation],
-        state_hydrogen_shift=data.adducts.hydrogen_shifts[
-            e.hydrogen_shift_index[explanation]
-        ],
-        target_intensity=target,
-        precursor_adducts=data.conditions.observed_adducts,
-        ion_type_strs=data.adducts.fragment_ion_adducts,
-        node_smiles=data.compounds.smiles,
-        canonical_data=data.for_prediction(),
-        target_mask=mask,
+    source_indices = data.source_compounds.compound_index[
+        data.branch_groups.source_compound_index[data.sample_branch_group_index]
+    ].tolist()
+    precursor_formulas = [
+        Adduct.parse(adduct)
+        .apply_to_formula(data.compounds.compounds[cid].formula)
+        .normalized
+        for cid, adduct in zip(source_indices, data.conditions.observed_adducts)
+    ]
+    return with_precursor_states(
+        SpectrumModelBatch(
+            decoded=compound_graph_display(data),
+            state_node_index=e.compound_index[explanation],
+            state_sample_index=samples,
+            state_formula_tensor=data.formulas.composition[formula].float(),
+            state_mz=data.formulas.mz[formula],
+            state_adduct_index=e.fragment_ion_adduct_index[explanation],
+            state_hydrogen_shift=data.adducts.hydrogen_shifts[
+                e.hydrogen_shift_index[explanation]
+            ],
+            target_intensity=target,
+            precursor_formula_tensor=FormulaTensorizer(
+                data.formula_elements
+            ).formulas_to_tensor(precursor_formulas, device=data.device),
+
+            precursor_adducts=data.conditions.observed_adducts,
+            ion_type_strs=data.adducts.fragment_ion_adducts,
+            node_smiles=data.compounds.smiles,
+            canonical_data=data.for_prediction(),
+            target_mask=mask,
+        )
+    )
+
+
+def with_precursor_states(data):
+    """Resolve precursor identity during chemistry preparation, before scoring."""
+    if data.precursor_formula_tensor is None:
+        return data
+    return replace(
+        data,
+        precursor_state_mask=(
+            data.state_formula_tensor
+            == data.precursor_formula_tensor[data.state_sample_index]
+        ).all(1),
     )

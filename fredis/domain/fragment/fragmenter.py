@@ -20,17 +20,6 @@ from .reaction import ReactionPatternSet, ReactionSequenceResult, ReactionSequen
 class Fragmenter:
     fragment_ion_tree_builder: FragmentIonTreeBuilder
     mass_tolerance: MassTolerance
-    # Precursor selection belongs to Fragmenter, not the tree builder.
-    precursor_candidate_max_reaction_count: int = 0
-
-    def __post_init__(self) -> None:
-        if (
-            type(self.precursor_candidate_max_reaction_count) is not int
-            or self.precursor_candidate_max_reaction_count < 0
-        ):
-            raise ValueError(
-                "precursor_candidate_max_reaction_count must be a non-negative integer"
-            )
 
     @property
     def adduct_types(self) -> Tuple[Adduct, ...]:
@@ -119,9 +108,9 @@ class Fragmenter:
         """The reaction combination(s) on Source that select precursor_type's ion.
 
         A node is a precursor when its compound, a shared hydrogen shift and
-        the main adduct give the precursor formula. Every reaction combination
-        reaching that node within precursor_candidate_max_reaction_count
-        reactions is returned. An empty result means no precursor is reachable.
+        an allowed fragment-ion adduct give the precursor formula. Every reaction combination
+        reaching that node within the fragment-tree reaction budget is returned.
+        An empty result means no precursor is reachable.
         """
         return self._resolve_precursor_reactions(
             fragment_ion_tree,
@@ -156,6 +145,7 @@ class Fragmenter:
             (precursor_type, tuple(peaks_mz)) for precursor_type, peaks_mz in peak_sets
         )
         sequences_by_node = self._reaction_sequences_by_node(fragment_ion_tree)
+        sequence_parents = self._sequence_parents(fragment_ion_tree)
         precursors_by_type: Dict[Adduct, frozenset[PrecursorReaction]] = {}
         records_by_main_adduct: Dict[Adduct, List[int]] = defaultdict(list)
         for record_index, (precursor_type, _) in enumerate(peak_sets_tuple):
@@ -204,6 +194,8 @@ class Fragmenter:
                                 self._reaction_combinations_for_node(
                                     sequences_by_node.get(node_index, ()),
                                     precursors_by_type[precursor_type],
+                                    fragment_ion_tree=fragment_ion_tree,
+                                    sequence_parents=sequence_parents,
                                 )
                             )
                         for sequence, precursor in combinations_cache[key]:
@@ -257,6 +249,9 @@ class Fragmenter:
                 f"Only singly charged adducts are supported: {precursor_type}"
             )
 
+        if precursor_type in self.adduct_types:
+            return precursor_type
+
         matched_adduct_flags, residual_component_adduct = (
             Adduct.split_by_reference_adducts(
                 precursor_type,
@@ -302,26 +297,27 @@ class Fragmenter:
         sequences_by_node: Dict[int, frozenset[ReactionSequence | None]],
     ) -> frozenset[PrecursorReaction]:
         main_adduct_type = self._resolve_main_adduct_type(precursor_type)
+        ion_adducts = self.adduct_rule_set.get_rule_by_adduct_type(
+            main_adduct_type
+        ).fragment_ion_adducts
         precursor_formula = precursor_type.apply_to_formula(
             fragment_ion_tree.fragment_compounds[0].formula
         ).normalized
         precursors: Set[PrecursorReaction] = set()
         for node_index, compound in enumerate(fragment_ion_tree.fragment_compounds):
             if not any(
-                main_adduct_type.apply_to_formula(
+                ion.apply_to_formula(
                     shift.apply_to_formula(compound.formula).normalized
                 ).normalized
                 == precursor_formula
+                for ion in ion_adducts
                 for shift in fragment_ion_tree.hydrogen_shift_adducts
             ):
                 continue
             for sequence in sequences_by_node.get(node_index, ()):
                 if (node_index == 0) != (sequence is None):
                     continue
-                if (
-                    reaction_count(sequence)
-                    <= self.precursor_candidate_max_reaction_count
-                ):
+                if reaction_count(sequence) <= self.tree_max_reaction_count:
                     precursors.add(
                         PrecursorReaction(
                             node_index=node_index, reaction_sequence=sequence
@@ -333,6 +329,9 @@ class Fragmenter:
         self,
         sequences: Iterable[ReactionSequence | None],
         precursors: frozenset[PrecursorReaction],
+        *,
+        fragment_ion_tree: FragmentIonTree | None = None,
+        sequence_parents: dict | None = None,
     ) -> Tuple[Tuple[ReactionSequence | None, PrecursorReaction], ...]:
         """Combinations reaching a node within the reaction limit, each paired
         with every precursor combination it contains."""
@@ -342,7 +341,41 @@ class Fragmenter:
             if reaction_count(sequence) <= self.tree_max_reaction_count
             for precursor in precursors
             if contains(sequence, precursor.reaction_sequence)
+            and (
+                fragment_ion_tree is None
+                or self._has_precursor_ancestor(
+                    fragment_ion_tree,
+                    sequence,
+                    precursor.reaction_sequence,
+                    parents=sequence_parents,
+                )
+            )
         )
+
+    @staticmethod
+    def _sequence_parents(tree):
+        parents = defaultdict(set)
+        for edge_index in range(tree.num_edges):
+            for transition in tree.get_edge(edge_index).transitions:
+                parents[transition.reaction_sequence].add(
+                    transition.parent_reaction_sequence
+                )
+        return parents
+
+    @staticmethod
+    def _has_precursor_ancestor(tree, sequence, precursor_sequence, *, parents=None):
+        """Require a recorded path through the precursor, not just set inclusion."""
+        if parents is None:
+            parents = Fragmenter._sequence_parents(tree)
+        pending, seen = [sequence], set()
+        while pending:
+            current = pending.pop()
+            if current == precursor_sequence:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(parents[current])
+        return False
 
     @staticmethod
     def _fewest_reactions(
@@ -384,7 +417,6 @@ class Fragmenter:
 
         return {
             "fragment_ion_tree_builder": builder_dict,
-            "precursor_candidate_max_reaction_count": self.precursor_candidate_max_reaction_count,
             "mass_tolerance": format_mass_tolerance(self.mass_tolerance),
         }
 
@@ -398,9 +430,6 @@ class Fragmenter:
         return cls(
             fragment_ion_tree_builder=FragmentIonTreeBuilder.from_dict(builder_dict),
             mass_tolerance=parse_mass_tolerance(data["mass_tolerance"]),
-            precursor_candidate_max_reaction_count=data.get(
-                "precursor_candidate_max_reaction_count", 0
-            ),
         )
 
     def to_json(self, path: str | Path) -> None:
@@ -431,5 +460,4 @@ class Fragmenter:
         return Fragmenter(
             fragment_ion_tree_builder=self.fragment_ion_tree_builder.copy(),
             mass_tolerance=self.mass_tolerance,
-            precursor_candidate_max_reaction_count=self.precursor_candidate_max_reaction_count,
         )

@@ -40,6 +40,20 @@ def _transition_chains(transitions_by_sequence, sequence):
     return tuple(dict.fromkeys(chains))
 
 
+def _precursor_teacher_paths(transitions_by_sequence, explanations):
+    """Keep complete recorded paths that pass through the annotated precursor."""
+    paths = []
+    pairs = dict.fromkeys(
+        (annotation.reaction_sequence, annotation.precursor.reaction_sequence)
+        for annotation in explanations
+    )
+    for sequence, precursor_sequence in pairs:
+        for path in _transition_chains(transitions_by_sequence, sequence):
+            if any(state == precursor_sequence for state, _ in path):
+                paths.append(path)
+    return list(dict.fromkeys(paths))
+
+
 def _transitions_by_sequence(tree):
     result = {}
     for edge_index in range(tree.num_edges):
@@ -226,12 +240,7 @@ class _ChemistryPreparationBuilder:
         for peak_annotations in assignments:
             peaks = []
             for explanations in peak_annotations:
-                paths = []
-                for sequence in dict.fromkeys(
-                    annotation.reaction_sequence for annotation in explanations
-                ):
-                    paths.extend(_transition_chains(transitions_by_sequence, sequence))
-                peaks.append(list(dict.fromkeys(paths)))
+                peaks.append(_precursor_teacher_paths(transitions_by_sequence, explanations))
             teacher_paths.append(peaks)
         mains = [
             fragmenter._resolve_main_adduct_type(adduct) for adduct in precursor_types

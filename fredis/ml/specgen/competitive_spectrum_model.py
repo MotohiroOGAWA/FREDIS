@@ -447,10 +447,13 @@ class CompetitiveSpectrumModel(nn.Module):
             root_nodes=execution_compounds[root_rows],
             log=True,
         )
-        initial = molecular.new_zeros(execution_compounds.numel())
-        initial[root_rows] = 1
+        initial = topology.initial.to(molecular)
         log_retained, log_sink = propagate_log_probability(
-            probability_log(initial), source, target, probability, levels=topology.levels
+            probability_log(initial),
+            source,
+            target,
+            probability,
+            levels=topology.levels,
         )
         sink = log_sink.exp()
         log_event_probability = probability
@@ -633,11 +636,17 @@ class CompetitiveSpectrumModel(nn.Module):
         if cached is not None and cached[0] is samples:
             return cached[1]
         device = data.state_node_index.device
+        if getattr(data, "precursor_state_mask", None) is not None:
+            result = data.precursor_state_mask
+            data.__dict__["_precursor_candidates"] = (samples, result)
+            return result
         if getattr(data, "canonical_data", None) is not None:
             core = data.canonical_data
             roots = core.source_compounds.compound_index[
                 core.reaction_contexts.root_source_compound_index[
-                    core.sample_branch_group_index]]
+                    core.sample_branch_group_index
+                ]
+            ]
             is_root = data.state_node_index == roots[samples]
         else:
             groups = data.decoded.node_sample_index
@@ -647,8 +656,15 @@ class CompetitiveSpectrumModel(nn.Module):
             is_root = data.state_node_index == roots[groups[data.state_node_index]]
         signatures = [_adduct_without_hydrogen(ion) for ion in data.ion_type_strs]
         same_ion = torch.tensor(
-            [[_adduct_without_hydrogen(precursor) == signature for signature in signatures]
-             for precursor in data.precursor_adducts], dtype=torch.bool, device=device,
+            [
+                [
+                    _adduct_without_hydrogen(precursor) == signature
+                    for signature in signatures
+                ]
+                for precursor in data.precursor_adducts
+            ],
+            dtype=torch.bool,
+            device=device,
         )
         result = is_root & same_ion[samples, data.state_adduct_index]
         data.__dict__["_precursor_candidates"] = (samples, result)
@@ -668,6 +684,32 @@ class CompetitiveSpectrumModel(nn.Module):
         if sum(root_mask) != sample_count:
             raise ValueError("Each spectrum sample requires exactly one fragment root")
         initial = molecular.new_tensor(root_mask)
+        if getattr(data, "precursor_state_mask", None) is not None:
+            candidate = self._precursor_candidates(data, data.state_sample_index)
+            starts = {
+                (int(sample), int(node))
+                for sample, node in zip(
+                    data.state_sample_index[candidate].tolist(),
+                    data.state_node_index[candidate].tolist(),
+                )
+            }
+            eligible = [(sample, node) in starts for sample, node in keys]
+            counts = {}
+            for (sample, _), keep in zip(keys, eligible):
+                if keep:
+                    counts[sample] = counts.get(sample, 0) + 1
+            if len(counts) != sample_count:
+                from ..input._reaction_preparation import UnresolvedPrecursorError
+
+                raise UnresolvedPrecursorError(
+                    "No reachable precursor structure in spectrum branches"
+                )
+            initial = molecular.new_tensor(
+                [
+                    1 / counts[sample] if keep else 0
+                    for (sample, _), keep in zip(keys, eligible)
+                ]
+            )
         edges = data.decoded.edge_index.detach().cpu().T.tolist()
         reactions = data.decoded.edge_added_reaction_index.detach().cpu().tolist()
         events = set()

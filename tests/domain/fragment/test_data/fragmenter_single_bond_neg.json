@@ -39,6 +39,6 @@
       ]
     }
   },
-  "precursor_candidate_max_reaction_count": 1,
+
   "mass_tolerance": "0.01Da,10ppm"
 }

@@ -80,10 +80,41 @@ With `hydrogen_shift_min=-5` and `hydrogen_shift_max=0`, two ion choices produce
 validity and positive m/z filtering. The State Head has a slice for each condition
 within its main-adduct bank.
 
-A neutral-loss precursor can resolve to a registered main-adduct rule through
-precursor chemistry. `precursor_candidate_max_reaction_count` controls that
-resolution search separately from fragment-tree reaction depth. An unsupported
-precursor is reported rather than silently assigned to a different learned bank.
+`adduct_type` describes the observed precursor relative to the original Source.
+It is not an instruction to repeat a loss on every fragment. For example:
+
+```json
+{
+  "name": "pos_H_H2O_loss",
+  "adduct_type": "[M+H-H2O]+",
+  "fragment_ion_adducts": ["[M+H]+"]
+}
+```
+
+The target precursor formula is Source + H − H2O. Precursor resolution searches
+for actual reaction-product structures that reach that formula under `[M+H]+`
+and an allowed hydrogen shift. It applies the fragment ion to the precursor too.
+The original Source remains the structural root; a loss must be represented by
+reaction chemistry, and its product must occur on the recorded ancestor path of
+an annotated fragment. Formula subtraction alone does not establish a loss site.
+If no such product exists, the precursor is unresolved. Do not include
+`[M+H-H2O]+` as a blanket fragment-ion condition for this rule: it would allow an
+additional loss independently of structural ancestry.
+
+Training and prediction initialize spectrum probability on the matching
+precursor execution histories, not on the untransformed Source. Only their
+descendants can emit nonzero spectrum intensity. Multiple matching histories
+receive equal initial probability; Source stays available as model context and
+bookkeeping. Ion/hydrogen-shift states and precursor identity are resolved during
+preparation, before neural scoring. Exact registered precursor adducts take
+precedence over fallback main-adduct matching.
+
+Register the intended precursor types explicitly in the adduct rule set. Precursor
+resolution uses the same `max_reaction_count` budget as fragment-tree generation;
+there is no separate precursor reaction limit. An unresolved precursor is reported
+rather than synthesized by subtracting a neutral loss from every fragment.
+Regenerate prepared datasets and retrain models after switching precursor or
+fragment-ion rules; changing labels does not add learned chemistry to old checkpoints.
 
 ## Mass and collision energy
 

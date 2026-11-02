@@ -395,10 +395,9 @@ fragmenter's adduct rule set:
 
 For each record, the precursor formula is its adduct applied to the source
 formula. A tree node can be the precursor if its formula plus a hydrogen shift plus the
-main adduct equals the precursor formula. Every reaction combination that
-reaches such a node with at most `precursor_candidate_max_reaction_count`
-reactions (default 0, which means only the source itself) is a precursor
-combination.
+allowed fragment-ion adduct equals the precursor formula. Every reaction combination
+reaching such a node within the fragment tree's `max_reaction_count` budget is a
+precursor combination.
 
 - Records with no such precursor are dropped. The manifest reports them as
   `rejected_sample_count`, with the reason `N of M records dropped: unresolved

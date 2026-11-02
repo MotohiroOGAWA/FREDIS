@@ -104,8 +104,7 @@ python -m fredis.cli train create-fragment-tree-data \
   --input spectra.msds --output-dir data/prepared \
   --params chemistry.fragmenter.pft --validation-ratio 0.1 \
   --mass-tolerance 0.01Da,10ppm \
-  --max-reaction-count 2 \
-  --set precursor_candidate_max_reaction_count=1
+  --max-reaction-count 2
 ```
 
 Precedence is: file configuration, inline `--params-json`, named overrides,

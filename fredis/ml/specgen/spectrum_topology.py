@@ -68,6 +68,7 @@ class CanonicalSpectrumTopology:
     state_fragment: Tensor
     physical_roots: Tensor
     levels: tuple
+    initial: Tensor
 
 
 def canonical_spectrum_topology(data):
@@ -81,32 +82,81 @@ def canonical_spectrum_topology(data):
     compounds = execution.compound_index[rows]
     roots = starts + local[execution.root_index[selected]]
     edge_rows, edge_samples, _, _ = expand_group_rows(
-        execution.branch_group_index[execution.source_index], selected, core.num_branch_groups
+        execution.branch_group_index[execution.source_index],
+        selected,
+        core.num_branch_groups,
     )
     source = starts[edge_samples] + local[execution.source_index[edge_rows]]
     target = starts[edge_samples] + local[execution.target_index[edge_rows]]
     reactions = execution.reaction_index[edge_rows]
     events = torch.arange(rows.numel(), device=rows.device)
     source = torch.cat((source, events.repeat_interleave(2)))
-    target = torch.cat((target, torch.stack((events, torch.full_like(events, -1)), 1).flatten()))
+    target = torch.cat(
+        (target, torch.stack((events, torch.full_like(events, -1)), 1).flatten())
+    )
     reactions = torch.cat((reactions, rows.new_tensor([-1, -2]).repeat(rows.numel())))
-    event_type = torch.cat((torch.zeros_like(edge_rows), rows.new_tensor([1, 2]).repeat(rows.numel())))
+    event_type = torch.cat(
+        (torch.zeros_like(edge_rows), rows.new_tensor([1, 2]).repeat(rows.numel()))
+    )
     fragments, inverse = torch.unique(
         torch.stack((samples, compounds), 1), dim=0, return_inverse=True
     )
     compound_count = len(core.compounds.compounds)
     physical_keys = fragments[:, 0] * compound_count + fragments[:, 1]
     sample_roots = execution.compound_index[execution.root_index[selected]]
-    root_keys = torch.arange(selected.numel(), device=rows.device) * compound_count + sample_roots
+    root_keys = (
+        torch.arange(selected.numel(), device=rows.device) * compound_count
+        + sample_roots
+    )
     physical_roots = torch.searchsorted(physical_keys, root_keys)[fragments[:, 0]]
     state_keys = data.state_sample_index * compound_count + data.state_node_index
     state_fragment = torch.searchsorted(physical_keys, state_keys)
-    if bool(((state_fragment >= physical_keys.numel()) |
-             (physical_keys[state_fragment.clamp_max(physical_keys.numel() - 1)] != state_keys)).any()):
+    if bool(
+        (
+            (state_fragment >= physical_keys.numel())
+            | (
+                physical_keys[state_fragment.clamp_max(physical_keys.numel() - 1)]
+                != state_keys
+            )
+        ).any()
+    ):
         raise ValueError("Ion states must reference reachable spectrum compounds")
     depth = core.reaction_sets.reaction_ptr.diff()[execution.reaction_set_index[rows]]
+    initial = torch.zeros(rows.numel(), device=rows.device)
+    if data.precursor_state_mask is None:
+        initial[roots] = 1
+    else:
+        # Match the observed ion on actual structures, then start probability at
+        # those execution histories. Source remains the bookkeeping/feature root.
+        is_precursor = data.precursor_state_mask
+        physical_precursor = torch.zeros(
+            fragments.shape[0], dtype=torch.long, device=rows.device
+        )
+        physical_precursor.scatter_reduce_(
+            0, state_fragment, is_precursor.long(), reduce="amax", include_self=True
+        )
+        start = physical_precursor[inverse].bool()
+        counts = torch.bincount(samples[start], minlength=core.num_samples)
+        if bool((counts == 0).any()):
+            from ..input._reaction_preparation import UnresolvedPrecursorError
+
+            raise UnresolvedPrecursorError(
+                "Generated branches contain no reachable precursor structure"
+            )
+        initial[start] = 1 / counts[samples[start]].float()
     return CanonicalSpectrumTopology(
-        rows, compounds, samples, roots, source, target, reactions, event_type,
-        fragments, inverse, state_fragment, physical_roots,
+        rows,
+        compounds,
+        samples,
+        roots,
+        source,
+        target,
+        reactions,
+        event_type,
+        fragments,
+        inverse,
+        state_fragment,
+        physical_roots,
         probability_levels(source, target, rows.numel(), depth),
+        initial,
     )

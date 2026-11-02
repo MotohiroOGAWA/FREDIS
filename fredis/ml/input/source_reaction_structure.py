@@ -68,7 +68,6 @@ class SpectrumPredictionData(TensorTable):
     spectrum_explanations: SpectrumExplanationData
     conditions: SpectrumConditions
     formula_elements: tuple[str, ...]
-    max_reaction_role_count: int = 0
     source_atom_capacity: int = 0
 
     @property
@@ -697,7 +696,6 @@ class SpectrumPredictionData(TensorTable):
             ),
             formula_elements=items[0].formula_elements,
             source_atom_capacity=max(a.source_atom_capacity for a in items),
-            max_reaction_role_count=max(a.max_reaction_role_count for a in items),
         )
         training = all(isinstance(a, SourceReactionStructure) for a in items)
         if training:
@@ -1012,7 +1010,6 @@ class SourceReactionStructure(SpectrumPredictionData):
                 ),
             ),
             formula_elements=raw.formula_elements,
-            max_reaction_role_count=raw.max_reaction_role_count,
             source_atom_capacity=raw.source_atom_capacity,
             annotations=AnnotatedSpectrumData(
                 a.spectra,
