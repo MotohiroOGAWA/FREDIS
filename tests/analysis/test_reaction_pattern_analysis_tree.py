@@ -683,3 +683,67 @@ def test_formula_score_frequency_requires_formulas_and_excludes_empty_population
             frequency = reader.score_frequency(metric, formula_only=True)
             assert all(series['n'] == 0 and series['excludedSamples'] == 5
                        for series in frequency['series'])
+
+
+# -- Per-dataset summaries -----------------------------------------------------------------
+def _same(left, right):
+    if isinstance(left, float) and isinstance(right, float):
+        return (math.isnan(left) and math.isnan(right)) or math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-12)
+    return left == right
+
+
+def _same_rows(left: list[dict], right: list[dict], ignore=()):
+    assert len(left) == len(right)
+    for a, b in zip(left, right):
+        keys = (set(a) | set(b)) - set(ignore)
+        assert {key for key in keys if not _same(a.get(key), b.get(key))} == set(), (a, b)
+
+
+def test_dataset_summaries_equal_a_run_of_that_dataset_alone(analysis, inputs, tmp_path):
+    # CCO has spectra in both datasets, so its rows are split between them.
+    with ReactionPatternAnalysisResult(analysis["path"]) as reader:
+        assert reader.dataset_summaries_state() == "available"
+        datasets = reader.table_records("datasets")
+        assert [row["dataset_id"] for row in datasets] == [1, 2] or len(datasets) == 2
+        total = reader.node_summary()
+        assert reader.node_summary("") == total and reader.node_summary("all") == total
+        for dataset, path in zip(datasets, inputs):
+            alone = _run(tmp_path / path.stem, [path])
+            with ReactionPatternAnalysisResult(alone) as other:
+                assert other.dataset_summaries_state() == "single"
+                # A single-dataset result's dataset view is its total.
+                assert other.node_summary(other.table_records("datasets")[0]["dataset_id"]) == other.node_summary()
+                _same_rows(reader.node_summary(dataset["dataset_id"]), other.node_summary())
+                for node in other.nodes():
+                    _same_rows(reader.node_distribution(node["node_row"], dataset["dataset_id"]),
+                               other.node_distribution(node["node_row"]))
+                scoped, expected = reader.overall_summary(dataset["dataset_id"]), other.overall_summary()
+                for key in ("compounds", "samples", "peaks", "totalIntensity", "compoundsWithImprovement",
+                            "samplesWithImprovement", "newlyAssignedPeaks", "newlyAssignedIntensity",
+                            "applicableCompoundEdges"):
+                    assert _same(scoped[key], expected[key]), key
+        assert reader.node_summary() == total
+        with pytest.raises(ValueError, match="Unknown dataset"):
+            reader.node_summary(99)
+
+
+def test_older_results_rebuild_dataset_summaries_from_saved_peaks(analysis, tmp_path, monkeypatch):
+    import hashlib
+    import shutil
+
+    copy = tmp_path / "older"
+    shutil.copytree(analysis["path"].parent, copy)
+    result = copy / analysis["path"].name
+    with h5py.File(result, "a") as handle:
+        for name in ("dataset_node_summary", "dataset_node_distribution", "dataset_overall_summary"):
+            del handle[name]
+    before = hashlib.sha256(result.read_bytes()).hexdigest()
+    monkeypatch.setattr(chemistry, "run_task", lambda *a, **k: pytest.fail("Rebuilding must not run chemistry"))
+    with ReactionPatternAnalysisResult(analysis["path"]) as current, ReactionPatternAnalysisResult(result) as older:
+        assert older.dataset_summaries_state() == "missing"
+        assert older.info()["datasetSummaries"] == "missing"
+        for dataset in current.table_records("datasets"):
+            _same_rows(older.node_summary(dataset["dataset_id"]), current.node_summary(dataset["dataset_id"]))
+        assert older.dataset_summaries_state() == "available"
+        _same_rows(older.node_summary(), current.node_summary())
+    assert hashlib.sha256(result.read_bytes()).hexdigest() == before

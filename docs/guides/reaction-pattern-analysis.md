@@ -284,6 +284,8 @@ Large tables are chunked and gzip-compressed.
 | `/compound_node_distribution` | compound × node × metric × with/without precursor | n, mean, std, min, q25, median, q75, max, `histogram_json` |
 | `/node_summary` | node | applicable / calculated / skipped / failed / improved counts, weighted and mean coverage (child, parent, Δ), new peaks, overall coverage |
 | `/node_distribution` | node × metric × with/without precursor | over all sample rows of the node |
+| `/dataset_node_summary`, `/dataset_node_distribution` | dataset × node (× metric × with/without precursor) | the same columns for one dataset's spectra alone; empty with a single dataset |
+| `/dataset_overall_summary` | dataset | that dataset's overall summary as `summary_json` |
 | `/sample_summary` | evaluated spectrum | compound, dataset, record, sample index, adduct, CE, precursor m/z, peak/intensity totals |
 | `/sample_node_summary` | spectrum × root, spectrum × applicable edge | assigned counts and coverage; parent, new and Δ values (NaN for roots) |
 | `/compound_condition` | compound × condition | status, kept `sample_index` list, own C path, seed C path, `alias_of` |
@@ -351,6 +353,13 @@ select peak cell  → the C files on the node's path only
   and overall coverage. Selecting a node shows its parent condition, child
   condition, added set, absolute and delta metrics and sample distribution, and
   restricts the compound list to it.
+- **Dataset** (results with several datasets): switches Overall Summary, Tree
+  Edges and the node distributions between **Total** and one dataset. A
+  compound found in several datasets counts only that dataset's spectra, so a
+  dataset's values equal a run of that dataset alone. The Data Filter's dataset
+  follows the same choice, so Score Frequency and the compound list match.
+  Results written before per-dataset summaries existed rebuild them from the
+  saved peaks (B) on first use, in a temporary file; the result is unchanged.
 - **Data Filter / Compound Summary**: filters from A (SMILES, node, node and
   compound status, node coverage and Δ coverage (mean), dataset, adduct,
   collision energy, precursor m/z).
@@ -404,6 +413,8 @@ from fredis.analysis.reaction_pattern import ReactionPatternAnalysisResult, gene
 
 with ReactionPatternAnalysisResult("output/result.reactionpatternanalysis.pft") as result:
     result.node_summary()                                   # A: one row per node / edge
+    result.node_summary(dataset_id=2)                       # A: the same for one dataset
+    result.node_distribution(1, dataset_id=2)
     result.compound_list({"nodeRow": 1}, sort="mean_delta_peak_coverage", descending=True)
     result.compound_node_distribution(compound_id, 1)
     result.compound_peaks(compound_id)                      # B

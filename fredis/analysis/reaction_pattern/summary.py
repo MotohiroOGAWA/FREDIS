@@ -15,6 +15,7 @@ compounds for which the child condition equals the parent condition.
 from __future__ import annotations
 
 from collections import defaultdict
+import dataclasses
 import json
 import math
 from typing import Iterable
@@ -207,14 +208,96 @@ def formula_node_row(aggregate: dict | None) -> dict:
     return row
 
 
+def restrict_to_dataset(
+    comparison: CompoundComparison, dataset_id: int
+) -> CompoundComparison | None:
+    """The comparison seen through one dataset's spectra only; None without any.
+
+    Condition outcomes are shared, so only the evaluated sample positions
+    (``kept``, ``population`` and node sample rows) are narrowed.
+    """
+    group = comparison.group
+    keep = {
+        index
+        for index, sample in enumerate(group.samples)
+        if sample.dataset_id == dataset_id
+    }
+    if not keep:
+        return None
+    narrowed = {}
+
+    def outcome(value):
+        if value is None:
+            return None
+        if id(value) not in narrowed:
+            narrowed[id(value)] = dataclasses.replace(
+                value, kept=tuple(index for index in value.kept if index in keep)
+            )
+        return narrowed[id(value)]
+
+    nodes = [
+        dataclasses.replace(
+            item,
+            outcome=outcome(item.outcome),
+            parent_outcome=outcome(item.parent_outcome),
+            samples=[
+                result for result in item.samples if result.sample.dataset_id == dataset_id
+            ],
+        )
+        for item in comparison.nodes
+    ]
+    return CompoundComparison(
+        group,
+        nodes,
+        {key: outcome(value) for key, value in comparison.outcomes.items()},
+        tuple(index for index in comparison.population if index in keep),
+    )
+
+
+def _rows(columns: dict[str, list]) -> list[dict]:
+    names = list(columns)
+    return [dict(zip(names, values)) for values in zip(*(columns[name] for name in names))]
+
+
+def _dataset_tables(tables: Tables, comparisons, *, tree, datasets, with_formula: bool) -> None:
+    """``dataset_*`` tables: node summaries, distributions and overall per dataset."""
+    for dataset in datasets:
+        dataset_id = int(dataset["dataset_id"])
+        subset = [
+            value
+            for value in (restrict_to_dataset(item, dataset_id) for item in comparisons)
+            if value is not None
+        ]
+        scoped, overall = summarize(
+            subset, tree=tree, datasets=[dataset], by_dataset=False
+        )
+        for row in _rows(scoped.get("node_summary")):
+            if with_formula and "formula_sample_count" not in row:
+                row.update(formula_node_row(None))
+            tables.add("dataset_node_summary", dataset_id=dataset_id, **row)
+        for row in _rows(scoped.get("node_distribution")):
+            tables.add("dataset_node_distribution", dataset_id=dataset_id, **row)
+        tables.add(
+            "dataset_overall_summary",
+            dataset_id=dataset_id,
+            summary_json=json.dumps(overall, ensure_ascii=False),
+        )
+
+
 def summarize(
     comparisons: list[CompoundComparison],
     *,
     tree,
     datasets: list[dict],
     relative_path=lambda value: value,
+    by_dataset: bool = True,
 ) -> tuple[Tables, dict]:
-    """Return every A table plus the overall summary document."""
+    """Return every A table plus the overall summary document.
+
+    With more than one dataset, ``dataset_*`` tables repeat the node summary,
+    node distributions and overall summary for each dataset's spectra alone;
+    the unprefixed tables stay the total over every dataset.
+    """
     tables = Tables()
     nodes = tree.nodes
     formula_totals = formula_node_totals(comparisons)
@@ -640,6 +723,14 @@ def summarize(
             peak_count=int(stats.get("peak_count", 0)),
         )
     _tree_tables(tables, tree)
+    if by_dataset and len(datasets) > 1:
+        _dataset_tables(
+            tables,
+            comparisons,
+            tree=tree,
+            datasets=datasets,
+            with_formula=formula_totals is not None,
+        )
 
     summary = {
         "datasets": len(datasets),

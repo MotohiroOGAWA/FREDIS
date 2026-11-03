@@ -258,16 +258,81 @@ class ReactionPatternAnalysisResult:
             "configuration": self.configuration().get("tree"),
         }
 
+    # -- Per-dataset summaries ------------------------------------------------------
+    def _has_table(self, name: str) -> bool:
+        if ("has", name) not in self._cache:
+            with self._file() as handle:
+                self._cache[("has", name)] = name in handle
+        return self._cache[("has", name)]
+
+    def dataset_summaries_state(self) -> str:
+        """``single`` (one dataset), ``available`` or ``missing`` (older result)."""
+        if len(self._small("datasets")) < 2:
+            return "single"
+        return "available" if self._has_table("dataset_node_summary") else "missing"
+
+    def ensure_dataset_summaries(self, progress=None) -> None:
+        """Rebuild an older result's summaries with per-dataset tables, from saved peaks.
+
+        Like the formula-only coverage switch, the rebuilt summary lives in a
+        temporary file; the result directory is not changed.
+        """
+        import tempfile
+        from .recalculate import recalculate_coverage
+
+        if self.dataset_summaries_state() != "missing":
+            return
+        stored = bool(
+            (self.configuration().get("formulaAssignment") or {}).get(
+                "intensityCoverageFormulaOnly"
+            )
+        )
+        mode = stored if self._coverage_mode is None else self._coverage_mode
+        temporary = tempfile.TemporaryDirectory(prefix="fredis-coverage-")
+        target = Path(temporary.name) / self.path.name
+        try:
+            recalculate_coverage(self, target, mode, progress)
+        except BaseException:
+            temporary.cleanup()
+            raise
+        previous = self._coverage_temporary
+        self._cache.clear()
+        self._coverage_temporary, self._coverage_path = temporary, target
+        self._coverage_mode = mode
+        if previous is not None:
+            previous.cleanup()
+
+    def _dataset_rows(self, name: str, dataset_id) -> list[dict] | None:
+        """Rows of one dataset, or None when the total already is that dataset."""
+        key = int(dataset_id)
+        if key not in {int(row["dataset_id"]) for row in self._small("datasets")}:
+            raise ValueError(f"Unknown dataset {dataset_id}.")
+        state = self.dataset_summaries_state()
+        if state == "single":
+            return None
+        if state == "missing":
+            self.ensure_dataset_summaries()
+        return [
+            {column: value for column, value in row.items() if column != "dataset_id"}
+            for row in self._small(name)
+            if int(row["dataset_id"]) == key
+        ]
+
     # -- A-only queries -----------------------------------------------------------
-    def overall_summary(self) -> dict:
+    def overall_summary(self, dataset_id=None) -> dict:
         if "overall" not in self._cache:
             with self._file() as handle:
                 self._cache["overall"] = json.loads(
                     handle["metadata/overall_summary"].asstr()[()]
                 )
+        value = self._cache["overall"]
+        if dataset_id not in (None, "", "all"):
+            rows = self._dataset_rows("dataset_overall_summary", dataset_id)
+            if rows is not None:
+                value = {**value, **json.loads(rows[0]["summary_json"])} if rows else value
         return {
-            key: (None if isinstance(value, float) and math.isnan(value) else value)
-            for key, value in self._cache["overall"].items()
+            key: (None if isinstance(item, float) and math.isnan(item) else item)
+            for key, item in value.items()
         }
 
     def info(self) -> dict:
@@ -297,10 +362,17 @@ class ReactionPatternAnalysisResult:
             "counts": counts,
             "overall": self.overall_summary(),
             "nodeSummary": self.node_summary(),
+            "datasetSummaries": self.dataset_summaries_state(),
         }
 
-    def node_summary(self) -> list[dict]:
-        summaries = {row["node_row"]: row for row in self._small("node_summary")}
+    def node_summary(self, dataset_id=None) -> list[dict]:
+        rows = None
+        if dataset_id not in (None, "", "all"):
+            rows = self._dataset_rows("dataset_node_summary", dataset_id)
+        summaries = {
+            row["node_row"]: row
+            for row in (self._small("node_summary") if rows is None else rows)
+        }
         conditions = {row["condition_id"]: row for row in self._small("conditions")}
         patterns = {row["pattern_id"]: row["name"] for row in self._small("patterns")}
         result = []
@@ -320,10 +392,13 @@ class ReactionPatternAnalysisResult:
             result.append(row)
         return result
 
-    def node_distribution(self, node_row: int) -> list[dict]:
+    def node_distribution(self, node_row: int, dataset_id=None) -> list[dict]:
+        rows = None
+        if dataset_id not in (None, "", "all"):
+            rows = self._dataset_rows("dataset_node_distribution", dataset_id)
         return [
             row
-            for row in self._small("node_distribution")
+            for row in (self._small("node_distribution") if rows is None else rows)
             if row["node_row"] == int(node_row)
         ]
 

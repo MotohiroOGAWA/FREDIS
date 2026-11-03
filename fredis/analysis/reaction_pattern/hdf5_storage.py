@@ -257,6 +257,10 @@ TABLE_SCHEMAS: dict[str, list[tuple[str, str]]] = {
         ("alias_of", I),
     ],
 }
+# Per-dataset copies of the total node tables; empty unless the run has several datasets.
+TABLE_SCHEMAS["dataset_node_summary"] = [("dataset_id", I), *TABLE_SCHEMAS["node_summary"]]
+TABLE_SCHEMAS["dataset_node_distribution"] = [("dataset_id", I), *TABLE_SCHEMAS["node_distribution"]]
+TABLE_SCHEMAS["dataset_overall_summary"] = [("dataset_id", I), ("summary_json", S)]
 # Written only when present: formula x pattern comparison of a run with formula assignment.
 _FORMULA_CATEGORIES = ("both", "formula_only", "pattern_only", "neither")
 OPTIONAL_TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
@@ -275,6 +279,7 @@ OPTIONAL_TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ),
     ],
 }
+OPTIONAL_TABLE_COLUMNS["dataset_node_summary"] = OPTIONAL_TABLE_COLUMNS["node_summary"]
 
 LARGE_TABLES = frozenset(
     {
