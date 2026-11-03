@@ -252,6 +252,8 @@ def _prepare_group_safely(task, builder, options):
                 structure_file=path.name,
                 sample_index=index,
                 record_index=record_index,
+                adduct_type=sample.get("adduct", ""),
+                collision_energy=sample.get("collisionEnergy", ""),
                 assignment_score=sample["assignmentScore"],
                 assignment_score_without_precursor=sample[
                     "assignmentScoreWithoutPrecursor"
@@ -743,6 +745,8 @@ def create_reaction_training_data(
                 "structure_file",
                 "sample_index",
                 "record_index",
+                "adduct_type",
+                "collision_energy",
                 "assignment_score",
                 "assignment_score_without_precursor",
             ],
