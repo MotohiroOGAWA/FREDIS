@@ -305,6 +305,59 @@ def validation_subset(pieces, fraction: float, seed: int, *, compound_groups=Non
     return selected, indices
 
 
+def plan_batch_groups(
+    pieces, shuffle, *, batch_size, max_samples, max_batch_ion_states=0
+):
+    """Pack chunks into optimizer batches.
+
+    A batch closes before it would exceed ``batch_size`` chunks, ``max_samples``
+    spectra or (when positive) ``max_batch_ion_states`` summed ion states.
+    """
+    import random
+
+    order = (
+        pieces.ordered_indices(shuffle)
+        if hasattr(pieces, "ordered_indices")
+        else list(range(len(pieces)))
+    )
+    if shuffle and not hasattr(pieces, "ordered_indices"):
+        random.shuffle(order)
+    groups = []
+    group = []
+    count = 0
+    ions = 0
+    for index in order:
+        piece_samples = (
+            pieces.sample_count(index)
+            if hasattr(pieces, "sample_count")
+            else pieces[index].num_samples
+        )
+        piece_ions = (
+            (
+                pieces.ion_state_count(index)
+                if hasattr(pieces, "ion_state_count")
+                else pieces[index].spectrum_explanations.formula_explanation_index.numel()
+            )
+            if max_batch_ion_states
+            else 0
+        )
+        if group and (
+            len(group) >= batch_size
+            or count + piece_samples > max_samples
+            or (max_batch_ion_states and ions + piece_ions > max_batch_ion_states)
+        ):
+            groups.append(tuple(group))
+            group = []
+            count = 0
+            ions = 0
+        group.append(index)
+        count += piece_samples
+        ions += piece_ions
+    if group:
+        groups.append(tuple(group))
+    return groups
+
+
 def _validate_training_settings(settings: dict) -> SpectrumLossSettings:
     """Validate optimizer, loss, filtering and validation options before device setup."""
     if type(settings["checkpoint_interval_epochs"]) is not int or settings["checkpoint_interval_epochs"] < 0:
@@ -317,6 +370,11 @@ def _validate_training_settings(settings: dict) -> SpectrumLossSettings:
         or settings["lr"] <= 0
     ):
         raise ValueError("epochs, batch_size, max_samples and lr must be positive")
+    if (
+        type(settings.get("max_batch_ion_states", 0)) is not int
+        or settings.get("max_batch_ion_states", 0) < 0
+    ):
+        raise ValueError("max_batch_ion_states must be a non-negative integer (0 = unlimited)")
     spectrum_loss = SpectrumLossSettings(
         **{key: settings[key] for key in SPECTRUM_LOSS_KEYS}
     )
@@ -381,6 +439,7 @@ def _load_prepared_datasets(
     minimum_assignment_score,
     minimum_assignment_score_without_precursor,
     cache_dataset_in_memory,
+    max_batch_ion_states=0,
 ):
     """Index training and validation data without loading their tensor payloads."""
     from .prepared_dataset import prepared_piece_sequence
@@ -394,6 +453,7 @@ def _load_prepared_datasets(
             minimum_assignment_score=minimum_assignment_score,
             minimum_assignment_score_without_precursor=minimum_assignment_score_without_precursor,
             cache_in_memory=cache_dataset_in_memory,
+            max_batch_ion_states=max_batch_ion_states,
         )
         stats = pieces.statistics
         datasets.append(pieces)
@@ -408,6 +468,13 @@ def _load_prepared_datasets(
             "loading_mode": (
                 "cache_on_first_use" if cache_dataset_in_memory else "streaming"
             ),
+            "max_chunk_ion_states": max(
+                (pieces.ion_state_count(i) for i in range(len(pieces))), default=0
+            ),
+            "ion_state_counts": (
+                "per_sample" if pieces.ion_state_counts_exact else "file_average"
+            ),
+            "samples_over_ion_state_limit": pieces.oversized_samples,
         }
     return datasets, dataset_report
 
@@ -431,6 +498,7 @@ def train_reactions(
     cosine_loss_weight: float = 1.0,
     intensity_exponent: float = 0.5,
     max_samples: int = 128,
+    max_batch_ion_states: int = 0,
     seed: int = 42,
     warmup_steps: int = 100,
     lr_patience: int = 3,
@@ -448,6 +516,7 @@ def train_reactions(
     initialize_from: str | Path | None = None,
     pattern_parameters: dict | None = None,
     overwrite: bool = False,
+    memory_estimate: dict | None = None,
 ) -> dict:
     from dataclasses import replace
     import random
@@ -479,6 +548,7 @@ def train_reactions(
             "negative_weight",
             *SPECTRUM_LOSS_KEYS,
             "max_samples",
+            "max_batch_ion_states",
             "seed",
             "warmup_steps",
             "lr_patience",
@@ -585,6 +655,7 @@ def train_reactions(
         minimum_assignment_score=minimum_assignment_score,
         minimum_assignment_score_without_precursor=minimum_assignment_score_without_precursor,
         cache_dataset_in_memory=cache_dataset_in_memory,
+        max_batch_ion_states=max_batch_ion_states,
     )
     startup_progress.update(1)
     startup_progress.set_description_str("Startup (2/5): Configure model", refresh=True)
@@ -654,6 +725,22 @@ def train_reactions(
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=lr_patience, min_lr=min_lr
     )
+    if memory_estimate is not None:
+        from .memory_estimate import estimate_training_memory
+
+        startup_progress.close()
+        return estimate_training_memory(
+            model=model,
+            optimizer_parameters=optimizer_parameters,
+            datasets=datasets,
+            plan_batch_groups=plan_batch_groups,
+            batch_size=batch_size,
+            max_samples=max_samples,
+            max_batch_ion_states=max_batch_ion_states,
+            device=device,
+            seed=seed,
+            **memory_estimate,
+        )
     start = 0
     global_step = 0
     best = float("inf")
@@ -797,33 +884,13 @@ def train_reactions(
         return report
 
     def batch_groups(pieces, shuffle):
-        order = (
-            pieces.ordered_indices(shuffle)
-            if hasattr(pieces, "ordered_indices")
-            else list(range(len(pieces)))
+        return plan_batch_groups(
+            pieces,
+            shuffle,
+            batch_size=batch_size,
+            max_samples=max_samples,
+            max_batch_ion_states=max_batch_ion_states,
         )
-        if shuffle and not hasattr(pieces, "ordered_indices"):
-            random.shuffle(order)
-        groups = []
-        group = []
-        count = 0
-        for index in order:
-            piece_samples = (
-                pieces.sample_count(index)
-                if hasattr(pieces, "sample_count")
-                else pieces[index].num_samples
-            )
-            if group and (
-                len(group) >= batch_size or count + piece_samples > max_samples
-            ):
-                groups.append(tuple(group))
-                group = []
-                count = 0
-            group.append(index)
-            count += piece_samples
-        if group:
-            groups.append(tuple(group))
-        return groups
 
     def grouped_batches(pieces, groups):
         for group in groups:
@@ -1074,9 +1141,39 @@ def train_reactions(
                 torch.cuda.set_rng_state_all(cuda_rng)
             bar.close()
 
+    def checkpoint_state(completed_epochs):
+        return dict(
+            model_config=relative_paths(model_config, output.resolve()),
+            model_state_dict=model.state_dict(),
+            optimizer_state_dict=optimizer.state_dict(),
+            scheduler_state_dict=scheduler.state_dict(),
+            epoch=completed_epochs,
+            global_step=global_step,
+            intermediate_validation_history=intermediate_history,
+            train_step_history=train_step_history,
+            architecture=generator.architecture,
+            history=history,
+            initial_validation=initial_validation,
+            training_settings=relative_paths(settings, output.resolve()),
+            best_validation_loss=best,
+            bad_epochs=bad_epochs,
+            torch_rng_state=torch.get_rng_state(),
+            cuda_rng_state=torch.cuda.get_rng_state_all() if use_cuda else None,
+            python_rng_state=random.getstate(),
+        )
+
+    def save_last(saved):
+        last_temporary = output / "last.pt.tmp"
+        torch.save(saved, last_temporary)
+        last_temporary.replace(output / "last.pt")
+
     try:
         if validate_before_training and not resume:
             initial_validation = evaluate_initial_model()
+            # Epoch-0 checkpoint: resuming from it starts epoch 1 without
+            # repeating the pre-training validation. best.pt stays reserved
+            # for trained epochs.
+            save_last(checkpoint_state(0))
             publish_metrics()
             write_training_report(
                 output,
@@ -1357,28 +1454,8 @@ def train_reactions(
                 scheduler.step(row["validation_loss"])
             history.append(row)
             report = publish_metrics()
-            saved = dict(
-                model_config=relative_paths(model_config, output.resolve()),
-                model_state_dict=model.state_dict(),
-                optimizer_state_dict=optimizer.state_dict(),
-                scheduler_state_dict=scheduler.state_dict(),
-                epoch=epoch + 1,
-                global_step=global_step,
-                intermediate_validation_history=intermediate_history,
-                train_step_history=train_step_history,
-                architecture=generator.architecture,
-                history=history,
-                initial_validation=initial_validation,
-                training_settings=relative_paths(settings, output.resolve()),
-                best_validation_loss=best,
-                bad_epochs=bad_epochs,
-                torch_rng_state=torch.get_rng_state(),
-                cuda_rng_state=torch.cuda.get_rng_state_all() if use_cuda else None,
-                python_rng_state=random.getstate(),
-            )
-            last_temporary = output / "last.pt.tmp"
-            torch.save(saved, last_temporary)
-            last_temporary.replace(output / "last.pt")
+            saved = checkpoint_state(epoch + 1)
+            save_last(saved)
             if improved:
                 best_temporary = output / "best.pt.tmp"
                 torch.save(saved, best_temporary)
@@ -1716,6 +1793,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         parser.add_argument("--" + name, type=float, default=default)
     for name, default in (
         ("max-samples", 128),
+        ("max-batch-ion-states", 0),
         ("seed", 42),
         ("warmup-steps", 100),
         ("lr-patience", 3),
@@ -1747,6 +1825,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.1,
         help="Fraction of validation compounds used for intermediate checks; all eligible spectra of selected compounds are included (0 < fraction <= 1; default: 0.1).",
     )
+    estimate = parser.add_argument_group("GPU memory estimate")
+    estimate.add_argument(
+        "--estimate-memory",
+        metavar="JSON",
+        help="Do not train: build the configured model, profile forward/backward on real training batches and write a peak-memory estimate to JSON. The output directory is not touched.",
+    )
+    estimate.add_argument("--estimate-profile-batches", type=int, default=5,
+                          help="Number of training batches to profile, from small to the largest (default: 5).")
+    estimate.add_argument("--estimate-target-memory-gib", type=float, default=None,
+                          help="GPU capacity used for the recommendation; defaults to the profiled device's total memory.")
     return parser
 
 
@@ -1773,6 +1861,14 @@ def main(argv: list[str] | None = None) -> None:
             raise ValueError(
                 "Pretrained reactions must be selected during dataset preparation, not training"
             )
+    if args.estimate_memory:
+        import tempfile
+
+        estimate_dir = tempfile.TemporaryDirectory(prefix="fredis-memory-estimate-")
+        args.output_dir = estimate_dir.name
+        args.overwrite = True
+        if args.resume and not Path(args.resume).is_file():
+            args.resume = None
     output = Path(args.output_dir)
     confirm_output_overwrite(
         output,
@@ -1800,7 +1896,15 @@ def main(argv: list[str] | None = None) -> None:
 
         model_config["dropout"] = args.dropout
         model_config = use_shared_dropout(model_config)
-    train_reactions(
+    result = train_reactions(
+        memory_estimate=(
+            dict(
+                profile_batches=args.estimate_profile_batches,
+                target_memory_gib=args.estimate_target_memory_gib,
+            )
+            if args.estimate_memory
+            else None
+        ),
         overwrite=args.overwrite,
         model_config=model_config,
         pattern_parameters=pattern_parameters,
@@ -1819,6 +1923,7 @@ def main(argv: list[str] | None = None) -> None:
         negative_weight=args.negative_weight,
         **{key: getattr(args, key) for key in SPECTRUM_LOSS_KEYS},
         max_samples=args.max_samples,
+        max_batch_ion_states=args.max_batch_ion_states,
         minimum_assignment_score=args.minimum_assignment_score,
         minimum_assignment_score_without_precursor=args.minimum_assignment_score_without_precursor,
         seed=args.seed,
@@ -1834,6 +1939,9 @@ def main(argv: list[str] | None = None) -> None:
         validation_fraction=args.validation_fraction,
         validate_before_training=args.validate_before_training,
     )
+    if args.estimate_memory:
+        Path(args.estimate_memory).write_text(json.dumps(result, indent=2))
+        print(f"Memory estimate written to {args.estimate_memory}")
 
 
 if __name__ == "__main__":

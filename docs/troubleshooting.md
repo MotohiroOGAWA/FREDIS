@@ -36,7 +36,7 @@ regenerate prepared data when those chemical definitions change.
 | Imported pattern ID appears different | Inspect destination definitions and `fine_tuning.pattern_imports`; IDs are remapped |
 | Architecture override rejected on resume | Resume restores saved architecture; use a new fine-tuning dataset/run to add patterns |
 | No spectra train despite prepared files | Read `dataset_summary.json` and assignment-score admission thresholds |
-| CUDA out of memory | Reduce source `--batch-size` and simultaneous `--max-samples`; inspect molecular sizes, reaction counts, and history depth |
+| CUDA out of memory | Cap batches with `--max-batch-ion-states` (ion states dominate activation memory and vary >100× between sources). Run training once with `--estimate-memory estimate.json` to profile real batches and get a recommended cap for your GPU; the output directory is not touched. Also consider `--batch-size`, `--max-samples`, molecular sizes, reaction counts and history depth |
 | Training output already exists | Choose a new run, explicitly authorize overwrite for fresh training, or use `--resume` for continuation |
 
 ## Prediction

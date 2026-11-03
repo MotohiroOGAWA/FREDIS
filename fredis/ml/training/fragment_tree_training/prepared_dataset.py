@@ -25,6 +25,13 @@ class PreparedPiece:
     path: Path
     sample_indices: tuple[int, ...]
     compound_smiles: str | None = None
+    # Ion states (formula explanations) summed over the piece's samples; this
+    # dominates activation memory. Exact when assignment_scores.tsv carries
+    # num_ion_states, otherwise a per-file average from manifest.tsv.
+    ion_states: int = 0
+    # Transition states of the source file (shared by its samples); the second
+    # driver of activation memory, used by the memory estimate.
+    transition_states: int = 0
 
     @property
     def num_samples(self) -> int:
@@ -66,11 +73,15 @@ class PreparedPieceSequence(Sequence[SourceReactionStructure]):
         state: _LoaderState,
         total_unfiltered_samples: int,
         statistics: dict | None = None,
+        ion_state_counts_exact: bool = True,
+        oversized_samples: int = 0,
     ):
         self._pieces = tuple(pieces)
         self._state = state
         self.total_unfiltered_samples = int(total_unfiltered_samples)
         self.statistics = dict(statistics or {})
+        self.ion_state_counts_exact = bool(ion_state_counts_exact)
+        self.oversized_samples = int(oversized_samples)
 
     def __len__(self) -> int:
         return len(self._pieces)
@@ -107,6 +118,15 @@ class PreparedPieceSequence(Sequence[SourceReactionStructure]):
 
     def sample_count(self, index: int) -> int:
         return self._pieces[index].num_samples
+
+    def ion_state_count(self, index: int) -> int:
+        return self._pieces[index].ion_states
+
+    def transition_state_count(self, index: int) -> int:
+        return self._pieces[index].transition_states
+
+    def piece(self, index: int) -> PreparedPiece:
+        return self._pieces[index]
 
     def ordered_indices(self, shuffle: bool) -> list[int]:
         """Shuffle source files while keeping a file's chunks adjacent.
@@ -156,11 +176,14 @@ class PreparedPieceSequence(Sequence[SourceReactionStructure]):
                 local.append(selected[cursor] - offset)
                 cursor += 1
             if local:
+                per_sample = piece.ion_states / max(1, piece.num_samples)
                 pieces.append(
                     PreparedPiece(
                         piece.path,
                         tuple(piece.sample_indices[index] for index in local),
                         piece.compound_smiles,
+                        round(per_sample * len(local)),
+                        piece.transition_states,
                     )
                 )
             offset = end
@@ -169,6 +192,8 @@ class PreparedPieceSequence(Sequence[SourceReactionStructure]):
             state=self._state,
             total_unfiltered_samples=self.total_unfiltered_samples,
             statistics=self.statistics,
+            ion_state_counts_exact=self.ion_state_counts_exact,
+            oversized_samples=self.oversized_samples,
         )
 
 
@@ -193,7 +218,14 @@ def prepared_piece_sequence(
     minimum_assignment_score: float,
     minimum_assignment_score_without_precursor: float,
     cache_in_memory: bool,
+    max_batch_ion_states: int = 0,
 ) -> PreparedPieceSequence:
+    """Index prepared samples into chunks of at most ``max_samples`` samples.
+
+    With ``max_batch_ion_states`` > 0 a chunk is also closed before its summed
+    ion states exceed the budget, and a single sample above the budget is
+    excluded, because no batch could hold it.
+    """
     directory = Path(directory)
     manifest_path = directory / "manifest.tsv"
     if not manifest_path.is_file():
@@ -206,12 +238,22 @@ def prepared_piece_sequence(
         raise ValueError(f"No prepared .preft.pt files in {directory}")
     counts: dict[str, int] = {}
     compound_smiles: dict[str, str | None] = {}
+    file_ion_states: dict[str, int] = {}
+    file_transitions: dict[str, int] = {}
     with manifest_path.open(newline="") as stream:
         for row in csv.DictReader(stream, delimiter="\t"):
             name = row.get("file", "")
             if name and row.get("status") == "completed":
                 counts[name] = int(row["num_valid_samples"])
                 compound_smiles[name] = row.get("smiles") or None
+                try:
+                    file_ion_states[name] = int(float(row.get("num_ion_states") or 0))
+                except ValueError:
+                    file_ion_states[name] = 0
+                try:
+                    file_transitions[name] = int(float(row.get("num_transition_states") or 0))
+                except ValueError:
+                    file_transitions[name] = 0
     missing = sorted(set(files) - set(counts))
     if missing:
         raise ValueError(
@@ -223,8 +265,20 @@ def prepared_piece_sequence(
     filtering = (
         minimum_assignment_score > 0 or minimum_assignment_score_without_precursor > 0
     )
+    score_path = directory / "assignment_scores.tsv"
+    sample_ion_states: dict[str, dict[int, int]] = defaultdict(dict)
+    ion_state_counts_exact = False
+    if score_path.is_file() and not filtering:
+        with score_path.open(newline="") as stream:
+            reader = csv.DictReader(stream, delimiter="\t")
+            if "num_ion_states" in (reader.fieldnames or ()):
+                ion_state_counts_exact = True
+                for row in reader:
+                    if row.get("num_ion_states", "").strip():
+                        sample_ion_states[row["structure_file"]][
+                            int(row["sample_index"])
+                        ] = int(float(row["num_ion_states"]))
     if filtering:
-        score_path = directory / "assignment_scores.tsv"
         if not score_path.is_file():
             raise ValueError(
                 f"{score_path} is required when assignment-score filtering is enabled; regenerate the dataset."
@@ -232,9 +286,15 @@ def prepared_piece_sequence(
         selected = defaultdict(list)
         score_counts: dict[str, int] = defaultdict(int)
         with score_path.open(newline="") as stream:
-            for row in csv.DictReader(stream, delimiter="\t"):
+            reader = csv.DictReader(stream, delimiter="\t")
+            ion_state_counts_exact = "num_ion_states" in (reader.fieldnames or ())
+            for row in reader:
                 name = row["structure_file"]
                 score_counts[name] += 1
+                if ion_state_counts_exact and row.get("num_ion_states", "").strip():
+                    sample_ion_states[name][int(row["sample_index"])] = int(
+                        float(row["num_ion_states"])
+                    )
                 if _passes(
                     row,
                     minimum_assignment_score,
@@ -254,17 +314,42 @@ def prepared_piece_sequence(
     else:
         selected = {name: list(range(count)) for name, count in counts.items()}
 
+    budget = int(max_batch_ion_states or 0)
     pieces = []
+    oversized = 0
     for name, path in sorted(files.items(), key=lambda item: str(item[1])):
         indices = selected.get(name, ())
-        for start in range(0, len(indices), max_samples):
-            pieces.append(
-                PreparedPiece(
-                    path,
-                    tuple(indices[start : start + max_samples]),
-                    compound_smiles[name],
+        exact = sample_ion_states.get(name, {})
+        average = file_ion_states.get(name, 0) / max(1, counts.get(name, 1))
+        chunk: list[int] = []
+        chunk_ions = 0
+
+        def flush():
+            nonlocal chunk, chunk_ions
+            if chunk:
+                pieces.append(
+                    PreparedPiece(
+                        path,
+                        tuple(chunk),
+                        compound_smiles[name],
+                        round(chunk_ions),
+                        file_transitions.get(name, 0),
+                    )
                 )
-            )
+            chunk, chunk_ions = [], 0
+
+        for sample in indices:
+            ions = exact.get(sample, average)
+            if budget and ions > budget:
+                oversized += 1
+                continue
+            if chunk and (
+                len(chunk) >= max_samples or (budget and chunk_ions + ions > budget)
+            ):
+                flush()
+            chunk.append(sample)
+            chunk_ions += ions
+        flush()
     if not pieces:
         raise ValueError(
             f"No samples in {directory} meet the configured assignment score thresholds"
@@ -278,4 +363,6 @@ def prepared_piece_sequence(
         state=_LoaderState(cache_in_memory),
         total_unfiltered_samples=sum(counts.values()),
         statistics=statistics,
+        ion_state_counts_exact=ion_state_counts_exact,
+        oversized_samples=oversized,
     )

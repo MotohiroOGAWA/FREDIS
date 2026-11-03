@@ -216,11 +216,17 @@ def _prepare_group(task, builder, options):
         ),
     )
     annotations = structure.sample_annotations
+    summary = structure_manifest_fields(structure, annotations)
+    # Per-sample ion-state counts let training cap batch memory without
+    # opening tensor files; the private key is moved to assignment_scores.tsv.
+    summary["_sample_ion_states"] = (
+        structure.spectrum_explanations.formula_explanation_ptr.diff().tolist()
+    )
     return (
         path,
         kept_rows,
         annotations,
-        structure_manifest_fields(structure, annotations),
+        summary,
         builder.last_search_stats,
     )
 
@@ -247,6 +253,7 @@ def _prepare_group_safely(task, builder, options):
         path, kept_rows, annotations, summary, search_stats = _prepare_group(
             task, builder, options
         )
+        sample_ion_states = summary.pop("_sample_ion_states", None) or []
         scores = [
             dict(
                 structure_file=path.name,
@@ -254,6 +261,9 @@ def _prepare_group_safely(task, builder, options):
                 record_index=record_index,
                 adduct_type=sample.get("adduct", ""),
                 collision_energy=sample.get("collisionEnergy", ""),
+                num_ion_states=(
+                    sample_ion_states[index] if index < len(sample_ion_states) else ""
+                ),
                 assignment_score=sample["assignmentScore"],
                 assignment_score_without_precursor=sample[
                     "assignmentScoreWithoutPrecursor"
@@ -747,6 +757,7 @@ def create_reaction_training_data(
                 "record_index",
                 "adduct_type",
                 "collision_energy",
+                "num_ion_states",
                 "assignment_score",
                 "assignment_score_without_precursor",
             ],

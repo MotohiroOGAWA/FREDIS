@@ -593,3 +593,69 @@ def test_prepared_compound_smiles_reused_on_transfer_and_reload(tmp_path):
         copied.save(file)
         restored = SourceReactionStructure.load(file)
         assert restored.compounds.smiles == expected
+
+
+def test_failure_after_initial_validation_resumes_without_repeating_it(
+    tmp_path, monkeypatch
+):
+    """Validation epoch 0 saves last.pt, so a crash in epoch 1 resumes after it."""
+    from fredis.ml.training.fragment_tree_training.training import (
+        _read_metric_events,
+        train_reactions,
+    )
+    from .TestReactionPipeline import chemistry
+
+    _, data = prepared()
+    directories = [tmp_path / "train", tmp_path / "validation"]
+    for directory in directories:
+        directory.mkdir()
+        data.save(directory / "sample.preft.pt")
+        (directory / "manifest.tsv").write_text(
+            "file\tnum_valid_samples\tstatus\nsample.preft.pt\t2\tcompleted\n"
+        )
+        (directory / "reaction_statistics.json").write_text(
+            json.dumps({"chemistry_config": chemistry()})
+        )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    output = tmp_path / "model"
+    common = dict(
+        model_config=config(),
+        train_dir=directories[0],
+        val_dir=directories[1],
+        output_dir=output,
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+        max_samples=2,
+        warmup_steps=0,
+        validate_before_training=True,
+    )
+    clip = torch.nn.utils.clip_grad_norm_
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("simulated failure in the first training step")
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", crash)
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        train_reactions(**common)
+    checkpoint = output / "last.pt"
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    assert saved["epoch"] == 0 and saved["global_step"] == 0
+    assert saved["initial_validation"]["epoch"] == 0
+    assert saved["history"] == []
+    assert not (output / "best.pt").exists(), "best.pt is reserved for trained epochs"
+    initial_file = output / "spectrum_validation" / "epoch_0.json"
+    initial_mtime = initial_file.stat().st_mtime_ns
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", clip)
+    train_reactions(**{**common, "resume": str(checkpoint)})
+    resumed = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    assert resumed["epoch"] == 1 and len(resumed["history"]) == 1
+    assert resumed["initial_validation"]["epoch"] == 0
+    assert initial_file.stat().st_mtime_ns == initial_mtime, "validation 0 was not repeated"
+    assert (output / "best.pt").exists()
+    assert [
+        r["epoch"]
+        for r in _read_metric_events(output / "metrics.tsv")
+        if r["event"] == "epoch_end"
+    ] == [0, 1]
