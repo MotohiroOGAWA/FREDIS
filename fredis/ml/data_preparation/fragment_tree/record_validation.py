@@ -49,7 +49,7 @@ def inspect_records(
     ce_cache = {}
     reasons = {
         "smilesColumn": "Invalid RDKit SMILES",
-        "adductTypeColumn": "Invalid adduct or main adduct not registered in the fragmenter",
+        "adductTypeColumn": "Invalid adduct or adduct type not listed in the adduct rule set",
         "collisionEnergyColumn": "Cannot parse collision energy to finite non-negative eV",
         "precursorMzColumn": "Cannot parse precursor m/z to a finite positive number",
     }

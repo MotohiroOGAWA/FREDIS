@@ -89,7 +89,7 @@ def test_saved_matches_restore_exact_reactions_and_relations():
     original = model.fragmenter.fragment_ion_tree_builder.create_reaction_instances(
         source
     )
-    _, _, restored, relations, registry, _ = _saved_registry(model, data, 0)
+    _, _, restored, relations, registry, _, _ = _saved_registry(model, data, 0)
     assert restored == original
     for field in registry.field_names():
         torch.testing.assert_close(

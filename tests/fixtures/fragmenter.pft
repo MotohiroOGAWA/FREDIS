@@ -54,12 +54,43 @@
             "[M+H]+",
             "[M-H]+"
           ]
+        },
+        {
+          "name": "pos_H_H2O_loss",
+          "adduct_type": "[M+H-H2O]+",
+          "fragment_ion_adducts": [
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_H_2H2O_loss",
+          "adduct_type": "[M+H-2H2O]+",
+          "fragment_ion_adducts": [
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_H_C6H6_loss",
+          "adduct_type": "[M+H-C6H6]+",
+          "fragment_ion_adducts": [
+            "[M-H]+",
+            "[M+H]+"
+          ]
+        },
+        {
+          "name": "pos_H_NH3_loss",
+          "adduct_type": "[M+H-NH3]+",
+          "fragment_ion_adducts": [
+            "[M-H]+",
+            "[M+H]+"
+          ]
         }
       ],
       "hydrogen_shift_min": -5,
       "hydrogen_shift_max": 0
     }
   },
-
   "mass_tolerance": "0.01Da,10ppm"
 }

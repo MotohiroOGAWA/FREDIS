@@ -30,13 +30,10 @@ def test_loss_precursor_initializes_structural_history_and_preserves_gradients(
     rules = cfg["fragmenter_params"]["fragment_ion_tree_builder"][
         "fragment_ion_adduct_rule_set"
     ]
-    rules["adduct_rules"].append(
-        {
-            "name": "loss",
-            "adduct_type": "[M+H-H2O]+",
-            "fragment_ion_adducts": ["[M+H]+"],
-        }
-    )
+    # The fixture lists [M+H-H2O]+; allow only the [M+H]+ ion for it.
+    next(r for r in rules["adduct_rules"] if r["adduct_type"] == "[M+H-H2O]+")[
+        "fragment_ion_adducts"
+    ] = ["[M+H]+"]
     generator = create_spectrum_generator(cfg).eval()
     source = Compound.from_smiles("CCCO")
     adduct = Adduct.parse("[M+H-H2O]+")
@@ -84,3 +81,42 @@ def test_loss_precursor_initializes_structural_history_and_preserves_gradients(
     topology = canonical_spectrum_topology(prepared.spectrum_batch)
     assert topology.initial[topology.roots].sum() == 0
     assert topology.initial.sum() == 1
+
+
+@pytest.mark.parametrize("prepared", [True, False])
+def test_model_guided_search_keeps_the_loss_precursor_branch(prepared):
+    """A strict path threshold and node budget must not prune the [M+H-H2O]+
+    precursor (a water-loss product): the spectrum starts there, so prediction
+    raised UnresolvedPrecursorError (e.g. validation of an untrained model)."""
+    from dataclasses import replace
+    from fredis.ml.specgen.prepare_worker import prepare_compound_cache
+
+    torch.manual_seed(3)
+    cfg = config()
+    rules = cfg["fragmenter_params"]["fragment_ion_tree_builder"][
+        "fragment_ion_adduct_rule_set"
+    ]
+    # The fixture lists [M+H-H2O]+; allow only the [M+H]+ ion for it.
+    next(r for r in rules["adduct_rules"] if r["adduct_type"] == "[M+H-H2O]+")[
+        "fragment_ion_adducts"
+    ] = ["[M+H]+"]
+    generator = create_spectrum_generator(cfg).eval()
+    generator.generation = replace(
+        generator.generation, branch_path_threshold=0.999, max_fragment_nodes=1
+    )
+    source = Compound.from_smiles("CCCO")
+    adduct = Adduct.parse("[M+H-H2O]+")
+    mz = adduct.apply_to_formula(source.formula).exact_mass
+    if prepared:
+        data, _ = ReactionStructureBuilder(generator).build(
+            source, [adduct], [20.0], [[mz]], [[1.0]]
+        )
+        outputs = list(generator.predict_prepared_batches(data))
+    else:
+        cache = prepare_compound_cache(source.smiles, [str(adduct)], generator.fragmenter)
+        outputs = list(generator.predict_batches(
+            [source], [adduct], [20.0], precomputed={source.smiles: cache}
+        ))
+    assert len(outputs) == 1
+    intensity = outputs[0].spectra.intensity
+    assert torch.isfinite(intensity).all() and intensity.sum() > 0

@@ -38,7 +38,7 @@ def config() -> dict:
         ),
         "spectrum_model_params": dict(fragment_fc_dims=[16], state_fc_dims=[16]),
         "generation_params": dict(branch_path_threshold=0.0, max_fragment_nodes=32),
-        # Neutral-loss forms resolve to a registered main adduct during prediction.
+        # Same order as the fixture's adduct rules; loss adducts are listed rules.
         "adduct_type_strs": [
             "[M+H]+",
             "[M+Na]+",
@@ -47,5 +47,6 @@ def config() -> dict:
             "[M+H-H2O]+",
             "[M+H-2H2O]+",
             "[M+H-C6H6]+",
+            "[M+H-NH3]+",
         ],
     }

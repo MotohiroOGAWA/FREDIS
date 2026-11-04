@@ -282,31 +282,17 @@ class Fragmenter:
                 f"Only singly charged adducts are supported: {precursor_type}"
             )
 
-        if precursor_type in self.adduct_types:
-            return precursor_type
-
-        matched_adduct_flags, residual_component_adduct = (
-            Adduct.split_by_reference_adducts(
-                precursor_type,
-                reference_adducts=self.adduct_types,
-            )
+        # Only adduct types listed in the adduct rule set are precursors.  A loss
+        # adduct such as [M+H-H2O]+ needs its own rule; it is no longer resolved
+        # to the main adduct it contains ([M+H]+).
+        for adduct_type in self.adduct_types:
+            if precursor_type == adduct_type:
+                return adduct_type
+        raise ValueError(
+            "Adduct type is not listed in the adduct rule set "
+            f"({', '.join(str(adduct) for adduct in self.adduct_types)}): "
+            f"{precursor_type}"
         )
-
-        if sum(matched_adduct_flags) == 0:
-            raise ValueError(
-                "Adduct does not contain any of the supported adduct types"
-                f"({', '.join(str(adduct) for adduct in self.adduct_types)}): "
-                f"{precursor_type}"
-            )
-
-        if sum(matched_adduct_flags) > 1:
-            raise ValueError(
-                "Adduct contains multiple supported adduct types"
-                f"({', '.join(str(adduct) for adduct in self.adduct_types)}): "
-                f"{precursor_type}"
-            )
-
-        return self.adduct_types[matched_adduct_flags.index(True)]
 
     @staticmethod
     def _reaction_sequences_by_node(

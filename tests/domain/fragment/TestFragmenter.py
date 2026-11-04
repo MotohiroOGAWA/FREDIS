@@ -28,6 +28,27 @@ from .fragment_tree_builder_cases import (
 )
 
 
+def with_loss_rules(fragmenter: Fragmenter, precursor_types: Iterable[Adduct]) -> Fragmenter:
+    """List each loss precursor (e.g. [M+H-H2O]+) as its own adduct rule.
+
+    Only listed adduct types are precursors; a loss rule here allows the
+    fragment ions of the adduct it is based on ([M+H]+ for [M+H-H2O]+).
+    """
+    data = fragmenter.to_dict()
+    rules = data["fragment_ion_tree_builder"]["fragment_ion_adduct_rule_set"]["adduct_rules"]
+    bases = [Adduct.parse(rule["adduct_type"]) for rule in rules]
+    listed = list(bases)
+    for precursor_type in dict.fromkeys(precursor_types):
+        if precursor_type in listed:
+            continue
+        flags, _ = Adduct.split_by_reference_adducts(precursor_type, reference_adducts=bases)
+        base = rules[flags.index(True)]
+        rules.append({"name": f"loss_{len(rules)}", "adduct_type": str(precursor_type),
+                      "fragment_ion_adducts": list(base["fragment_ion_adducts"])})
+        listed.append(precursor_type)
+    return Fragmenter.from_dict(data)
+
+
 class TestFragmenter(unittest.TestCase):
     """Tests for Fragmenter."""
 
@@ -326,7 +347,8 @@ class TestFragmenter(unittest.TestCase):
                             fragment_ion_tree, case["precursor_type"], case["peak_mz_list"]))
 
     def _build_group_tree(self, group: dict[str, Any]) -> Tuple[Fragmenter, Compound, FragmentIonTree]:
-        fragmenter = Fragmenter.from_json(group["fragmenter_json"])
+        fragmenter = with_loss_rules(Fragmenter.from_json(group["fragmenter_json"]),
+                                     [case["precursor_type"] for case in group["test_cases"]])
         compound = Compound.from_smiles(group.get("smiles", "CC(=O)N[C@@H](CC1=CC=CC=C1)C2=CC(=CC(=O)O2)OC"))
         seeds = self._water_loss_seeds(fragmenter, compound, group.get("seed_water_loss_count", 0))
         fragment_ion_tree = fragmenter.build_fragment_ion_tree(
@@ -347,7 +369,11 @@ class TestFragmenter(unittest.TestCase):
         source = Compound.from_smiles("CCCCO")
         seed_result = next(result for result in builder.react_all(source, max_reaction_count=2)
                            if len(result.reaction_sequence.reactions) == 2)
-        fragmenter = Fragmenter(builder, parse_mass_tolerance("0.01Da"))
+        main_adduct = builder.fragment_ion_adduct_rule_set.adduct_types[0]
+        loss = (source.formula - seed_result.compound.formula).normalized
+        precursor_type = Adduct.parse(str(main_adduct)[:-2] + "-" + str(loss) + "]" + str(main_adduct)[-1])
+        fragmenter = with_loss_rules(Fragmenter(builder, parse_mass_tolerance("0.01Da")), [precursor_type])
+        builder = fragmenter.fragment_ion_tree_builder
         tree = fragmenter.build_fragment_ion_tree(
             source, seed_reaction_sequences=(seed_result.reaction_sequence,),
             max_reaction_count=2)
@@ -355,9 +381,6 @@ class TestFragmenter(unittest.TestCase):
         index = seed_edge.target_index
         self.assertEqual(tree.node_depths[index], 1)
         self.assertEqual(tree.get_min_reaction_counts()[index], 2)
-        main_adduct = fragmenter.adduct_types[0]
-        loss = (source.formula - seed_result.compound.formula).normalized
-        precursor_type = Adduct.parse(str(main_adduct)[:-2] + "-" + str(loss) + "]" + str(main_adduct)[-1])
         with patch.object(FragmentIonTree, "get_nodes_by_depth", side_effect=AssertionError("graph depth used")):
             self.assertIn(PrecursorReaction(index, seed_result.reaction_sequence),
                           fragmenter.resolve_precursor_reactions(tree, precursor_type))
@@ -404,8 +427,9 @@ class TestFragmenter(unittest.TestCase):
 
     def test_batched_and_individual_assignment_keep_precursor_contexts_separate(self) -> None:
         source = Compound.from_smiles('CC(=O)N[C@@H](CC1=CC=CC=C1)C2=CC(=CC(=O)O2)OC')
-        fragmenter = Fragmenter.from_json(
-            Path(__file__).resolve().parents[3] / 'tests/domain/fragment/test_data/fragmenter_single_bond_pos.json')
+        fragmenter = with_loss_rules(Fragmenter.from_json(
+            Path(__file__).resolve().parents[3] / 'tests/domain/fragment/test_data/fragmenter_single_bond_pos.json'),
+            [Adduct.parse('[M+H-C6H6]+')])
         tree = fragmenter.build_fragment_ion_tree(source)
         records = ((Adduct.parse('[M+H]+'), (125.0233, 154.0499)),
                    (Adduct.parse('[M+H-C6H6]+'), (125.0233, 154.0499)))
@@ -699,7 +723,9 @@ class TestFragmenter(unittest.TestCase):
 
     def test_resolve_precursor_reactions_reuses_same_tree_without_rdkit(self) -> None:
         """Precursor resolution walks the already-built tree; it never reacts again."""
-        fragmenter = Fragmenter.from_json("tests/domain/fragment/test_data/fragmenter_single_bond_pos.json")
+        fragmenter = with_loss_rules(
+            Fragmenter.from_json("tests/domain/fragment/test_data/fragmenter_single_bond_pos.json"),
+            [Adduct.parse("[M+H-H2O]+")])
         source = Compound.from_smiles("CCCO")
         tree = fragmenter.build_fragment_ion_tree(source)
 
@@ -716,6 +742,15 @@ class TestFragmenter(unittest.TestCase):
         self.assertNotEqual(precursor_reaction.node_index, 0)
         product = precursor_reaction.reaction_sequence.compile(source).run(source)[0]
         self.assertEqual(Compound(product).smiles, "CCC")
+
+    def test_only_listed_adduct_types_are_precursors(self) -> None:
+        """A loss adduct is not resolved to the main adduct it contains."""
+        fragmenter = Fragmenter.from_json("tests/domain/fragment/test_data/fragmenter_single_bond_pos.json")
+        with self.assertRaisesRegex(ValueError, "not listed in the adduct rule set"):
+            fragmenter.get_index_by_adduct_type(Adduct.parse("[M+H-H2O]+"))
+        listed = with_loss_rules(fragmenter, [Adduct.parse("[M+H-H2O]+")])
+        self.assertEqual(listed._resolve_main_adduct_type(Adduct.parse("[M-H2O+H]+")), Adduct.parse("[M+H-H2O]+"))
+        self.assertEqual(listed._resolve_main_adduct_type(Adduct.parse("[M+NH4]+")), Adduct.parse("[M+H4N]+"))
 
 
 if __name__ == "__main__":

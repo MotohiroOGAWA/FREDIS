@@ -7,6 +7,7 @@ space. Only the children of surviving states are materialized and scored.
 from __future__ import annotations
 
 from types import SimpleNamespace
+import itertools
 import math
 
 import torch
@@ -150,6 +151,7 @@ def _saved_registry(generator, data, source_index):
     packed = ReactionTensorData.from_reactions(reactions, maps, relations)
     saved_sets = data.reaction_sets.rows()
     cached = {}
+    histories = []
     for cid, set_ids in enumerate(
         rows(
             data.compounds.generating_reaction_sets_ptr,
@@ -161,7 +163,8 @@ def _saved_registry(generator, data, source_index):
             if members and all(r in inverse for r in members):
                 seq = ReactionSequence(reactions[inverse[r]] for r in members)
                 cached[seq.effect_key] = cid
-    return source, graph, reactions, relations, packed, cached
+                histories.append((tuple(sorted(inverse[r] for r in members)), cid))
+    return source, graph, reactions, relations, packed, cached, histories
 
 
 class _Chemistry:
@@ -172,7 +175,7 @@ class _Chemistry:
         self.saved = prepared
         builder = generator.mol_encoder.graph_builder
         if prepared is not None:
-            source, graph, reactions, relations, packed, saved_effects = (
+            source, graph, reactions, relations, packed, saved_effects, saved_histories = (
                 _saved_registry(generator, prepared, source_index)
             )
             if not prepared.adducts.same_vocabulary(
@@ -202,6 +205,12 @@ class _Chemistry:
             }
             packed = ReactionTensorData.from_reactions(reactions, maps, relations)
             saved_effects = {}
+            saved_histories = []
+        self.saved_histories = saved_histories
+        self.precursor_sequences = (
+            precomputed.get("precursor_sequences") if precomputed is not None else None
+        )
+        self._precursor_hits = {}
         self.source = source
         self.source_graph = Batch.from_data_list([graph])
         self.reactions = tuple(reactions)
@@ -288,6 +297,49 @@ class _Chemistry:
         self.effects[effect] = cid
         return cid
 
+    def precursor_guide(self, precursor_types):
+        """Histories the search must keep so every spectrum can start at its precursor.
+
+        The observed ion of e.g. [M+H-H2O]+ is a water-loss product, not Source;
+        an (untrained) model can score that branch below the path threshold or
+        outside the node budget, and the spectrum would then have no start.
+        Returns the protected reaction sets (every prefix of the fewest-reaction
+        precursor histories known from preparation) and a per-compound matcher
+        that also protects precursor structures found during the search.
+        """
+        matchers = self.generator.fragmenter.precursor_filter(
+            self.source, precursor_types
+        ).matchers
+        index = {reaction: i for i, reaction in enumerate(self.reactions)}
+        paths = set()
+        for precursor_type, matcher in zip(dict.fromkeys(precursor_types), matchers):
+            found = []
+            if self.precursor_sequences is not None:
+                for sequence in self.precursor_sequences.get(str(precursor_type), ()):
+                    members = () if sequence is None else tuple(
+                        index.get(reaction, -1) for reaction in sequence.reactions
+                    )
+                    if -1 not in members:
+                        found.append(tuple(sorted(members)))
+            if not found and self.saved is not None:
+                compounds = self.saved.compounds.compounds
+                hits = [m for m, cid in self.saved_histories if matcher(compounds[cid])]
+                fewest = min(map(len, hits), default=0)
+                found = [m for m in hits if len(m) == fewest]
+            paths.update(found)
+        protected = set()
+        for path in paths:
+            for size in range(len(path) + 1):
+                protected.update(itertools.combinations(path, size))
+
+        def is_precursor(cid):
+            if cid not in self._precursor_hits:
+                compound = self.compounds[cid]
+                self._precursor_hits[cid] = any(m(compound) for m in matchers)
+            return self._precursor_hits[cid]
+
+        return protected, is_precursor
+
     def encode(self, ids):
         missing = sorted(set(ids) - self.embeddings.keys())
         for start in range(0, len(missing), self.generator.max_samples):
@@ -297,13 +349,20 @@ class _Chemistry:
             )
             self.embeddings.update(zip(chunk, h))
 
-    def search(self, main_adduct):
+    def search(self, main_adduct, precursor_types=()):
         """Prune the lowest path probabilities after each depth; keep expanding.
 
         The budget counts unique structures including Source, per main adduct.
         Ties retain shallower structures so parents survive with their children.
         Distinct reaction histories of a shared structure remain separate states.
+        Histories leading to the precursor of ``precursor_types`` (and precursor
+        structures themselves) are never pruned: spectra start there.
         """
+        protected, is_precursor = (
+            self.precursor_guide(precursor_types)
+            if precursor_types
+            else (set(), lambda cid: False)
+        )
         model = self.generator.feature_model
         condition = model.main_adduct_projection(
             model.adduct_encoder(tensor([main_adduct], self.device))
@@ -323,7 +382,7 @@ class _Chemistry:
             candidates = []
             for parent in frontier:
                 parent_cid, parent_score = states[parent]
-                if parent_score < threshold:
+                if parent_score < threshold and parent not in protected:
                     continue
                 for r in range(len(self.reactions)):
                     if r in parent:
@@ -365,20 +424,25 @@ class _Chemistry:
             new_states = set()
             for (parent, members, r, child), log_score in zip(candidates, log_scores):
                 score = states[parent][1] + log_score
-                if score < threshold:
+                if score < threshold and members not in protected and not is_precursor(child):
                     continue
                 if members not in states or score > states[members][1]:
                     states[members] = (child, score)
                 new_states.add(members)
                 edges.add((parent, members, r))
-            states, edges = _prune(states, edges, settings.max_fragment_nodes)
+            keep = {
+                cid
+                for members, (cid, _) in states.items()
+                if members in protected or is_precursor(cid)
+            }
+            states, edges = _prune(states, edges, settings.max_fragment_nodes, keep)
             frontier = sorted(new_states & states.keys())
             if not frontier:
                 break
         return states, edges
 
 
-def _prune(states, edges, budget):
+def _prune(states, edges, budget, protected=()):
     best = {}
     for members, (cid, score) in states.items():
         rank = (-score, len(members), cid)
@@ -386,6 +450,7 @@ def _prune(states, edges, budget):
             best[cid] = rank
     keep = set(sorted(best, key=best.get)[:budget])
     keep.add(0)  # The root is structural, and always has probability one.
+    keep.update(protected)  # Precursor structures and the histories reaching them.
     selected = {members: value for members, value in states.items() if value[0] in keep}
     edges = {edge for edge in edges if edge[0] in selected and edge[1] in selected}
     reachable = {()}
@@ -405,7 +470,13 @@ def _prediction_data(chemistry, precursor_types, energies):
     group_names = list(dict.fromkeys(main))
     group_ids = [group_names.index(a) for a in main]
     adducts = AdductData.from_fragmenter(gen.fragmenter)
-    searches = [chemistry.search(adducts.main_adducts.index(a)) for a in group_names]
+    searches = [
+        chemistry.search(
+            adducts.main_adducts.index(a),
+            [p for p, g in zip(precursor_types, main) if g == a],
+        )
+        for a in group_names
+    ]
     ids = sorted({cid for states, _ in searches for cid, _ in states.values()})
     inverse = {old: new for new, old in enumerate(ids)}
     memberships = sorted(

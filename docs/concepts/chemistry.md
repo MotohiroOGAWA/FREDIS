@@ -106,8 +106,13 @@ precursor execution histories, not on the untransformed Source. Only their
 descendants can emit nonzero spectrum intensity. Multiple matching histories
 receive equal initial probability; Source stays available as model context and
 bookkeeping. Ion/hydrogen-shift states and precursor identity are resolved during
-preparation, before neural scoring. Exact registered precursor adducts take
-precedence over fallback main-adduct matching.
+preparation, before neural scoring.
+
+Only adduct types listed in the adduct rule set are accepted. A loss adduct such
+as `[M+H-H2O]+` must have its own rule like the one above; it is not resolved to
+the main adduct it contains (`[M+H]+`), and records with an unlisted adduct are
+reported as invalid during Training Data preparation. Model-guided prediction
+never prunes the histories that reach a listed loss precursor.
 
 Register the intended precursor types explicitly in the adduct rule set. Precursor
 resolution uses the same `max_reaction_count` budget as fragment-tree generation;
