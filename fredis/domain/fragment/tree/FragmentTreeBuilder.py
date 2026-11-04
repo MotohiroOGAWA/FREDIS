@@ -127,7 +127,16 @@ class FragmentTreeBuilder:
                     source_compound, pattern_ids=addable_pattern_ids
                 )
             )
-        addable_reactions = None if addable_pattern_ids is None else reactions
+        # Seeded: only the reactions of the added patterns may be added.
+        addable_reactions = (
+            None
+            if addable_pattern_ids is None
+            else tuple(
+                reaction
+                for reaction in reactions
+                if reaction.reaction_pattern_id in addable_pattern_ids
+            )
+        )
         search = ReactionSequenceSearch(
             reactions,
             relations=precomputed_relations,
@@ -155,8 +164,12 @@ class FragmentTreeBuilder:
         *,
         max_unique_fragment_smiles: int = -1,
         seed_compounds: dict[ReactionSequence, Compound] | None = None,
+        precomputed: dict[ReactionSequence, ReactionSequenceResult] | None = None,
     ):
         """Compile/run each unique effect once, retaining every reaction history.
+
+        With ``precomputed`` (results of an earlier pass) nothing is executed:
+        a candidate yields its stored result, or nothing when it had none.
 
         Every newly generated fragment's canonical SMILES joins a set that
         excludes the Source SMILES. Once that set grows beyond
@@ -172,6 +185,10 @@ class FragmentTreeBuilder:
         seed_compounds = seed_compounds or {}
         for candidate in candidates:
             sequence = candidate.reaction_sequence
+            if precomputed is not None:
+                if sequence in precomputed:
+                    yield candidate, precomputed[sequence]
+                continue
             if sequence in results:
                 yield candidate, results[sequence]
                 continue
@@ -258,6 +275,7 @@ class FragmentTreeBuilder:
         print_info: bool = False,
         precomputed_reactions: Sequence[ReactionInstance] | None = None,
         precomputed_relations=None,
+        precursor_filter=None,
     ) -> FragmentTree:
         return self._build_result(
             compound,
@@ -270,6 +288,7 @@ class FragmentTreeBuilder:
             max_reaction_combinations=max_reaction_combinations,
             max_reaction_count=max_reaction_count,
             print_info=print_info,
+            precursor_filter=precursor_filter,
         )["fragment_tree"]
 
     def _build_result(
@@ -285,8 +304,14 @@ class FragmentTreeBuilder:
         print_info: bool = False,
         precomputed_reactions: Sequence[ReactionInstance] | None = None,
         precomputed_relations=None,
+        precursor_filter=None,
     ) -> dict[str, Any]:
         """Build one source tree; -1 disables either search limit.
+
+        With ``precursor_filter`` (see ``Fragmenter.precursor_filter``) the
+        search runs depth by depth: once every precursor of the requested
+        spectra has been found at its first reaction count, only histories
+        containing such a precursor history grow further.
 
         max_reaction_combinations bounds cumulative raw combination attempts.
         Enumeration finishes before RDKit materialization. Overflow at depth n
@@ -309,6 +334,21 @@ class FragmentTreeBuilder:
             precomputed_reactions=precomputed_reactions,
             precomputed_relations=precomputed_relations,
         )
+        if precursor_filter is not None:
+            try:
+                return self._build_staged(
+                    source_compound,
+                    search,
+                    precursor_filter,
+                    seed_reaction_sequences=seed_reaction_sequences,
+                    seed_compounds=seed_compounds,
+                    max_unique_fragment_smiles=max_unique_fragment_smiles,
+                    print_info=print_info,
+                    started=started,
+                )
+            except FragmentTreeLimitExceeded as error:
+                error.stats = search.stats.to_dict()
+                raise
         # Exhaust the pure combination search before the first compile/run.
         # An incomplete depth is discarded without ever materializing it.
         try:
@@ -327,6 +367,67 @@ class FragmentTreeBuilder:
             error.stats = search.stats.to_dict()
             raise
 
+    def _build_staged(
+        self,
+        source_compound,
+        search,
+        precursor_filter,
+        *,
+        seed_reaction_sequences,
+        seed_compounds,
+        max_unique_fragment_smiles,
+        print_info,
+        started,
+    ) -> dict[str, Any]:
+        """Materialize each depth before the next one is enumerated, then build."""
+        by_depth: dict[int, list] = {}
+        released = []
+        materialized: dict[ReactionSequence, ReactionSequenceResult] = {}
+
+        def on_depth(depth):
+            items = (
+                [(None, source_compound)] if depth == 0 else by_depth.get(depth, [])
+            )
+            return precursor_filter.observe(depth, items)
+
+        def recorded(stream):
+            for candidate in stream:
+                released.append(candidate)
+                yield candidate
+
+        for candidate, result in self._materialize_iter(
+            source_compound,
+            search,
+            recorded(search.iter_staged_candidates(on_depth)),
+            max_unique_fragment_smiles=max_unique_fragment_smiles,
+            seed_compounds=seed_compounds,
+        ):
+            sequence = candidate.reaction_sequence
+            if sequence not in materialized:
+                materialized[sequence] = result
+                by_depth.setdefault(len(sequence.reactions), []).append(
+                    (sequence, result.compound)
+                )
+        rule = precursor_filter.rule()
+        keep = None if rule is None else rule[0]
+        # Seeds of a previous (parent) tree that are no precursor histories here are dropped.
+        kept = [
+            candidate
+            for candidate in released
+            if keep is None or keep(candidate.reaction_sequence)
+        ]
+        return self._build_from_candidates(
+            source_compound,
+            search,
+            kept,
+            seed_reaction_sequences=seed_reaction_sequences,
+            seed_compounds=seed_compounds,
+            max_unique_fragment_smiles=max_unique_fragment_smiles,
+            print_info=print_info,
+            started=started,
+            precomputed=materialized,
+        )
+
     def _build_from_candidates(
         self,
         source_compound,
@@ -338,6 +439,7 @@ class FragmentTreeBuilder:
         max_unique_fragment_smiles,
         print_info,
         started,
+        precomputed=None,
     ) -> dict[str, Any]:
         state = _FragmentTreeBuildState(source_compound.smiles)
         compounds = {0: source_compound.copy()}
@@ -352,6 +454,7 @@ class FragmentTreeBuilder:
             candidates,
             max_unique_fragment_smiles=max_unique_fragment_smiles,
             seed_compounds=seed_compounds,
+            precomputed=precomputed,
         ):
             sequence = candidate.reaction_sequence
             parent_sequence = candidate.parent_reaction_sequence

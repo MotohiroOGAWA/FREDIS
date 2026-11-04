@@ -366,6 +366,9 @@ def create_reaction_training_data(
     ) = None,
     addable_pattern_ids: frozenset[int] | None = None,
     source_record_indexes: list[int] | tuple[int, ...] | None = None,
+    tree_store: str | Path | None = None,
+    reuse_trees: bool = True,
+    save_trees: bool = False,
 ) -> list[Path]:
     if (
         not math.isfinite(minimum_relative_intensity)
@@ -405,10 +408,14 @@ def create_reaction_training_data(
     if not len(dataset):
         raise ValueError("The dataset contains no valid records to prepare.")
     generator = create_preparation_context(chemistry_config)
+    tree_store = str(Path(tree_store).expanduser().resolve()) if tree_store else ""
     builder = ReactionStructureBuilder(
         generator,
         max_unique_fragment_smiles=max_unique_fragment_smiles,
         max_reaction_combinations=max_reaction_combinations,
+        tree_store=tree_store or None,
+        reuse_trees=reuse_trees,
+        save_trees=save_trees,
     )
     grouped = {}
     for index, smiles in enumerate(dataset[smiles_column]):
@@ -448,6 +455,9 @@ def create_reaction_training_data(
         max_unique_fragment_smiles=max_unique_fragment_smiles,
         max_reaction_combinations=max_reaction_combinations,
         addable_pattern_ids=addable_pattern_ids,
+        tree_store=tree_store,
+        reuse_trees=bool(reuse_trees),
+        save_trees=bool(save_trees),
     )
     seed_reaction_compounds_by_smiles = seed_reaction_compounds_by_smiles or {}
     tasks = (
@@ -862,6 +872,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--save-all-edges", action="store_true",
         help="Save all candidate edges and nodes; edges beyond the root and positive-path endpoints are ignored by branch loss.",
     )
+    parser.add_argument(
+        "--tree-store", default=None,
+        help="Shared fragment-tree store directory (also used by Reaction Pattern Analysis).",
+    )
+    parser.add_argument(
+        "--reuse-trees", type=int, choices=(0, 1), default=1,
+        help="Replay stored trees of the same compound, settings, precursor adducts and patterns (default 1).",
+    )
+    parser.add_argument(
+        "--save-trees", type=int, choices=(0, 1), default=0,
+        help="Save every complete tree (all reaction histories and products) to --tree-store (default 0).",
+    )
     configure_chemistry_options(parser)
     parser.add_argument(
         "--pretrained-pattern-model",
@@ -1053,6 +1075,9 @@ def main(argv: list[str] | None = None) -> None:
         max_reaction_combinations=args.max_reaction_combinations,
         num_workers=args.num_workers,
         chunk_size=args.chunk_size,
+        tree_store=args.tree_store,
+        reuse_trees=bool(args.reuse_trees),
+        save_trees=bool(args.save_trees),
     )
     preparation_config = dict(
         input=args.input,
@@ -1215,6 +1240,9 @@ def main(argv: list[str] | None = None) -> None:
         "max_unique_fragment_smiles": "maxUniqueFragmentSmiles",
         "max_reaction_combinations": "maxReactionCombinations",
         "save_all_edges": "saveAllEdges",
+        "tree_store": "treeStore",
+        "reuse_trees": "reuseTrees",
+        "save_trees": "saveTrees",
         "num_workers": "numWorkers",
         "chunk_size": "chunkSize",
     }

@@ -332,6 +332,7 @@ def load_samples(
     adducts = data[columns["adduct"]]
     energies = data[columns["collision_energy"]]
     precursors = data[columns["precursor_mz"]]
+    metadata = data.to_pandas() if hasattr(data, "to_pandas") else None
     samples: list[SampleRecord] = []
     invalid_peaks = 0
     for local in tqdm(
@@ -379,6 +380,15 @@ def load_samples(
                 intensity=intensity,
                 relative_intensity=(
                     intensity / top if top > 0 else np.zeros_like(intensity)
+                ),
+                metadata=(
+                    None
+                    if metadata is None
+                    else {
+                        str(key): (None if value is None or (isinstance(value, float) and math.isnan(value)) else
+                                   value if isinstance(value, (int, float, bool, str)) else str(value))
+                        for key, value in metadata.iloc[int(local)].items()
+                    }
                 ),
             )
         )

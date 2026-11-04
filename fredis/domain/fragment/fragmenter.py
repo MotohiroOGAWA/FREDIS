@@ -86,6 +86,7 @@ class Fragmenter:
         print_info: bool = False,
         precomputed_reactions: Sequence | None = None,
         precomputed_relations=None,
+        precursor_filter=None,
     ) -> FragmentIonTree:
         return self.fragment_ion_tree_builder.build(
             compound,
@@ -98,6 +99,36 @@ class Fragmenter:
             print_info=print_info,
             precomputed_reactions=precomputed_reactions,
             precomputed_relations=precomputed_relations,
+            precursor_filter=precursor_filter,
+        )
+
+    def precursor_filter(
+        self, source: Compound, precursor_types: Iterable[Adduct]
+    ) -> "PrecursorDepthFilter":
+        """A depth-by-depth precursor filter for spectra of these precursor types."""
+        shifts = tuple(
+            Adduct.from_dict({"H": shift}) for shift in self.adduct_rule_set.hydrogen_shifts
+        )
+        matchers = []
+        for precursor_type in dict.fromkeys(precursor_types):
+            ions = self.adduct_rule_set.get_rule_by_adduct_type(
+                self._resolve_main_adduct_type(precursor_type)
+            ).fragment_ion_adducts
+            target = precursor_type.apply_to_formula(source.formula).normalized
+            matchers.append(
+                lambda compound, ions=ions, target=target: self._is_precursor_formula(
+                    compound, ions, shifts, target
+                )
+            )
+        return PrecursorDepthFilter(tuple(matchers))
+
+    @staticmethod
+    def _is_precursor_formula(compound, ions, shifts, target) -> bool:
+        return any(
+            ion.apply_to_formula(shift.apply_to_formula(compound.formula).normalized).normalized
+            == target
+            for ion in ions
+            for shift in shifts
         )
 
     def resolve_precursor_reactions(
@@ -108,8 +139,10 @@ class Fragmenter:
         """The reaction combination(s) on Source that select precursor_type's ion.
 
         A node is a precursor when its compound, a shared hydrogen shift and
-        an allowed fragment-ion adduct give the precursor formula. Every reaction combination
-        reaching that node within the fragment-tree reaction budget is returned.
+        an allowed fragment-ion adduct give the precursor formula. Only the
+        combinations with the fewest reactions count: the search is done depth
+        by depth, and the first depth at which the precursor appears fixes it
+        (Source itself for e.g. [M+H]+, one water loss for [M+H-H2O]+).
         An empty result means no precursor is reachable.
         """
         return self._resolve_precursor_reactions(
@@ -323,7 +356,12 @@ class Fragmenter:
                             node_index=node_index, reaction_sequence=sequence
                         )
                     )
-        return frozenset(precursors)
+        if not precursors:
+            return frozenset()
+        fewest = min(reaction_count(item.reaction_sequence) for item in precursors)
+        return frozenset(
+            item for item in precursors if reaction_count(item.reaction_sequence) == fewest
+        )
 
     def _reaction_combinations_for_node(
         self,
@@ -461,3 +499,59 @@ class Fragmenter:
             fragment_ion_tree_builder=self.fragment_ion_tree_builder.copy(),
             mass_tolerance=self.mass_tolerance,
         )
+
+
+class PrecursorDepthFilter:
+    """Which reaction histories a precursor-aware, depth-by-depth search keeps.
+
+    Each precursor type (one per distinct precursor adduct of the spectra that
+    share a tree) is fixed at the first depth where a history reaches its
+    formula.  Up to that depth every history is kept; deeper histories are
+    kept only when they contain one of those precursor histories.  The tree is
+    shared, so a history is kept when any precursor type keeps it, and nothing
+    is pruned while some type is still unresolved or is Source itself.
+    """
+
+    def __init__(self, matchers):
+        self.matchers = tuple(matchers)
+        self.found: list[tuple[int, tuple[frozenset, ...]] | None] = [None] * len(
+            self.matchers
+        )
+
+    def observe(self, depth: int, items):
+        """Record the histories of ``depth`` (``(sequence, compound)`` pairs)."""
+        for index, matcher in enumerate(self.matchers):
+            if self.found[index] is not None:
+                continue
+            hits = tuple(
+                frozenset(sequence.reactions) if sequence is not None else frozenset()
+                for sequence, compound in items
+                if matcher(compound)
+            )
+            if hits:
+                self.found[index] = (depth, hits)
+        return self.rule()
+
+    def rule(self):
+        """``None`` (keep everything) or ``(keep, expand)`` predicates."""
+        if not self.matchers or any(
+            found is None or found[0] == 0 for found in self.found
+        ):
+            return None
+        rules = tuple(self.found)
+
+        def reactions(sequence):
+            return frozenset(sequence.reactions) if sequence is not None else frozenset()
+
+        def holds(found, values):
+            return any(precursor <= values for precursor in found[1])
+
+        def keep(sequence):
+            values = reactions(sequence)
+            return any(len(values) <= found[0] or holds(found, values) for found in rules)
+
+        def expand(sequence):
+            values = reactions(sequence)
+            return any(len(values) < found[0] or holds(found, values) for found in rules)
+
+        return keep, expand

@@ -5,7 +5,9 @@ condition.  The file holds only binary peak annotations, never fragment
 structures or paths (those are in C).  ``assigned::<condition_id>`` and
 ``count::<condition_id>`` exist for every condition resolved for this
 compound; ``compound_condition`` in A tells which samples each condition
-evaluated.  An edge's newly assigned peaks are ``child and not parent``.
+evaluated.  ``patterns::<condition_id>`` lists (comma-joined) the ids of the
+patterns in any history that explains the peak under that condition, and
+``rules::<condition_id>`` the ``pattern:rule`` (product) pairs.  An edge's newly assigned peaks are ``child and not parent``.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from .comparison import CompoundComparison
-from .constants import FORMULA_COLUMN, assigned_column, count_column
+from .constants import FORMULA_COLUMN, assigned_column, count_column, patterns_column, rules_column
 
 IDENTITY_COLUMNS = {
     "compound_id": object,
@@ -34,6 +36,45 @@ IDENTITY_COLUMNS = {
     "relative_intensity": "float64",
     "is_precursor": bool,
 }
+
+
+def pattern_masks(per_peak, count: int) -> dict[int, np.ndarray]:
+    """``pattern id -> peak mask`` from per-peak id lists (or comma-joined strings)."""
+    masks: dict[int, np.ndarray] = {}
+    for peak, ids in enumerate(per_peak):
+        if isinstance(ids, str):
+            ids = [int(value) for value in ids.split(",") if value != ""]
+        for pattern_id in ids or ():
+            mask = masks.get(int(pattern_id))
+            if mask is None:
+                mask = masks[int(pattern_id)] = np.zeros(count, dtype=bool)
+            mask[peak] = True
+    return masks
+
+
+def rule_masks(per_peak, count: int) -> dict[tuple[int, int], np.ndarray]:
+    """``(pattern id, rule id) -> peak mask`` from per-peak ``pattern:rule`` lists or strings."""
+    masks: dict[tuple[int, int], np.ndarray] = {}
+    for peak, ids in enumerate(per_peak):
+        if isinstance(ids, str):
+            ids = [value for value in ids.split(",") if value != ""]
+        for value in ids or ():
+            pattern, _, rule = str(value).partition(":")
+            key = (int(pattern), int(rule))
+            mask = masks.get(key)
+            if mask is None:
+                mask = masks[key] = np.zeros(count, dtype=bool)
+            mask[peak] = True
+    return masks
+
+
+def pattern_strings(masks: dict, count: int) -> np.ndarray:
+    ids = [[] for _ in range(count)]
+    for key in sorted(masks):
+        label = f"{key[0]}:{key[1]}" if isinstance(key, tuple) else str(key)
+        for peak in np.flatnonzero(masks[key]):
+            ids[int(peak)].append(label)
+    return np.asarray([",".join(values) for values in ids], dtype=object)
 
 
 def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
@@ -79,6 +120,14 @@ def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
             part[count_column(condition_id)] = np.asarray(
                 outcome.counts[index], dtype=np.int32
             )
+            if outcome.patterns is not None:
+                part[patterns_column(condition_id)] = pattern_strings(
+                    outcome.patterns[index], count
+                )
+            if outcome.rules is not None:
+                part[rules_column(condition_id)] = pattern_strings(
+                    outcome.rules[index], count
+                )
         parts.append(pd.DataFrame(part))
     if parts:
         return pd.concat(parts, ignore_index=True)
@@ -91,6 +140,10 @@ def peak_frame(comparison: CompoundComparison) -> pd.DataFrame:
     for condition_id in conditions:
         frame[assigned_column(condition_id)] = pd.Series(dtype=bool)
         frame[count_column(condition_id)] = pd.Series(dtype="int32")
+        if comparison.outcomes[condition_id].patterns is not None:
+            frame[patterns_column(condition_id)] = pd.Series(dtype=object)
+        if comparison.outcomes[condition_id].rules is not None:
+            frame[rules_column(condition_id)] = pd.Series(dtype=object)
     return frame
 
 
@@ -104,13 +157,12 @@ def write_peaks(comparison: CompoundComparison, output: Path) -> Path:
     return path
 
 
-def read_condition_masks(
-    path: Path, columns: dict[int, tuple[str, str | None]]
-) -> dict:
-    """``{(sample_index, condition_id): (assigned, counts)}`` from a peak table.
+def read_condition_masks(path: Path, columns: dict[int, tuple]) -> dict:
+    """``{(sample_index, condition_id): (assigned, counts, patterns, rules)}`` from a peak table.
 
-    ``columns`` maps condition ids to their (assigned, count) column names in
-    that file; a missing count column means one path per assigned peak.
+    ``columns`` maps condition ids to their (assigned, count[, patterns[, rules]])
+    column names in that file; a missing count column means one path per
+    assigned peak, and a missing patterns/rules column gives ``None``.
     """
     frame = pd.read_parquet(path)
     result = {}
@@ -118,7 +170,10 @@ def read_condition_masks(
         return result
     for sample_index, rows in frame.groupby("sample_index", sort=False):
         rows = rows.sort_values("peak_index")
-        for condition_id, (assigned_name, count_name) in columns.items():
+        for condition_id, names in columns.items():
+            assigned_name, count_name = names[0], names[1]
+            patterns_name = names[2] if len(names) > 2 else None
+            rules_name = names[3] if len(names) > 3 else None
             if assigned_name not in rows.columns:
                 continue
             assigned = rows[assigned_name].to_numpy(dtype=bool)
@@ -127,5 +182,20 @@ def read_condition_masks(
                 if count_name and count_name in rows.columns
                 else assigned.astype(np.int32)
             )
-            result[(int(sample_index), int(condition_id))] = (assigned, counts)
+            patterns = (
+                pattern_masks(rows[patterns_name].fillna("").tolist(), len(rows))
+                if patterns_name and patterns_name in rows.columns
+                else None
+            )
+            rules = (
+                rule_masks(rows[rules_name].fillna("").tolist(), len(rows))
+                if rules_name and rules_name in rows.columns
+                else None
+            )
+            result[(int(sample_index), int(condition_id))] = (
+                assigned,
+                counts,
+                patterns,
+                rules,
+            )
     return result

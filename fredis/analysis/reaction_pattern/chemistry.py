@@ -4,10 +4,13 @@ A task carries one compound and the conditions to calculate for it, parents
 first.  Source reactions are enumerated once per (compound, pattern) and cached
 for the whole task, so a pattern set used at several tree nodes is matched
 only once.  A root condition is a full fragment-tree build from its reactions;
-a child condition is seeded with its parent's reaction-sequence compounds and
-may only add reactions of the patterns its pattern set introduces (every
-history containing a new reaction has a parent-only prefix shorter than
-``max_reaction_count``, so this equals a full build of the child condition).
+a child condition is seeded with every reaction history its parent kept and
+adds reactions of the patterns its pattern set introduces; once a history
+holds a new reaction, parent reactions may follow it too.  The search is
+precursor-aware (each depth is finished before the next, and histories past
+a spectrum's precursor depth must contain its precursor history), and every
+child history's parent-only part is itself a kept parent history, so this
+equals a full build of the child condition.
 Every saved tree keeps its reaction-sequence compounds so that later runs can
 add children below it without recalculating it.
 """
@@ -78,6 +81,9 @@ class ChemistryOptions:
     chemistry_config: dict
     max_unique_fragment_smiles: int = -1
     max_reaction_combinations: int = -1
+    tree_store: str = ""
+    reuse_trees: bool = True
+    save_trees: bool = False
 
 
 _STATE: dict = {}
@@ -97,6 +103,9 @@ def initialize(options: ChemistryOptions) -> None:
         generator,
         max_unique_fragment_smiles=options.max_unique_fragment_smiles,
         max_reaction_combinations=options.max_reaction_combinations,
+        tree_store=options.tree_store or None,
+        reuse_trees=options.reuse_trees,
+        save_trees=options.save_trees,
     )
     _STATE["max_reaction_count"] = int(
         options.chemistry_config["fragmenter_params"]["fragment_ion_tree_builder"].get(
@@ -153,7 +162,7 @@ class _CompoundReactions:
 
 
 def _seeds_from_file(seed_file: str) -> dict | None:
-    """Reaction-sequence compounds below max depth, cached per process."""
+    """Every reaction-sequence compound a saved tree kept, cached per process."""
     from fredis.analysis.prepared_result import load_prepared_structure
     from fredis.libs.mmkit.mmkit import Compound
 
@@ -163,14 +172,12 @@ def _seeds_from_file(seed_file: str) -> dict | None:
         return cache[seed_file]
     _, metadata = load_prepared_structure(seed_file)
     stored = metadata.get("reaction_sequence_compounds")
-    limit = _STATE["max_reaction_count"]
     seeds = (
         None
         if not stored
         else {
             sequence: Compound.from_smiles(mapped_smiles)
             for sequence, mapped_smiles in stored
-            if len(sequence.reactions) < limit
         }
     )
     cache[seed_file] = seeds
@@ -255,12 +262,7 @@ def run_task(task: ChemistryTask) -> dict:
             )
             state[step.condition_id] = (status, (), None, "")
             continue
-        limit = _STATE["max_reaction_count"]
-        seeds_out = {
-            sequence: value
-            for sequence, value in builder.last_reaction_sequence_compounds.items()
-            if len(sequence.reactions) < limit
-        }
+        seeds_out = dict(builder.last_reaction_sequence_compounds)
         state[step.condition_id] = (
             COMPLETED,
             tuple(result["kept"]),
@@ -280,7 +282,15 @@ def run_task(task: ChemistryTask) -> dict:
                 **result,
             )
         )
-    return {"compound_id": compound.compound_id, "steps": results}
+    return {
+        "compound_id": compound.compound_id,
+        "steps": results,
+        # Products (rules) with a reaction instance on the precursor, per pattern.
+        "instance_rules": {
+            int(pattern_id): sorted({int(r.reaction_rule_id) for r in instances})
+            for pattern_id, instances in reactions.by_pattern.items()
+        },
+    }
 
 
 def _build(
@@ -316,6 +326,7 @@ def _build(
         pick(compound.collision_energies),
         pick(compound.peaks_mz),
         pick(compound.peaks_intensity),
+        pattern_ids=step.pattern_ids,
         **options,
     )
     relative_kept = [int(value) for value in relative_kept]
@@ -356,4 +367,55 @@ def _build(
         [len(peak.get("matches", ())) for peak in annotation.get("peaks", ())]
         for annotation in annotations
     ]
-    return dict(file=str(output), kept=kept, counts=counts)
+    return dict(
+        file=str(output),
+        kept=kept,
+        counts=counts,
+        tree_store=builder.last_tree_store,
+        **peak_explanations(structure, builder.last_reactions, annotations),
+    )
+
+
+def peak_explanations(structure, reactions, annotations) -> dict:
+    """``patterns`` and ``rules`` (``"pattern:rule"``) explaining each peak of each sample."""
+    rules = peak_rules(structure, reactions, annotations)
+    return dict(
+        patterns=[[sorted({p for p, _ in peak}) for peak in sample] for sample in rules],
+        rules=[[[f"{p}:{r}" for p, r in peak] for peak in sample] for sample in rules],
+    )
+
+
+def peak_rules(structure, reactions, annotations) -> list[list[list[tuple[int, int]]]]:
+    """Per sample and peak, the sorted (pattern, rule) pairs in any explaining history."""
+    from fredis.analysis.prepared_result import state_reaction_combinations
+
+    combinations = state_reaction_combinations(structure)
+    pattern_of = [
+        (int(reaction.reaction_pattern_id), int(reaction.reaction_rule_id))
+        for reaction in reactions
+    ]
+    groups = structure.sample_branch_group_index.tolist()
+    cache: dict[tuple[int, int], frozenset] = {}
+
+    def node_patterns(group: int, node: int) -> frozenset:
+        key = (group, node)
+        if key not in cache:
+            cache[key] = frozenset(
+                pattern_of[reaction]
+                for combination in combinations.get(key, ())
+                for reaction in combination
+            )
+        return cache[key]
+
+    result = []
+    for sample, annotation in enumerate(annotations):
+        group = int(groups[sample])
+        peaks = []
+        for peak in annotation.get("peaks", ()):
+            ids: set[tuple[int, int]] = set()
+            for match in peak.get("matches", ()):
+                for node in match.get("nodeIds", ()):
+                    ids |= node_patterns(group, int(node))
+            peaks.append(sorted(ids))
+        result.append(peaks)
+    return result

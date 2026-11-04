@@ -48,6 +48,7 @@ class FragmentIonTreeBuilder(FragmentTreeBuilder):
         print_info: bool = False,
         precomputed_reactions: Sequence | None = None,
         precomputed_relations=None,
+        precursor_filter=None,
     ) -> FragmentIonTree:
         """Build FragmentIonTree from Compound."""
 
@@ -62,6 +63,7 @@ class FragmentIonTreeBuilder(FragmentTreeBuilder):
             print_info=print_info,
             precomputed_reactions=precomputed_reactions,
             precomputed_relations=precomputed_relations,
+            precursor_filter=precursor_filter,
         )
 
         fragment_tree: FragmentTree = result["fragment_tree"]

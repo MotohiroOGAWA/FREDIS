@@ -1,13 +1,16 @@
 """Peak-level metrics of every tree node and edge of one compound.
 
 Peaks are joined by ``(sample_id, peak_index)``.  Every annotation is binary
-per peak.  A condition's ``assigned`` mask is absolute: a child condition's
-mask is its parent's mask merged with the child tree's assignments (the
-seeded child tree need not repeat parent histories at full depth).
+per peak.  A condition's ``assigned`` mask is absolute and comes from that
+condition's own tree.  A child usually assigns every parent peak, but a new
+pattern that reaches a spectrum's precursor with fewer reactions can also
+remove parent explanations.
 
 A root node reports absolute metrics only.  An edge additionally reports its
 parent condition, ``delta = child - parent`` and newly assigned peaks
-(``child and not parent``).  An edge is evaluated only for compounds whose
+(``child and not parent``).  Each condition also records which patterns
+explain each peak, so a pattern can be counted as having reacted (it explains
+an assigned peak) or as newly reacting (it explains a newly assigned peak).  An edge is evaluated only for compounds whose
 precursor matches a pattern its set adds; for any other compound the child
 condition is identical to the parent condition.
 """
@@ -44,6 +47,11 @@ class ConditionOutcome:
         None  # identical to this condition (no added reactions for the compound)
     )
     search_stats: dict | None = None
+    # Per sample, pattern id -> peaks explained by a history with that pattern.
+    # None when unknown (a result written before patterns were recorded).
+    patterns: list[dict[int, np.ndarray]] | None = None
+    # Per sample, (pattern id, rule id) -> peaks explained with that product.
+    rules: list[dict[tuple[int, int], np.ndarray]] | None = None
 
     @property
     def completed(self) -> bool:
@@ -55,6 +63,8 @@ def empty_outcome(group: CompoundGroup, status: str, **values) -> ConditionOutco
         status=status,
         assigned=[np.zeros(len(sample.mz), dtype=bool) for sample in group.samples],
         counts=[np.zeros(len(sample.mz), dtype=np.int32) for sample in group.samples],
+        patterns=[{} for _ in group.samples],
+        rules=[{} for _ in group.samples],
         **values,
     )
 
@@ -114,6 +124,9 @@ class SampleNodeMetrics:
     new: np.ndarray | None
     metrics: dict
     metrics_without: dict
+    # Pattern id -> peaks explained with it under this node's condition (None: unknown).
+    patterns: dict[int, np.ndarray] | None = None
+    rules: dict[tuple[int, int], np.ndarray] | None = None
 
 
 @dataclass
@@ -146,6 +159,11 @@ class CompoundComparison:
     outcomes: dict[int, ConditionOutcome]
     # Samples evaluated by at least one root condition, in group order.
     population: tuple[int, ...] = ()
+    # Ids of the reported patterns whose reactant SMARTS matches the precursor.
+    matched_patterns: frozenset[int] = frozenset()
+    # Pattern id -> rule (product) ids with a reaction instance on the precursor;
+    # None when unknown.
+    instance_rules: dict[int, frozenset[int]] | None = None
 
 
 def compare_compound(
@@ -153,6 +171,8 @@ def compare_compound(
     nodes: list,
     outcomes: dict[int, ConditionOutcome],
     applicable: dict[str, bool],
+    matched_patterns=(),
+    instance_rules: dict | None = None,
 ) -> CompoundComparison:
     compound_nodes = []
     population: set[int] = set()
@@ -213,9 +233,24 @@ def compare_compound(
                         without,
                     )
                 item.samples.append(
-                    SampleNodeMetrics(sample, current, new, metrics, metrics_without)
+                    SampleNodeMetrics(
+                        sample,
+                        current,
+                        new,
+                        metrics,
+                        metrics_without,
+                        None if outcome.patterns is None else outcome.patterns[index],
+                        None if outcome.rules is None else outcome.rules[index],
+                    )
                 )
         compound_nodes.append(item)
     return CompoundComparison(
-        group, compound_nodes, outcomes, tuple(sorted(population))
+        group,
+        compound_nodes,
+        outcomes,
+        tuple(sorted(population)),
+        frozenset(int(value) for value in matched_patterns),
+        None
+        if instance_rules is None
+        else {int(key): frozenset(int(v) for v in value) for key, value in instance_rules.items()},
     )

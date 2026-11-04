@@ -69,10 +69,25 @@ class _ChemistryPreparationBuilder:
         *,
         max_unique_fragment_smiles: int = -1,
         max_reaction_combinations: int = -1,
+        tree_store=None,
+        reuse_trees: bool = True,
+        save_trees: bool = False,
     ) -> None:
         self.generator = generator
         self.max_unique_fragment_smiles = max_unique_fragment_smiles
         self.max_reaction_combinations = max_reaction_combinations
+        # A FragmentTreeStore (or its directory): complete trees are looked up
+        # before a build (reuse_trees) and saved after it (save_trees).
+        if tree_store is not None:
+            from fredis.domain.fragment.tree_store import FragmentTreeStore
+
+            if not isinstance(tree_store, FragmentTreeStore):
+                tree_store = FragmentTreeStore(tree_store)
+        self.tree_store = tree_store
+        self.reuse_trees = bool(reuse_trees)
+        self.save_trees = bool(save_trees)
+        self.last_tree_store = None
+        self._store_keys = None
         # Fragment-tree search statistics of the most recent build() call,
         # including one that stopped at a search limit or failed after the
         # tree was built; None when the tree search never ran.
@@ -92,6 +107,7 @@ class _ChemistryPreparationBuilder:
         addable_pattern_ids: frozenset[int] | None = None,
         precomputed_reactions: Sequence | None = None,
         precomputed_relations=None,
+        pattern_ids: Sequence[int] | None = None,
     ) -> tuple[SourceReactionStructure, tuple[int, ...]]:
         """Return the built structure plus which input sample indices it kept.
 
@@ -114,8 +130,49 @@ class _ChemistryPreparationBuilder:
         self.last_search_stats = None
         self.last_reaction_sequence_compounds = {}
         self.last_reactions = ()
+        self.last_tree_store = None
         generator = self.generator
         fragmenter = generator.fragmenter
+        # pattern_ids: the patterns of this tree (default: the whole pattern set).
+        wanted = tuple(
+            sorted(
+                int(value)
+                for value in (
+                    pattern_ids
+                    if pattern_ids is not None
+                    else (p.pattern_id for p in fragmenter.reaction_pattern_set)
+                )
+            )
+        )
+        adduct_labels = [str(value) for value in precursor_types]
+        if (
+            self.tree_store is not None
+            and self.reuse_trees
+            and seed_compounds is None
+            and addable_pattern_ids is None
+        ):
+            keys, settings = self._tree_store_keys()
+            stored = self.tree_store.find(
+                source.mapped_smiles, settings, {keys[i] for i in wanted}, adduct_labels
+            )
+            if stored is not None:
+                # Replay the stored histories; only patterns it lacks are added.
+                seed_compounds = stored.histories({keys[i]: i for i in wanted})
+                addable_pattern_ids = frozenset(
+                    i for i in wanted if keys[i] not in stored.pattern_keys
+                )
+                if precomputed_reactions is not None:
+                    precomputed_reactions = [
+                        reaction
+                        for reaction in precomputed_reactions
+                        if reaction.reaction_pattern_id in addable_pattern_ids
+                    ]
+                precomputed_relations = None
+                self.last_tree_store = dict(
+                    reused=str(stored.path),
+                    reused_patterns=len(stored.pattern_keys),
+                    added_patterns=len(addable_pattern_ids),
+                )
         # precomputed_reactions are the Source reactions this build may add: all
         # of them for a full build, or only the addable ones when seeded.
         if precomputed_reactions is not None:
@@ -174,6 +231,13 @@ class _ChemistryPreparationBuilder:
                     addable_pattern_ids=addable_pattern_ids,
                     precomputed_reactions=reactions,
                     precomputed_relations=relations,
+                    # Depth by depth: once each spectrum's precursor is found,
+                    # only histories containing it grow further.
+                    precursor_filter=(
+                        precursor_filter := fragmenter.precursor_filter(
+                            source, precursor_types
+                        )
+                    ),
                 )
                 break
             except FragmentTreeLimitExceeded as error:
@@ -204,6 +268,17 @@ class _ChemistryPreparationBuilder:
                 )
         completed = tree.search_stats["completed_max_reaction_count"]
         truncated = bool(failures) or tree.search_stats["search_truncated"]
+        if self.tree_store is not None and self.save_trees and not truncated:
+            keys, settings = self._tree_store_keys()
+            saved = self.tree_store.save(
+                source.mapped_smiles,
+                settings,
+                {i: keys[i] for i in wanted},
+                adduct_labels,
+                precursor_filter.rule() is None,
+                tree.reaction_sequence_compounds.items(),
+            )
+            self.last_tree_store = {**(self.last_tree_store or {}), "saved": str(saved)}
         self.last_search_stats = {
             **tree.search_stats,
             "requested_max_reaction_count": requested_count,
@@ -541,6 +616,26 @@ class _ChemistryPreparationBuilder:
             ),
             kept,
         )
+
+
+def _tree_store_keys(self):
+    """Pattern keys by id and the settings key of this builder's Fragmenter."""
+    if self._store_keys is None:
+        from fredis.domain.fragment.tree_store import pattern_key, settings_key
+
+        fragmenter = self.generator.fragmenter
+        self._store_keys = (
+            {p.pattern_id: pattern_key(p) for p in fragmenter.reaction_pattern_set},
+            settings_key(
+                fragmenter.to_dict(),
+                max_unique_fragment_smiles=self.max_unique_fragment_smiles,
+                max_reaction_combinations=self.max_reaction_combinations,
+            ),
+        )
+    return self._store_keys
+
+
+_ChemistryPreparationBuilder._tree_store_keys = _tree_store_keys
 
 
 class ReactionStructureBuilder(_ChemistryPreparationBuilder):

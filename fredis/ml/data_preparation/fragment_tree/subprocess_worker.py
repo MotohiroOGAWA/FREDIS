@@ -24,6 +24,9 @@ def main():
         generator,
         max_unique_fragment_smiles=options["max_unique_fragment_smiles"],
         max_reaction_combinations=options["max_reaction_combinations"],
+        tree_store=options.get("tree_store") or None,
+        reuse_trees=options.get("reuse_trees", True),
+        save_trees=options.get("save_trees", False),
     )
     results = []
     for task in payload["tasks"]:

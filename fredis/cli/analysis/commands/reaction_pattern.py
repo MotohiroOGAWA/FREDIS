@@ -172,6 +172,25 @@ class ReactionPatternAnalysisCommand(CLICommand):
             help="Delete and replace the complete output directory. If omitted in an interactive terminal, ask first.",
         )
         parser.add_argument(
+            "--tree-store",
+            default=None,
+            help="Shared fragment-tree store directory (also usable by Training Data preparation).",
+        )
+        parser.add_argument(
+            "--reuse-trees",
+            type=int,
+            choices=(0, 1),
+            default=None,
+            help="Replay stored trees of the same compound, settings, precursor adducts and patterns (default 1).",
+        )
+        parser.add_argument(
+            "--save-trees",
+            type=int,
+            choices=(0, 1),
+            default=None,
+            help="Save every complete condition tree (all reaction histories and products) to --tree-store (default 0).",
+        )
+        parser.add_argument(
             "--extend",
             type=int,
             choices=(0, 1),
@@ -235,6 +254,17 @@ class ReactionPatternAnalysisCommand(CLICommand):
             formula_assignment=formula_assignment,
             overwrite=bool(args.overwrite),
             extend=extend,
+            tree_store=args.tree_store,
+            reuse_trees=(
+                bool(args.reuse_trees)
+                if args.reuse_trees is not None
+                else bool((previous.run if previous else {}).get("reuseTrees", True))
+            ),
+            save_trees=(
+                bool(args.save_trees)
+                if args.save_trees is not None
+                else bool((previous.run if previous else {}).get("saveTrees", False))
+            ),
             **run_settings(args, previous.run if previous else None),
         )
         print(json.dumps({"ok": True, "result": str(result)}, ensure_ascii=False))

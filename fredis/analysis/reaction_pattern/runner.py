@@ -72,6 +72,9 @@ def run_configuration(
     formula_assignment: dict | None = None,
     overwrite: bool = False,
     extend: bool = False,
+    tree_store: str = "",
+    reuse_trees: bool = True,
+    save_trees: bool = False,
 ) -> dict:
     """The Workbench Input / Run form values that reproduce this run."""
     builder = chemistry_config["fragmenter_params"]["fragment_ion_tree_builder"]
@@ -95,6 +98,9 @@ def run_configuration(
         "formulaAssignment": formula_assignment,
         "overwrite": overwrite,
         "extend": extend,
+        "treeStore": tree_store,
+        "reuseTrees": reuse_trees,
+        "saveTrees": save_trees,
     }
 
 
@@ -239,13 +245,21 @@ def _reused_outcome(
     if prior.status != COMPLETED:
         return outcome
     for index in prior.kept:
-        assigned, counts = masks[(index, condition_id_text)]
+        assigned, counts, patterns, rules = masks[(index, condition_id_text)]
         if len(assigned) != len(group.samples[index].mz):
             raise ValueError(
                 f"The peaks of compound {group.compound_id} differ from the existing result."
             )
         outcome.assigned[index] = assigned
         outcome.counts[index] = counts
+        if patterns is None:
+            outcome.patterns = None  # written before patterns were recorded
+        elif outcome.patterns is not None:
+            outcome.patterns[index] = patterns
+        if rules is None:
+            outcome.rules = None
+        elif outcome.rules is not None:
+            outcome.rules[index] = rules
     return outcome
 
 
@@ -266,16 +280,28 @@ def _computed_outcome(
     if len(kept) != len(result["counts"]):
         raise ValueError("Chemistry result kept/count lengths differ")
     outcome.kept, outcome.file, outcome.seed_file = kept, result["file"], result["file"]
-    for index, values in zip(kept, result["counts"]):
+    explained = result.get("patterns")
+    if explained is None:
+        outcome.patterns = None
+    products = result.get("rules")
+    if products is None:
+        outcome.rules = None
+    for position, (index, values) in enumerate(zip(kept, result["counts"])):
         counts = np.asarray(values, dtype=np.int32)
-        if parent is not None:
-            # The seeded child tree may omit parent histories at full depth;
-            # the condition always includes every parent assignment.
-            outcome.assigned[index] = parent.assigned[index] | (counts > 0)
-            outcome.counts[index] = np.maximum(parent.counts[index], counts)
-        else:
-            outcome.assigned[index] = counts > 0
-            outcome.counts[index] = counts
+        # A child tree holds every history of its condition (all parent
+        # histories it keeps are seeded), so it stands on its own.  A new
+        # pattern can move a spectrum's precursor to fewer reactions, and the
+        # parent's deeper histories then no longer explain its peaks.
+        outcome.assigned[index] = counts > 0
+        outcome.counts[index] = counts
+        if outcome.patterns is not None:
+            outcome.patterns[index] = parquet_storage.pattern_masks(
+                explained[position], len(counts)
+            )
+        if outcome.rules is not None:
+            outcome.rules[index] = parquet_storage.rule_masks(
+                products[position], len(counts)
+            )
     return outcome
 
 
@@ -291,6 +317,8 @@ def _alias_outcome(target: ConditionOutcome, target_id: int) -> ConditionOutcome
         file="",
         seed_file=target.seed_file,
         alias_of=target_id,
+        patterns=target.patterns,
+        rules=target.rules,
     )
 
 
@@ -312,6 +340,9 @@ def generate_reaction_pattern_analysis(
     formula_assignment: dict | None = None,
     overwrite: bool = False,
     extend: bool = False,
+    tree_store: str | Path | None = None,
+    reuse_trees: bool = True,
+    save_trees: bool = False,
 ) -> Path:
     """Generate ``<output_dir>/result.reactionpatternanalysis.pft`` and its B/C files.
 
@@ -322,6 +353,12 @@ def generate_reaction_pattern_analysis(
     ``formula_assignment`` (Assign Formula settings: maxFormulaCandidates,
     timeoutSec, hydrogenDelta, enableNeutralLoss) also assigns peak formulas
     with the Fragmenter mass tolerance and compares them with the patterns.
+
+    ``tree_store`` is a shared FragmentTreeStore directory (also used by
+    Training Data preparation).  With ``reuse_trees`` a condition tree whose
+    compound, settings, precursor adducts and (a subset of its) patterns were
+    stored is replayed instead of reacting again; with ``save_trees`` every
+    complete condition tree (all reaction histories and products) is stored.
     """
     started = time.monotonic()
     columns = {
@@ -368,6 +405,8 @@ def generate_reaction_pattern_analysis(
         if previous is None:
             raise ValueError("A Tree Configuration with at least one node is required.")
         tree = previous.tree
+    if tree_store is None and previous is not None:
+        tree_store = previous.run.get("treeStore") or None
     tree = (
         tree
         if isinstance(tree, TreeConfiguration)
@@ -427,6 +466,9 @@ def generate_reaction_pattern_analysis(
         formula_assignment=formula_assignment,
         overwrite=overwrite,
         extend=extend,
+        tree_store=str(Path(tree_store).resolve()) if tree_store else "",
+        reuse_trees=bool(reuse_trees),
+        save_trees=bool(save_trees),
         **settings,
     )
     _write_run_configuration(output, chemistry_config, run)
@@ -500,14 +542,9 @@ def generate_reaction_pattern_analysis(
 
     # Phase 4 ---------------------------------------------------------------
     _section(4, "Precursor SMARTS applicability")
-    added = sorted(
-        {
-            pid
-            for node in resolved.nodes
-            for pid in node.added_pattern_ids
-            if node.parent_condition_id is not None
-        }
-    )
+    # Every pattern a node introduces: edges use them for applicability, and
+    # all of them (roots included) are counted in the pattern summary.
+    added = sorted({pid for node in resolved.nodes for pid in node.added_pattern_ids})
     compiled = applicability.compile_reactant_smarts(
         [dict(registry.definition(pid), pattern_id=pid) for pid in added]
     )
@@ -560,12 +597,20 @@ def generate_reaction_pattern_analysis(
         chemistry_config=library_config,
         max_unique_fragment_smiles=max_unique_fragment_smiles,
         max_reaction_combinations=max_reaction_combinations,
+        tree_store=run["treeStore"],
+        reuse_trees=run["reuseTrees"],
+        save_trees=run["saveTrees"],
     )
     computed: dict[str, dict[int, dict]] = {}
+
+    instance_rules: dict[str, dict[int, list[int]]] = {}
 
     def record(result: dict) -> None:
         computed[result["compound_id"]] = {
             int(step["condition_id"]): step for step in result["steps"]
+        }
+        instance_rules[result["compound_id"]] = {
+            int(key): value for key, value in (result.get("instance_rules") or {}).items()
         }
 
     executor.execute(
@@ -586,7 +631,12 @@ def generate_reaction_pattern_analysis(
         if plan.reused:
             prior_rows = list(plan.reused.items())
             columns_by_condition = {
-                condition_id: (prior.assigned_column, prior.count_column)
+                condition_id: (
+                    prior.assigned_column,
+                    prior.count_column,
+                    prior.patterns_column,
+                    prior.rules_column,
+                )
                 for condition_id, prior in prior_rows
             }
             peak_file = previous.peak_file(group.compound_id)
@@ -635,7 +685,19 @@ def generate_reaction_pattern_analysis(
                     )
                 outcomes[condition_id] = _computed_outcome(group, result, parent)
         comparisons.append(
-            compare_compound(group, resolved.nodes, outcomes, plan.applicable)
+            compare_compound(
+                group,
+                resolved.nodes,
+                outcomes,
+                plan.applicable,
+                matched.get(group.compound_id, ()),
+                summary.complete_instance_rules(
+                    fragmenter,
+                    group.canonical_smiles,
+                    matched.get(group.compound_id, ()),
+                    instance_rules.get(group.compound_id, {}),
+                ),
+            )
         )
 
     # Phase 8 ---------------------------------------------------------------
@@ -644,9 +706,24 @@ def generate_reaction_pattern_analysis(
         str(Path(value).resolve().relative_to(output)) if value else ""
     )
     tables, overall = summary.summarize(
-        comparisons, tree=resolved, datasets=dataset_rows, relative_path=relative
+        comparisons,
+        tree=resolved,
+        datasets=dataset_rows,
+        relative_path=relative,
+        rules=summary.pattern_rules(fragmenter, resolved),
     )
-    overall.update(calculatedConditionTrees=steps, reusedConditionTrees=reused)
+    summary.write_metadata(output, comparisons)
+    store_steps = [
+        step.get("tree_store") or {}
+        for steps_by_condition in computed.values()
+        for step in steps_by_condition.values()
+    ]
+    overall.update(
+        calculatedConditionTrees=steps,
+        reusedConditionTrees=reused,
+        treeStoreReusedTrees=sum(1 for item in store_steps if item.get("reused")),
+        treeStoreSavedTrees=sum(1 for item in store_steps if item.get("saved")),
+    )
     if formula_options is not None:
         overall.update(formulaStatusCounts=formula_status_counts)
 
@@ -705,6 +782,10 @@ def generate_reaction_pattern_analysis(
             "dataset_node_summary",
             "dataset_node_distribution",
             "dataset_overall_summary",
+            "pattern_summary",
+            "dataset_pattern_summary",
+            "pattern_rules",
+            "sample_pattern_hits",
             "sample_summary",
             "sample_node_summary",
             "compound_condition",

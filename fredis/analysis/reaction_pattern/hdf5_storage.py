@@ -261,6 +261,28 @@ TABLE_SCHEMAS: dict[str, list[tuple[str, str]]] = {
 TABLE_SCHEMAS["dataset_node_summary"] = [("dataset_id", I), *TABLE_SCHEMAS["node_summary"]]
 TABLE_SCHEMAS["dataset_node_distribution"] = [("dataset_id", I), *TABLE_SCHEMAS["node_distribution"]]
 TABLE_SCHEMAS["dataset_overall_summary"] = [("dataset_id", I), ("summary_json", S)]
+# Occurrence and reaction of every pattern a node introduces (see summary.pattern_summary);
+# -1 marks a count that is unknown or does not apply.
+TABLE_SCHEMAS["pattern_summary"] = [
+    ("node_row", I),
+    ("pattern_id", I),
+    ("rule_id", I),
+    ("compound_count", I),
+    ("sample_count", I),
+    *[
+        (f"{name}_{unit}_count", I)
+        for name in ("matched", "evaluated", "reacted", "new")
+        for unit in ("compound", "sample")
+    ],
+]
+TABLE_SCHEMAS["dataset_pattern_summary"] = [("dataset_id", I), *TABLE_SCHEMAS["pattern_summary"]]
+# Product rules of the reported patterns, and the per-spectrum rows every
+# pattern summary (any dataset or metadata filter) is aggregated from.
+TABLE_SCHEMAS["pattern_rules"] = [("pattern_id", I), ("rule_id", I), ("name", S), ("product_smarts", S)]
+TABLE_SCHEMAS["sample_pattern_hits"] = [
+    ("sample_id", I), ("compound_row", I), ("dataset_id", I), ("node_row", I),
+    ("pattern_id", I), ("rule_id", I), ("evaluated", I), ("reacted", I), ("new", I),
+]
 # Written only when present: formula x pattern comparison of a run with formula assignment.
 _FORMULA_CATEGORIES = ("both", "formula_only", "pattern_only", "neither")
 OPTIONAL_TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
@@ -289,6 +311,7 @@ LARGE_TABLES = frozenset(
         "sample_summary",
         "sample_node_summary",
         "compound_condition",
+        "sample_pattern_hits",
     }
 )
 # Tables sorted by compound_row, with a per-compound row range index.

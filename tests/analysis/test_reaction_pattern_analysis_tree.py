@@ -392,6 +392,12 @@ def test_extension_calculates_only_new_conditions(analysis, inputs, tmp_path, mo
             assert rows[key][column] == row[column]
     assert overall["reusedConditionTrees"] > 0
     assert not (output / "compounds.new").exists() and not (output / "compounds.old").exists()
+    # Reused conditions keep their saved pattern explanations.
+    with ReactionPatternAnalysisResult(result) as reader, ReactionPatternAnalysisResult(analysis["path"]) as first:
+        extended = {(row["nodeId"], row["patternId"], row["ruleId"]): row["scopes"]
+                    for row in reader.pattern_summary()["rows"]}
+        for row in first.pattern_summary()["rows"]:
+            assert extended[(row["nodeId"], row["patternId"], row["ruleId"])] == row["scopes"]
 
 
 def test_extension_rejects_different_settings(analysis, tmp_path):
@@ -747,3 +753,239 @@ def test_older_results_rebuild_dataset_summaries_from_saved_peaks(analysis, tmp_
         assert older.dataset_summaries_state() == "available"
         _same_rows(older.node_summary(), current.node_summary())
     assert hashlib.sha256(result.read_bytes()).hexdigest() == before
+
+
+# -- Pattern occurrence ------------------------------------------------------------------
+def _pattern_rows(reader) -> dict:
+    summary = reader.pattern_summary()
+    assert summary["state"] == "available"
+    return {row["nodeId"]: row for row in summary["rows"] if row["level"] == "pattern"}
+
+
+def test_pattern_summary_counts_matched_reacted_and_new(analysis):
+    with ReactionPatternAnalysisResult(analysis["path"]) as reader:
+        summary = reader.pattern_summary()
+        assert [scope["datasetId"] for scope in summary["scopes"]] == ["", "1", "2"]
+        rows = _pattern_rows(reader)
+        nodes = analysis["nodes"]
+    # A root reports its whole set; an edge only the patterns it adds.
+    assert sorted(rows) == sorted(nodes)
+    assert {row["patternName"] for row in rows.values()} == set(NAMES.values())
+    total = {key: row["scopes"][""] for key, row in rows.items()}
+    assert {value["compound_count"] for value in total.values()} == {2}
+    assert {value["sample_count"] for value in total.values()} == {5}
+    # Halogen and N patterns match no precursor.
+    for key in ("h", "hn"):
+        assert total[key]["matched_compound_count"] == total[key]["reacted_sample_count"] == 0
+    # O matches CCO (4 spectra); C matches CCO and CC (5 spectra).
+    assert (total["ho"]["matched_compound_count"], total["ho"]["matched_sample_count"]) == (1, 4)
+    assert (total["c"]["matched_compound_count"], total["c"]["matched_sample_count"]) == (2, 5)
+    # CC has only its precursor peak, so C never reacts for it.
+    assert total["c"]["reacted_compound_count"] == 1
+    # Roots have no parent, so nothing is "new" for them.
+    assert total["c"]["new_sample_count"] is None and total["h"]["new_compound_count"] is None
+    for key, value in total.items():
+        assert value["evaluated_sample_count"] <= value["matched_sample_count"] <= value["sample_count"]
+        assert value["reacted_sample_count"] <= value["evaluated_sample_count"]
+        if not rows[key]["isRoot"]:
+            assert value["new_sample_count"] <= value["reacted_sample_count"]
+            # One added pattern per edge: its new spectra are the edge's improved spectra.
+            assert value["new_sample_count"] == nodes[key]["improved_sample_count"]
+            assert value["new_compound_count"] == nodes[key]["improved_compound_count"]
+    # Spectrum counts of the datasets add up to the total.
+    for key, row in rows.items():
+        for column, value in row["scopes"][""].items():
+            if column.endswith("sample_count") and value is not None:
+                assert value == row["scopes"]["1"][column] + row["scopes"]["2"][column], (key, column)
+
+
+def test_pattern_summary_of_one_dataset_equals_a_run_of_that_dataset_alone(analysis, inputs, tmp_path):
+    with ReactionPatternAnalysisResult(analysis["path"]) as reader:
+        rows = _pattern_rows(reader)
+        datasets = reader.table_records("datasets")
+    for dataset, path in zip(datasets, inputs):
+        with ReactionPatternAnalysisResult(_run(tmp_path / path.stem, [path])) as alone:
+            summary = alone.pattern_summary()
+            assert [scope["datasetId"] for scope in summary["scopes"]] == [""]
+            for row in summary["rows"]:
+                if row["level"] == "pattern":
+                    assert rows[row["nodeId"]]["scopes"][str(dataset["dataset_id"])] == row["scopes"][""]
+
+
+def test_older_results_rebuild_pattern_summary_from_saved_peaks(analysis, tmp_path, monkeypatch):
+    import shutil
+
+    copy = tmp_path / "older"
+    shutil.copytree(analysis["path"].parent, copy)
+    result = copy / analysis["path"].name
+    with h5py.File(result, "a") as handle:
+        for name in ("pattern_summary", "dataset_pattern_summary", "sample_pattern_hits", "pattern_rules"):
+            del handle[name]
+    monkeypatch.setattr(chemistry, "run_task", lambda *a, **k: pytest.fail("Rebuilding must not run chemistry"))
+    with ReactionPatternAnalysisResult(analysis["path"]) as current, ReactionPatternAnalysisResult(result) as older:
+        assert older.pattern_summary_state() == "missing"
+        assert older.pattern_summary()["rows"] == []
+        older.ensure_pattern_summary()
+        assert older.pattern_summary() == current.pattern_summary()
+    # Without saved pattern explanations only the precursor matches are known.
+    for path in (copy / "compounds").glob("*.parquet"):
+        frame = pd.read_parquet(path)
+        frame.drop(columns=[name for name in frame.columns if name.startswith("patterns::")]).to_parquet(path)
+    # The rebuild above lived in a temporary file; the result still has no pattern tables.
+    with ReactionPatternAnalysisResult(analysis["path"]) as current, ReactionPatternAnalysisResult(result) as older:
+        older.ensure_pattern_summary()
+        expected = _pattern_rows(current)
+        for key, row in _pattern_rows(older).items():
+            value = row["scopes"][""]
+            assert value["matched_sample_count"] == expected[key]["scopes"][""]["matched_sample_count"]
+            if value["evaluated_sample_count"]:
+                assert value["reacted_sample_count"] is None and value["new_sample_count"] is None
+
+
+# -- Precursor-aware search ------------------------------------------------------------
+@pytest.mark.parametrize("order", [("C", "O"), ("O", "C")])
+def test_water_loss_precursor_child_equals_a_full_build(tmp_path, order):
+    """[M+H-H2O]+ spectra: the precursor needs a water loss, so histories past
+    it must contain it.  An edge seeded from its parent equals a full build."""
+    dataset = _dataset(tmp_path / "water.msds", [
+        (_spectrum("CCCO", "[M+H-H2O]+", 20, 43.054), [[43.054, 1.0], [41.039, 0.5], [29.039, 0.4], [27.023, 0.2]]),
+        (_spectrum("OCC(O)CO", "[M+H-H2O]+", 20, 75.044), [[75.044, 1.0], [57.034, 0.6], [45.034, 0.3], [31.018, 0.2]]),
+        (_spectrum("OCC(O)CO", "[M+H]+", 20, 93.055), [[93.055, 1.0], [75.044, 0.6], [57.034, 0.3]]),
+    ])
+    run = lambda output, tree: generate_reaction_pattern_analysis(
+        sources=[{"path": str(dataset)}], output_dir=output, chemistry_config=_chemistry(3), tree=tree, overwrite=True)
+    first, second = order
+    edge = run(tmp_path / "edge", {"patternSets": [_set(first), _set(second)],
+                                   "nodes": [{"id": "r", "patternSet": first},
+                                             {"id": "e", "patternSet": second, "parent": "r"}]})
+    full = run(tmp_path / "full", {"patternSets": [_set("CO", "C", "O")], "nodes": [{"id": "r", "patternSet": "CO"}]})
+    with ReactionPatternAnalysisResult(edge) as reader:
+        child = {row["node_id"]: row for row in reader.nodes()}["e"]["condition_id"]
+    compared = 0
+    for smiles in ("CCCO", "OCC(O)CO"):
+        compound = compound_id_for(smiles)
+        incremental = pd.read_parquet(edge.parent / "compounds" / f"{compound}.peaks.parquet")
+        complete = pd.read_parquet(full.parent / "compounds" / f"{compound}.peaks.parquet")
+        if first == "C" and smiles == "CCCO":
+            # C–C bonds alone never reach this water-loss precursor: the root drops
+            # the spectrum, so its edges never evaluate it.
+            assert incremental.empty and not complete.empty
+            continue
+        # Edges evaluate the spectra the root kept.
+        joined = incremental.merge(complete, on=["sample_index", "peak_index"], suffixes=("", ".full"))
+        assert len(joined) == len(incremental)
+        assert joined[assigned_column(child)].tolist() == joined[assigned_column(0) + ".full"].tolist(), smiles
+        assert joined[count_column(child)].tolist() == joined[count_column(0) + ".full"].tolist(), smiles
+        compared += int(joined["adduct"].eq("[M+H-H2O]+").any())
+    # A C–C root drops every water-loss spectrum; a C–O root keeps them.
+    assert bool(compared) == (first == "O")
+
+
+# -- Products and input metadata -------------------------------------------------------
+CLASSED = [("CCCO", 61.065, [[61.065, 1.0], [43.054, 0.7], [31.018, 0.4], [29.039, 0.3]], "Alcohols"),
+           ("OCC(O)CO", 93.055, [[93.055, 1.0], [75.044, 0.6], [57.034, 0.3]], "Polyols"),
+           ("CCO", 47.049, [[47.049, 1.0], [31.018, 0.6], [29.039, 0.3]], "Alcohols")]
+SET_TREE = {"patternSets": [_set("C"), _set("O")],
+            "nodes": [{"id": "c", "patternSet": "C"}, {"id": "co", "patternSet": "O", "parent": "c"}]}
+
+
+def _classed(path: Path, rows=CLASSED) -> Path:
+    import msentity  # noqa: F401  (dataset backend)
+
+    metadata = pd.DataFrame({"SMILES": [r[0] for r in rows], "AdductType": ["[M+H]+"] * len(rows),
+                             "CollisionEnergy": [20] * len(rows), "PrecursorMZ": [r[1] for r in rows],
+                             "Class": [r[3] for r in rows]})
+    peaks = [peak for row in rows for peak in row[2]]
+    offsets = np.cumsum([0] + [len(row[2]) for row in rows])
+    with_metadata(metadata, dataset_from_arrays(np.asarray(peaks, dtype=float),
+                                                np.asarray(offsets, dtype=np.int64))).save(str(path))
+    return path
+
+
+def _levels(summary, scope=""):
+    return {(row["level"], row["nodeId"], row["patternName"], row["ruleName"]): row["scopes"][scope]
+            for row in summary["rows"]}
+
+
+@pytest.fixture(scope="module")
+def classed(tmp_path_factory):
+    root = tmp_path_factory.mktemp("classed")
+    dataset = _classed(root / "classed.msds")
+    result = generate_reaction_pattern_analysis(sources=[{"path": str(dataset)}], output_dir=root / "result",
+                                                chemistry_config=_chemistry(), tree=SET_TREE, overwrite=True)
+    return {"root": root, "dataset": dataset, "result": result}
+
+
+def test_pattern_summary_expands_reaction_set_reactant_product(classed):
+    with ReactionPatternAnalysisResult(classed["result"]) as reader:
+        summary = reader.pattern_summary()
+    assert summary["products"]
+    rows = summary["rows"]
+    # Per node: the set, then each pattern followed by its products.
+    for node in ("c", "co"):
+        levels = [row["level"] for row in rows if row["nodeId"] == node]
+        assert levels[0] == "set" and levels[1] == "pattern" and set(levels[2:]) == {"rule"}
+    products = [row for row in rows if row["level"] == "rule"]
+    assert all(row["ruleName"] and row["productSmarts"] for row in products)
+    for row in rows:
+        if row["level"] == "set":
+            continue
+        pattern = next(item for item in rows if item["level"] == "pattern" and item["nodeRow"] == row["nodeRow"]
+                       and item["patternId"] == row["patternId"])
+        rule_rows = [item for item in products if item["nodeRow"] == row["nodeRow"] and item["patternId"] == row["patternId"]]
+        value, total = row["scopes"][""], pattern["scopes"][""]
+        # A product never reacts more often than its pattern, and some product explains every reacting spectrum.
+        assert value["reacted_sample_count"] <= total["reacted_sample_count"]
+        assert total["reacted_sample_count"] <= sum(item["scopes"][""]["reacted_sample_count"] for item in rule_rows)
+        assert value["matched_sample_count"] <= total["matched_sample_count"]
+    sets = {row["nodeId"]: row["scopes"][""] for row in rows if row["level"] == "set"}
+    assert sets["c"]["new_sample_count"] is None and sets["co"]["new_sample_count"] is not None
+    # The node's whole set reacts in a spectrum when any of its patterns does.
+    for node in ("c", "co"):
+        patterns = [row["scopes"][""] for row in rows if row["level"] == "pattern" and row["nodeId"] == node]
+        assert sets[node]["reacted_sample_count"] >= max(item["reacted_sample_count"] for item in patterns)
+
+
+def test_input_metadata_is_saved_and_filters_every_count(classed, tmp_path):
+    alcohols = [row for row in CLASSED if row[3] == "Alcohols"]
+    alone = generate_reaction_pattern_analysis(sources=[{"path": str(_classed(tmp_path / "alcohols.msds", alcohols))}],
+                                               output_dir=tmp_path / "alone", chemistry_config=_chemistry(),
+                                               tree=SET_TREE, overwrite=True)
+    condition = {"metadata": [{"column": "Class", "operator": "equals", "value": "Alcohols"}]}
+    with ReactionPatternAnalysisResult(classed["result"]) as reader, ReactionPatternAnalysisResult(alone) as other:
+        columns = {item["name"]: item for item in reader.metadata_columns()}
+        assert columns["Class"]["values"] == ["Alcohols", "Polyols"]
+        assert reader.info()["metadataColumns"]
+        filtered = reader.pattern_summary(condition)
+        assert filtered["filtered"] and not reader.pattern_summary()["filtered"]
+        # Filtering by Class equals analysing only that class.
+        assert _levels(filtered) == _levels(other.pattern_summary())
+        # The compound list and other filters follow the same metadata condition.
+        listed = reader.compound_list(condition)
+        assert {row["canonical_smiles"] for row in listed["rows"]} == {"CCCO", "CCO"}
+        for operator, value, expected in (("notEquals", "Alcohols", {"OCC(O)CO"}), ("contains", "poly", {"OCC(O)CO"}),
+                                          ("equals", ["Alcohols", "Polyols"], {"CCCO", "CCO", "OCC(O)CO"})):
+            rows = reader.compound_list({"metadata": [{"column": "Class", "operator": operator, "value": value}]})["rows"]
+            assert {row["canonical_smiles"] for row in rows} == expected, operator
+        numeric = reader.compound_list({"metadata": [{"column": "PrecursorMZ", "operator": "min", "value": 60}]})
+        assert {row["canonical_smiles"] for row in numeric["rows"]} == {"CCCO", "OCC(O)CO"}
+        with pytest.raises(ValueError, match="Unknown metadata column"):
+            reader.pattern_summary({"metadata": [{"column": "Nope", "value": "x"}]})
+
+
+def test_products_and_hits_are_rebuilt_from_saved_peaks(classed, tmp_path, monkeypatch):
+    import shutil
+
+    copy = tmp_path / "older"
+    shutil.copytree(classed["result"].parent, copy)
+    result = copy / classed["result"].name
+    with h5py.File(result, "a") as handle:
+        for name in ("pattern_summary", "dataset_pattern_summary", "sample_pattern_hits", "pattern_rules"):
+            del handle[name]
+    monkeypatch.setattr(chemistry, "run_task", lambda *a, **k: pytest.fail("Rebuilding must not run chemistry"))
+    with ReactionPatternAnalysisResult(classed["result"]) as current, ReactionPatternAnalysisResult(result) as older:
+        assert older.pattern_summary_state() == "missing"
+        older.ensure_pattern_summary()
+        assert older.pattern_summary() == current.pattern_summary()
+        condition = {"metadata": [{"column": "Class", "operator": "equals", "value": "Polyols"}]}
+        assert older.pattern_summary(condition) == current.pattern_summary(condition)

@@ -71,3 +71,16 @@ def assigned_column(condition_id: int) -> str:
 def count_column(condition_id: int) -> str:
     """Peak table column: number of assignment paths under this condition."""
     return f"count::{int(condition_id)}"
+
+
+METADATA_NAME = "samples.metadata.parquet"
+
+
+def rules_column(condition_id: int) -> str:
+    """Peak table column: comma-joined ``pattern:rule`` (product) ids explaining the peak."""
+    return f"rules::{int(condition_id)}"
+
+
+def patterns_column(condition_id: int) -> str:
+    """Peak table column: comma-joined ids of the patterns in any explanation of the peak."""
+    return f"patterns::{int(condition_id)}"

@@ -29,6 +29,8 @@ class PreviousOutcome:
     seed_path: str  # absolute path or ""
     assigned_column: str
     count_column: str | None
+    patterns_column: str | None = None
+    rules_column: str | None = None
 
 
 def _split(value) -> list[str]:
@@ -100,6 +102,8 @@ class PreviousResult:
                 str(self.root / row["seed_path"]) if row["seed_path"] else "",
                 f"assigned::{condition_id}",
                 f"count::{condition_id}",
+                f"patterns::{condition_id}",
+                f"rules::{condition_id}",
             )
         self._identity(
             read(

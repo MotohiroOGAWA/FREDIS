@@ -395,9 +395,16 @@ fragmenter's adduct rule set:
 
 For each record, the precursor formula is its adduct applied to the source
 formula. A tree node can be the precursor if its formula plus a hydrogen shift plus the
-allowed fragment-ion adduct equals the precursor formula. Every reaction combination
-reaching such a node within the fragment tree's `max_reaction_count` budget is a
-precursor combination.
+allowed fragment-ion adduct equals the precursor formula. The tree is searched
+one reaction count at a time from the source (0 reactions). The first reaction
+count at which some combination reaches such a node fixes the precursor: those
+combinations are the precursor combinations (the source itself for `[M+H]+`,
+one water loss for `[M+H-H2O]+`). From then on only combinations that contain a
+precursor combination are expanded, up to `max_reaction_count` in total, so the
+saved states hold no history that skips the precursor. Spectra of one compound
+share a tree; a combination is kept when any of their precursor adducts keeps
+it, and nothing is pruned while one of them is the source itself or is not yet
+found.
 
 - Records with no such precursor are dropped. The manifest reports them as
   `rejected_sample_count`, with the reason `N of M records dropped: unresolved

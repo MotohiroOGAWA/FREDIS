@@ -23,6 +23,7 @@ class ReactionSequenceSearchStats:
     num_rdkit_run_reactants: int = 0
     num_generated_fragments: int = 0
     num_unique_fragment_smiles: int = 0
+    num_precursor_pruned: int = 0
 
     def to_dict(self) -> dict[str, int]:
         return dict(vars(self))
@@ -269,3 +270,170 @@ class ReactionSequenceSearch:
                         frontier, (len(sequence.reactions), serial, sequence, i)
                     )
                     serial += 1
+
+
+    # -- Precursor-staged search ---------------------------------------------------
+    def iter_staged_candidates(self, on_depth):
+        """Depth-by-depth search whose later depths keep only precursor histories.
+
+        ``on_depth(depth)`` is called once every candidate with ``depth``
+        reactions has been yielded (and therefore materialized by the
+        consumer).  It returns ``None`` while no pruning applies, or a pair of
+        predicates ``(keep, expand)``: from then on only histories passing
+        ``expand`` are expanded and only children passing ``keep`` are
+        released.
+
+        Without pruning the enumeration is exactly ``iter_candidates``.  With
+        pruning a kept history may add any reaction (not only higher primitive
+        indices), so every kept history is reachable through kept histories;
+        when seeded, a history made only of seed reactions still adds only
+        addable reactions.  Like ``enumerate_completed_depths``, a depth that
+        exceeds ``max_reaction_combinations`` is discarded before any of its
+        candidates is released.
+        """
+        self._enumeration_depth = 0
+        self._completed_depth_stats = replace(self.stats)
+        attempts = []
+        completed = self.max_reaction_count
+        connections: set[_ReactionSequenceCandidate] = set()
+        frontier: list[tuple[int, int, ReactionSequence | None, int]] = []
+        minimum_cursor: dict[ReactionSequence | None, int] = {}
+        serial = 0
+        for seed in self.seeds:
+            rejection = self.relations.rejection(
+                tuple(self.index_by_reaction[a] for a in seed.reactions)
+            )
+            if rejection:
+                raise ValueError(f"Invalid seed reaction sequence: {rejection}")
+            self.visited_sequence_keys.add(seed.key)
+            candidate = _ReactionSequenceCandidate(None, seed, None, True)
+            connections.add(candidate)
+            yield candidate
+            heapq.heappush(frontier, (len(seed.reactions), serial, seed, -1))
+            minimum_cursor[seed] = -1
+            serial += 1
+        if not self.seeds or self.include_source:
+            heapq.heappush(frontier, (0, serial, None, -1))
+            minimum_cursor[None] = -1
+            serial += 1
+        seed_reactions = frozenset(a for seed in self.seeds for a in seed.reactions)
+        seeded = bool(self.seeds)
+        pending: list[_ReactionSequenceCandidate] = []
+        reported = -1
+        keep = expand = None
+
+        def report(depth):
+            nonlocal reported, keep, expand
+            while reported < depth:
+                reported += 1
+                rule = on_depth(reported)
+                keep, expand = (None, None) if rule is None else rule
+
+        try:
+            while frontier:
+                depth_of_next = frontier[0][0]
+                if depth_of_next > reported:
+                    # Every candidate of this depth exists: release, then classify.
+                    yield from pending
+                    pending = []
+                    self._completed_depth_stats = replace(self.stats)
+                    report(depth_of_next)
+                _, _, parent, cursor = heapq.heappop(frontier)
+                if minimum_cursor[parent] != cursor:
+                    continue
+                previous = parent.reactions if parent else ()
+                if len(previous) >= self.max_reaction_count:
+                    continue
+                if expand is not None and parent is not None and not expand(parent):
+                    # A history past its precursor depth without the precursor history.
+                    self.stats.num_precursor_pruned += 1
+                    continue
+                depth = len(previous) + 1
+                if depth > self._enumeration_depth:
+                    self._enumeration_depth = depth
+                if keep is None:
+                    start, allowed = cursor + 1, self.addable_reactions
+                else:
+                    # Any reaction may follow once the history holds an addable one.
+                    start = 0
+                    allowed = (
+                        self.addable_reactions
+                        if seeded and set(previous) <= seed_reactions
+                        else frozenset(self.reactions)
+                    )
+                for i in range(start, len(self.reactions)):
+                    reaction = self.reactions[i]
+                    if reaction in previous or reaction not in allowed:
+                        continue
+                    self.stats.num_raw_combinations += 1
+                    if (
+                        0
+                        <= self.max_reaction_combinations
+                        < self.stats.num_raw_combinations
+                    ):
+                        raise FragmentTreeLimitExceeded(
+                            "max_reaction_combinations", self.max_reaction_combinations
+                        )
+                    indices = tuple(self.index_by_reaction[a] for a in previous) + (i,)
+                    rejection = self.relations.rejection(indices)
+                    if rejection:
+                        if rejection == "hard_conflict":
+                            self.stats.num_hard_conflict_pruned += 1
+                        else:
+                            self.stats.num_invalidated_reaction_pruned += 1
+                        continue
+                    sequence = ReactionSequence((*previous, reaction))
+                    if (
+                        not sequence.retained_atom_maps
+                        or len(sequence.reactions) > self.max_reaction_count
+                    ):
+                        continue
+                    if sequence == parent:
+                        self.stats.num_duplicate_sequence_pruned += 1
+                        continue
+                    if keep is not None and not keep(sequence):
+                        self.stats.num_precursor_pruned += 1
+                        continue
+                    candidate = _ReactionSequenceCandidate(parent, sequence, reaction)
+                    if sequence.key in self.visited_sequence_keys:
+                        self.stats.num_duplicate_sequence_pruned += 1
+                    else:
+                        self.visited_sequence_keys.add(sequence.key)
+                    if candidate not in connections:
+                        connections.add(candidate)
+                        pending.append(candidate)
+                    position = i if keep is None else -1
+                    if sequence not in minimum_cursor or position < minimum_cursor[sequence]:
+                        minimum_cursor[sequence] = position
+                        heapq.heappush(
+                            frontier, (len(sequence.reactions), serial, sequence, position)
+                        )
+                        serial += 1
+            yield from pending
+            pending = []
+            report(self.max_reaction_count)
+        except FragmentTreeLimitExceeded as error:
+            if error.limit_name != "max_reaction_combinations":
+                raise
+            completed = self._enumeration_depth - 1
+            observed = self.stats.to_dict()
+            attempts.append(
+                dict(
+                    attempted_reaction_count=self._enumeration_depth,
+                    limit_name=error.limit_name,
+                    limit=error.limit,
+                    stats=observed,
+                )
+            )
+            if any(len(seed.reactions) > completed for seed in self.seeds):
+                error.stats = observed
+                raise
+            self.stats = self._completed_depth_stats
+            report(completed)
+        self.completion_stats = dict(
+            requested_max_reaction_count=self.max_reaction_count,
+            completed_max_reaction_count=completed,
+            search_truncated=bool(attempts),
+            discarded_from_reaction_count=completed + 1 if attempts else None,
+            limit_attempts=attempts,
+        )

@@ -90,6 +90,12 @@ def _number(value):
     return float(value)
 
 
+def pd_numeric(values):
+    import pandas as pd
+
+    return pd.to_numeric(values, errors="coerce")
+
+
 def _split(value) -> list[str]:
     return [item for item in str(value or "").split(",") if item != ""]
 
@@ -277,11 +283,14 @@ class ReactionPatternAnalysisResult:
         Like the formula-only coverage switch, the rebuilt summary lives in a
         temporary file; the result directory is not changed.
         """
+        if self.dataset_summaries_state() != "missing":
+            return
+        self._rebuild_summaries(progress)
+
+    def _rebuild_summaries(self, progress=None) -> None:
         import tempfile
         from .recalculate import recalculate_coverage
 
-        if self.dataset_summaries_state() != "missing":
-            return
         stored = bool(
             (self.configuration().get("formulaAssignment") or {}).get(
                 "intensityCoverageFormulaOnly"
@@ -317,6 +326,149 @@ class ReactionPatternAnalysisResult:
             for row in self._small(name)
             if int(row["dataset_id"]) == key
         ]
+
+    # -- Pattern occurrence ---------------------------------------------------------
+    def pattern_summary_state(self) -> str:
+        """``available``, or ``missing`` for a result written before pattern summaries."""
+        needed = ["pattern_summary", "sample_pattern_hits"]
+        if len(self._small("datasets")) > 1:
+            needed.append("dataset_pattern_summary")
+        return "available" if all(self._has_table(name) for name in needed) else "missing"
+
+    def ensure_pattern_summary(self, progress=None) -> None:
+        """Rebuild an older result's summaries with pattern tables, from saved peaks.
+
+        Precursor matching is recalculated from the saved SMILES; whether a
+        pattern reacted stays unknown (-1) unless the saved peaks record it.
+        """
+        if self.pattern_summary_state() == "missing":
+            self._rebuild_summaries(progress)
+
+    def pattern_summary(self, filters: dict | None = None) -> dict:
+        """reactionset -> reactant -> product rows with their counts per scope.
+
+        Rows are ``level`` ``set`` (a node's whole introduced pattern set),
+        ``pattern`` and ``rule`` (a product of the pattern).  Scopes are
+        ``""`` (total) and each dataset id when the result has several.
+        ``filters`` (the Data Filter, including ``metadata`` conditions)
+        restrict the spectra; counts are then recalculated from the saved
+        per-spectrum rows.  Counts are ``None`` when unknown or not
+        applicable (``new`` of a root).
+        """
+        datasets = self._small("datasets")
+        state = self.pattern_summary_state()
+        scopes = [{"datasetId": "", "label": "Total"}]
+        if len(datasets) > 1:
+            scopes += [
+                {
+                    "datasetId": str(row["dataset_id"]),
+                    "label": str(
+                        row.get("label")
+                        or Path(str(row.get("original_path") or "")).name
+                        or f"Dataset {row['dataset_id']}"
+                    ),
+                }
+                for row in datasets
+            ]
+        active = {
+            key: value for key, value in (filters or {}).items()
+            if value not in (None, "", [], False) and key != "withoutPrecursor"
+        }
+        if state == "missing":
+            return {"state": state, "scopes": scopes, "rows": [], "filtered": bool(active)}
+        detailed = self._has_table("sample_pattern_hits")
+        if active and not detailed:
+            raise ValueError("This result has no per-spectrum pattern rows; run the analysis again to filter them.")
+        if active:
+            counts_by_scope = self._filtered_pattern_counts(active, datasets)
+        else:
+            counts_by_scope = {"": self._small("pattern_summary")}
+            if len(datasets) > 1:
+                for row in self._small("dataset_pattern_summary"):
+                    counts_by_scope.setdefault(str(row["dataset_id"]), []).append(row)
+        names = {row["pattern_id"]: row for row in self._small("patterns")}
+        rules = (
+            {(row["pattern_id"], row["rule_id"]): row for row in self._small("pattern_rules")}
+            if self._has_table("pattern_rules") else {}
+        )
+        nodes = {row["node_row"]: row for row in self.nodes()}
+        rows: dict[tuple[int, int, int], dict] = {}
+        for scope, values in counts_by_scope.items():
+            for row in values:
+                key = (int(row["node_row"]), int(row["pattern_id"]), int(row.get("rule_id", -1)))
+                item = rows.get(key)
+                if item is None:
+                    node = nodes.get(key[0], {})
+                    pattern = names.get(key[1], {})
+                    rule = rules.get((key[1], key[2]), {})
+                    item = rows[key] = {
+                        "level": "set" if key[1] < 0 else "pattern" if key[2] < 0 else "rule",
+                        "nodeRow": key[0],
+                        "nodeId": node.get("node_id", ""),
+                        "isRoot": bool(node.get("is_root")),
+                        "patternSetName": node.get("pattern_set_name", ""),
+                        "pathLabel": node.get("path_label", ""),
+                        "conditionLabel": node.get("condition_label", ""),
+                        "patternId": key[1],
+                        "patternName": pattern.get("name", "") if key[1] >= 0 else "",
+                        "reactantSmarts": pattern.get("reactant_smarts", "") if key[1] >= 0 else "",
+                        "ruleId": key[2],
+                        "ruleName": rule.get("name", ""),
+                        "productSmarts": rule.get("product_smarts", ""),
+                        "scopes": {},
+                    }
+                item["scopes"][scope] = {
+                    column: (None if int(value) < 0 else int(value))
+                    for column, value in row.items()
+                    if column not in ("node_row", "pattern_id", "rule_id", "dataset_id")
+                }
+        ordered = sorted(rows.values(), key=lambda item: (item["nodeRow"], item["patternId"], item["ruleId"]))
+        return {"state": state, "scopes": scopes, "rows": ordered, "filtered": bool(active),
+                "products": bool(rules)}
+
+    def _filtered_pattern_counts(self, filters: dict, datasets) -> dict[str, list[dict]]:
+        import pandas as pd
+        from .summary import HIT_COLUMNS, aggregate_pattern_hits
+
+        with self._file() as handle:
+            samples = Table(handle["sample_summary"])
+            mask = self._sample_mask(handle, filters)
+            compound_rows = np.asarray(samples.column("compound_row"))
+            mask &= self._compound_mask(handle, filters)[compound_rows]
+            population = pd.DataFrame({
+                "sample_id": np.asarray(samples.column("sample_id"))[mask],
+                "compound_row": compound_rows[mask],
+                "dataset_id": np.asarray(samples.column("dataset_id"))[mask],
+            })
+            hits = pd.DataFrame(Table(handle["sample_pattern_hits"]).read(list(HIT_COLUMNS)))
+        hits = hits[hits["sample_id"].isin(population["sample_id"])]
+        tree = self._resolved_tree()
+        rules_by_pattern: dict[int, list] = {}
+        if self._has_table("pattern_rules"):
+            for row in self._small("pattern_rules"):
+                rules_by_pattern.setdefault(int(row["pattern_id"]), []).append(
+                    (int(row["rule_id"]), row["name"], row["product_smarts"]))
+        result = {"": aggregate_pattern_hits(hits, population, tree.nodes, rules_by_pattern)}
+        if len(datasets) > 1:
+            for row in datasets:
+                key = int(row["dataset_id"])
+                result[str(key)] = aggregate_pattern_hits(
+                    hits[hits["dataset_id"] == key], population[population["dataset_id"] == key],
+                    tree.nodes, rules_by_pattern)
+        return result
+
+    def _resolved_tree(self):
+        from .tree import PatternRegistry, TreeConfiguration, resolve_tree
+
+        if "resolved_tree" not in self._cache:
+            self._cache["resolved_tree"] = resolve_tree(
+                TreeConfiguration.from_dict(self.configuration()["tree"]),
+                PatternRegistry([
+                    {"pattern_id": row["pattern_id"], "definition": json.loads(row["definition_json"])}
+                    for row in self._small("patterns")
+                ]),
+            )
+        return self._cache["resolved_tree"]
 
     # -- A-only queries -----------------------------------------------------------
     def overall_summary(self, dataset_id=None) -> dict:
@@ -363,6 +515,8 @@ class ReactionPatternAnalysisResult:
             "overall": self.overall_summary(),
             "nodeSummary": self.node_summary(),
             "datasetSummaries": self.dataset_summaries_state(),
+            "patternSummary": self.pattern_summary_state(),
+            "metadataColumns": self.metadata_columns(),
         }
 
     def node_summary(self, dataset_id=None) -> list[dict]:
@@ -683,7 +837,82 @@ class ReactionPatternAnalysisResult:
                     mask &= values >= low
                 if high is not None:
                     mask &= values <= high
+        conditions = [item for item in (filters.get("metadata") or []) if item.get("column")]
+        if conditions:
+            keep = self._metadata_sample_ids(conditions)
+            mask &= np.isin(np.asarray(samples.column("sample_id")), keep)
         return mask
+
+    # -- Input metadata ----------------------------------------------------------------
+    def metadata_frame(self):
+        """Every input column of every analysed spectrum (``samples.metadata.parquet``)."""
+        import pandas as pd
+        from .constants import METADATA_NAME
+
+        if "metadata" not in self._cache:
+            path = self.root / METADATA_NAME
+            if path.is_file():
+                frame = pd.read_parquet(path)  # small; not a B/C file
+            else:
+                frame = pd.DataFrame({"sample_id": pd.Series(dtype="int64")})
+            self._cache["metadata"] = frame
+        return self._cache["metadata"]
+
+    def metadata_columns(self, max_values: int = 200) -> list[dict]:
+        """Columns available for filtering, with their values when there are few."""
+        frame = self.metadata_frame()
+        result = []
+        for column in frame.columns:
+            if column in ("sample_id", "dataset_id", "record_index"):
+                continue
+            values = frame[column].dropna()
+            distinct = values.unique()
+            numeric = pd_numeric(values)
+            result.append({
+                "name": column,
+                "distinct": int(len(distinct)),
+                "numeric": bool(len(values)) and bool(numeric.notna().all()),
+                "values": (sorted(map(str, distinct)) if len(distinct) <= max_values else []),
+            })
+        return result
+
+    def _metadata_sample_ids(self, conditions: list[dict]) -> np.ndarray:
+        """Sample ids whose metadata meets every condition.
+
+        A condition is ``{column, operator, value}``: ``equals`` (``value`` may
+        be a list: any of them), ``notEquals``, ``contains`` (case-insensitive),
+        ``min`` / ``max`` (numeric), ``empty`` / ``notEmpty``.
+        """
+        frame = self.metadata_frame()
+        keep = np.ones(len(frame), dtype=bool)
+        for condition in conditions:
+            column, operator = str(condition["column"]), condition.get("operator") or "equals"
+            if column not in frame.columns:
+                raise ValueError(f"Unknown metadata column: {column}")
+            values = frame[column]
+            text = values.astype("string").fillna("")
+            value = condition.get("value")
+            choices = [str(item) for item in (value if isinstance(value, list) else [value]) if item is not None]
+            if operator == "equals":
+                keep &= text.isin(choices).to_numpy(dtype=bool, na_value=False)
+            elif operator == "notEquals":
+                keep &= ~text.isin(choices).to_numpy(dtype=bool, na_value=False)
+            elif operator == "contains":
+                needle = (choices[0] if choices else "").lower()
+                keep &= text.str.lower().str.contains(needle, regex=False).to_numpy(dtype=bool, na_value=False)
+            elif operator in ("min", "max"):
+                bound = _number(choices[0] if choices else None)
+                if bound is None:
+                    continue
+                numbers = pd_numeric(values).to_numpy(dtype=float)
+                keep &= (numbers >= bound) if operator == "min" else (numbers <= bound)
+            elif operator == "empty":
+                keep &= (text == "").to_numpy(dtype=bool, na_value=False)
+            elif operator == "notEmpty":
+                keep &= (text != "").to_numpy(dtype=bool, na_value=False)
+            else:
+                raise ValueError(f"Unknown metadata operator: {operator}")
+        return frame["sample_id"].to_numpy()[keep]
 
     def compound_list(
         self,
@@ -712,6 +941,8 @@ class ReactionPatternAnalysisResult:
                 )
                 if filters.get(key) not in (None, "")
             ]
+            if any(item.get("column") for item in (filters.get("metadata") or [])):
+                sample_filters.append("metadata")
             if sample_filters:
                 samples = Table(handle["sample_summary"])
                 keep = np.zeros(count, dtype=bool)

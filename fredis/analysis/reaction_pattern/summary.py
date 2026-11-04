@@ -251,12 +251,228 @@ def restrict_to_dataset(
         nodes,
         {key: outcome(value) for key, value in comparison.outcomes.items()},
         tuple(index for index in comparison.population if index in keep),
+        comparison.matched_patterns,
     )
 
 
 def _rows(columns: dict[str, list]) -> list[dict]:
     names = list(columns)
     return [dict(zip(names, values)) for values in zip(*(columns[name] for name in names))]
+
+
+PATTERN_COUNTS = ("matched", "evaluated", "reacted", "new")
+UNKNOWN = -1
+HIT_COLUMNS = (
+    "sample_id", "compound_row", "dataset_id", "node_row", "pattern_id", "rule_id",
+    "evaluated", "reacted", "new",
+)
+
+
+def pattern_rules(fragmenter, tree) -> dict[int, list[tuple[int, str, str]]]:
+    """Every product rule ``(rule id, name, product SMARTS)`` of the patterns the nodes add."""
+    used = sorted({pid for node in tree.nodes for pid in node.added_pattern_ids})
+    pattern_set = fragmenter.fragment_ion_tree_builder.reaction_pattern_set
+    result = {}
+    for pid in used:
+        pattern = pattern_set.get_pattern(int(pid))
+        result[int(pid)] = [
+            (int(rule.id), str(rule.source_rule.name), str(rule.source_rule.smarts))
+            for rule in sorted(pattern.reaction_rules, key=lambda item: item.id)
+        ]
+    return result
+
+
+def complete_instance_rules(fragmenter, smiles: str, matched, known: dict) -> dict:
+    """Rules with a reaction instance on the precursor for every matched pattern.
+
+    Workers report the patterns they enumerated; the others (e.g. conditions
+    reused from an existing result) are enumerated here, on the precursor only.
+    """
+    result = {int(key): frozenset(value) for key, value in (known or {}).items()}
+    missing = [int(pid) for pid in matched if int(pid) not in result]
+    if missing:
+        from fredis.libs.mmkit.mmkit import Compound
+
+        instances = fragmenter.fragment_ion_tree_builder.create_reaction_instances(
+            Compound.from_smiles(smiles), pattern_ids=frozenset(missing)
+        )
+        for pid in missing:
+            result[pid] = frozenset(
+                int(item.reaction_rule_id) for item in instances if item.reaction_pattern_id == pid
+            )
+    return result
+
+
+def write_metadata(output, comparisons) -> None:
+    """``samples.metadata.parquet``: every input column of every analysed spectrum."""
+    import pandas as pd
+    from .constants import METADATA_NAME
+
+    rows = []
+    for comparison in comparisons:
+        for index in comparison.population:
+            sample = comparison.group.samples[index]
+            row = {
+                key: (None if value is None else str(value))
+                for key, value in (sample.metadata or {}).items()
+                if key not in ("sample_id", "dataset_id", "record_index")
+            }
+            rows.append(dict(sample_id=int(sample.sample_id), dataset_id=int(sample.dataset_id),
+                             record_index=int(sample.record_index), **row))
+    frame = pd.DataFrame(rows)
+    if not len(frame):
+        frame = pd.DataFrame({name: pd.Series(dtype="int64") for name in ("sample_id", "dataset_id", "record_index")})
+    target = output / METADATA_NAME
+    temporary = target.with_name(target.name + ".tmp")
+    frame.to_parquet(temporary, engine="pyarrow", index=False)
+    temporary.replace(target)
+
+
+def pattern_hits(tables: Tables, comparisons) -> None:
+    """``sample_pattern_hits``: one row per spectrum x node x introduced, matched pattern.
+
+    ``rule_id`` is -1 for the pattern itself; each product rule with a
+    reaction instance on the precursor has its own row.  ``evaluated``: the
+    node's condition was calculated for the spectrum; ``reacted``: the
+    pattern (product) explains an assigned peak; ``new``: it explains a peak
+    the parent condition does not assign.  -1 = unknown (``new`` of a root).
+    """
+    for compound_row, comparison in enumerate(comparisons):
+        population = comparison.population
+        if not population:
+            continue
+        group = comparison.group
+        for item in comparison.nodes:
+            node = item.node
+            matched = [pid for pid in node.added_pattern_ids if pid in comparison.matched_patterns]
+            if not matched:
+                continue
+            results = {
+                result.sample.sample_index: result for result in (item.samples if item.evaluated else ())
+            }
+            for index in population:
+                sample = group.samples[index]
+                result = results.get(sample.sample_index)
+                for pid in matched:
+                    keys = [(pid, -1, None)] + [
+                        (pid, rule, (pid, rule))
+                        for rule in sorted((comparison.instance_rules or {}).get(pid, ()))
+                    ]
+                    for pattern_id, rule_id, rule_key in keys:
+                        if result is None:
+                            reacted, new = 0, (UNKNOWN if item.is_root else 0)
+                        else:
+                            masks = result.patterns if rule_key is None else result.rules
+                            mask = None if masks is None else masks.get(pid if rule_key is None else rule_key)
+                            if masks is None:
+                                reacted = new = UNKNOWN
+                            else:
+                                reacted = int(mask is not None and bool((result.assigned & mask).any()))
+                                new = (
+                                    int(mask is not None and result.new is not None and bool((result.new & mask).any()))
+                                    if not item.is_root else UNKNOWN
+                                )
+                            if item.is_root:
+                                new = UNKNOWN
+                        tables.add(
+                            "sample_pattern_hits",
+                            sample_id=int(sample.sample_id),
+                            compound_row=compound_row,
+                            dataset_id=int(sample.dataset_id),
+                            node_row=int(node.node_row),
+                            pattern_id=int(pattern_id),
+                            rule_id=int(rule_id),
+                            evaluated=int(result is not None),
+                            reacted=int(reacted),
+                            new=int(new),
+                        )
+
+
+def aggregate_pattern_hits(hits, population, nodes, rules_by_pattern) -> list[dict]:
+    """``pattern_summary`` rows of one scope from its hit rows and analysed spectra.
+
+    ``hits``/``population`` are DataFrames (``population``: sample_id,
+    compound_row).  One row per node (``pattern_id`` = -1: the whole pattern
+    set it introduces), per introduced pattern (``rule_id`` = -1) and per
+    product rule.  Counts are -1 when unknown or not applicable.
+    """
+    import pandas as pd
+
+    compound_count = int(population["compound_row"].nunique()) if len(population) else 0
+    sample_count = int(len(population))
+    hits = hits if len(hits) else pd.DataFrame({name: pd.Series(dtype="int64") for name in HIT_COLUMNS})
+    patterns = hits[hits["rule_id"] < 0]
+    # Pattern-set level: a spectrum counts once per node, when any pattern does.
+    per_sample = patterns.assign(
+        unknown_reacted=(patterns["evaluated"] > 0) & (patterns["reacted"] < 0),
+        unknown_new=(patterns["evaluated"] > 0) & (patterns["new"] < 0),
+    ).groupby(["node_row", "sample_id", "compound_row"], as_index=False).agg(
+        evaluated=("evaluated", "max"), reacted=("reacted", "max"), new=("new", "max"),
+        unknown_reacted=("unknown_reacted", "any"), unknown_new=("unknown_new", "any"))
+    per_sample["pattern_id"] = -1
+    per_sample["rule_id"] = -1
+    frames = pd.concat([
+        per_sample,
+        hits.assign(unknown_reacted=(hits["evaluated"] > 0) & (hits["reacted"] < 0),
+                    unknown_new=(hits["evaluated"] > 0) & (hits["new"] < 0)),
+    ], ignore_index=True)
+    stats = {}
+    for key, rows in frames.groupby(["node_row", "pattern_id", "rule_id"], sort=False):
+        evaluated = rows[rows["evaluated"] > 0]
+        reacted = evaluated[evaluated["reacted"] > 0]
+        new = evaluated[evaluated["new"] > 0]
+        stats[tuple(int(value) for value in key)] = dict(
+            matched_compound_count=int(rows["compound_row"].nunique()),
+            matched_sample_count=int(len(rows)),
+            evaluated_compound_count=int(evaluated["compound_row"].nunique()),
+            evaluated_sample_count=int(len(evaluated)),
+            reacted_compound_count=UNKNOWN if rows["unknown_reacted"].any() else int(reacted["compound_row"].nunique()),
+            reacted_sample_count=UNKNOWN if rows["unknown_reacted"].any() else int(len(reacted)),
+            new_compound_count=UNKNOWN if rows["unknown_new"].any() else int(new["compound_row"].nunique()),
+            new_sample_count=UNKNOWN if rows["unknown_new"].any() else int(len(new)),
+        )
+    result = []
+    for node in nodes:
+        is_root = node.parent_node_id is None
+        keys = [(node.node_row, -1, -1)]
+        for pid in node.added_pattern_ids:
+            keys.append((node.node_row, int(pid), -1))
+            keys.extend((node.node_row, int(pid), int(rule)) for rule, *_ in rules_by_pattern.get(int(pid), ()))
+        for key in keys:
+            row = dict(node_row=key[0], pattern_id=key[1], rule_id=key[2],
+                       compound_count=compound_count, sample_count=sample_count)
+            values = stats.get(key, {})
+            for name in PATTERN_COUNTS:
+                for unit in ("compound", "sample"):
+                    column = f"{name}_{unit}_count"
+                    row[column] = UNKNOWN if (name == "new" and is_root) else int(values.get(column, 0))
+            result.append(row)
+    return result
+
+
+def _pattern_tables(tables: Tables, comparisons, nodes, datasets, rules_by_pattern) -> None:
+    import pandas as pd
+
+    pattern_hits(tables, comparisons)
+    for pid, rules in sorted(rules_by_pattern.items()):
+        for rule_id, name, smarts in rules:
+            tables.add("pattern_rules", pattern_id=int(pid), rule_id=int(rule_id), name=name, product_smarts=smarts)
+    hits = pd.DataFrame({name: tables.get("sample_pattern_hits").get(name, []) for name in HIT_COLUMNS})
+    columns = tables.get("sample_summary")
+    population = pd.DataFrame({name: columns.get(name, []) for name in ("sample_id", "compound_row", "dataset_id")})
+    for row in aggregate_pattern_hits(hits, population, nodes, rules_by_pattern):
+        tables.add("pattern_summary", **row)
+    if len(datasets) > 1:
+        for dataset in datasets:
+            dataset_id = int(dataset["dataset_id"])
+            scoped = aggregate_pattern_hits(
+                hits[hits["dataset_id"] == dataset_id],
+                population[population["dataset_id"] == dataset_id],
+                nodes,
+                rules_by_pattern,
+            )
+            for row in scoped:
+                tables.add("dataset_pattern_summary", dataset_id=dataset_id, **row)
 
 
 def _dataset_tables(tables: Tables, comparisons, *, tree, datasets, with_formula: bool) -> None:
@@ -291,6 +507,7 @@ def summarize(
     datasets: list[dict],
     relative_path=lambda value: value,
     by_dataset: bool = True,
+    rules: dict | None = None,
 ) -> tuple[Tables, dict]:
     """Return every A table plus the overall summary document.
 
@@ -723,6 +940,8 @@ def summarize(
             peak_count=int(stats.get("peak_count", 0)),
         )
     _tree_tables(tables, tree)
+    if by_dataset:
+        _pattern_tables(tables, comparisons, nodes, datasets, rules or {})
     if by_dataset and len(datasets) > 1:
         _dataset_tables(
             tables,

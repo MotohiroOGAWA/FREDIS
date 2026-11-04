@@ -35,6 +35,8 @@ class SampleRecord:
     precursor_formula: str = ""
     formulas: list[str] | None = None
     intensity_coverage_formula_only: bool = False
+    # Every input column of the record (e.g. Class), for filtering results later.
+    metadata: dict | None = None
 
     @property
     def coverage_intensity(self) -> np.ndarray:

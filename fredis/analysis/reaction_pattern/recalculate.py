@@ -10,7 +10,10 @@ import pandas as pd
 
 from .comparison import ConditionOutcome, compare_compound
 from .compounds import CompoundGroup, SampleRecord
-from .constants import assigned_column, count_column
+from . import applicability
+from .constants import assigned_column, count_column, patterns_column, rules_column
+from .parquet_storage import pattern_masks, rule_masks
+from . import summary as summary_module
 from .hdf5_storage import ResultWriter, TABLE_SCHEMAS
 from .summary import summarize
 from .tree import PatternRegistry, TreeConfiguration, resolve_tree
@@ -35,6 +38,15 @@ def recalculate_coverage(source, output: Path, formula_only: bool, progress=None
     for row in source.table_records('compound_node_summary'):
         applicable[row['compound_id']][tree.nodes[row['node_row']].node_id] = row['applicable']
     compounds = source.table_records('compounds')
+    added = sorted({pid for node in tree.nodes for pid in node.added_pattern_ids})
+    matched = applicability.match_precursors(
+        {row['compound_id']: row['canonical_smiles'] for row in compounds},
+        applicability.compile_reactant_smarts(
+            [dict(tree.registry.definition(pid), pattern_id=pid) for pid in added]),
+    )
+    from fredis.ml.data_preparation.fragment_tree.context import create_preparation_context
+
+    fragmenter = create_preparation_context(config['chemistryConfig']).fragmenter
     comparisons = []
     for number, compound in enumerate(compounds):
         if progress:
@@ -67,6 +79,7 @@ def recalculate_coverage(source, output: Path, formula_only: bool, progress=None
         outcomes = {}
         for row in conditions[group.compound_id]:
             cid = row['condition_id']
+            column, products = patterns_column(cid), rules_column(cid)
             outcomes[cid] = ConditionOutcome(
                 status=row['status'], skip_category=row['skip_category'], reason=row['reason'], error=row['error'],
                 kept=tuple(positions[int(index)] for index in row['kept'].split(',') if index and int(index) in positions),
@@ -74,12 +87,20 @@ def recalculate_coverage(source, output: Path, formula_only: bool, progress=None
                 counts=[rows[count_column(cid)].to_numpy(dtype=np.int32) for rows in parts],
                 file=row['detail_path'], seed_file=row['seed_path'],
                 alias_of=None if row['alias_of'] < 0 else row['alias_of'],
+                patterns=([pattern_masks(rows[column].fillna('').tolist(), len(rows)) for rows in parts]
+                          if column in frame.columns else None),
+                rules=([rule_masks(rows[products].fillna('').tolist(), len(rows)) for rows in parts]
+                       if products in frame.columns else None),
             )
-        comparisons.append(compare_compound(group, tree.nodes, outcomes, applicable[group.compound_id]))
+        compound_matched = matched.get(group.compound_id, ())
+        comparisons.append(compare_compound(
+            group, tree.nodes, outcomes, applicable[group.compound_id], compound_matched,
+            summary_module.complete_instance_rules(fragmenter, group.canonical_smiles, compound_matched, {})))
     datasets = [{key: value for key, value in row.items()
                  if key not in ('compound_count', 'sample_count', 'peak_count')}
                 for row in source.table_records('datasets')]
-    tables, overall = summarize(comparisons, tree=tree, datasets=datasets)
+    tables, overall = summarize(comparisons, tree=tree, datasets=datasets,
+                                rules=summary_module.pattern_rules(fragmenter, tree))
     original_overall = source.overall_summary()
     overall = {**original_overall, **overall}
     writer = ResultWriter(output)

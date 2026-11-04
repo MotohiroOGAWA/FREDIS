@@ -1,0 +1,32 @@
+{
+  "fragment_ion_adduct_rule_set": {
+    "name": "NIST23_minus",
+    "hydrogen_shift_min": -5,
+    "hydrogen_shift_max": 0,
+    "adduct_rules": [
+      {
+        "name": "neg_H",
+        "adduct_type": "[M-H]-",
+        "fragment_ion_adducts": [
+          "[M-H]-"
+        ]
+      },
+      {
+        "name": "neg_2M_H",
+        "adduct_type": "[2M-H]-",
+        "fragment_ion_adducts": [
+          "[2M-H]-",
+          "[M-H]-"
+        ]
+      },
+      {
+        "name": "neg_Cl",
+        "adduct_type": "[M+Cl]-",
+        "fragment_ion_adducts": [
+          "[M+Cl]-",
+          "[M-H]-"
+        ]
+      }
+    ]
+  }
+}
