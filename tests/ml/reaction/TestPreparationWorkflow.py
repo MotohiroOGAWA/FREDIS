@@ -537,24 +537,27 @@ class TestPreparationWorkflow(unittest.TestCase):
         # Every chunk's task file used to be written to --output-dir upfront,
         # for the whole dataset, before a single subprocess started -- on a
         # NIST-scale run this can duplicate close to the full dataset's size
-        # on disk before any of it is freed. Dispatch now happens in waves
-        # of at most num_workers chunks, each wave's files deleted once
-        # consumed, so no single run_parallel_subprocesses call (and thus no
-        # single on-disk moment) ever holds more than num_workers chunks.
+        # on disk before any of it is freed. A chunk's task file is now
+        # written only when a worker slot is free and deleted once consumed,
+        # so at most num_workers chunk task files exist at any moment.
         import fredis.ml.data_preparation.fragment_tree.create_training_data as create_training_data_module
         from fredis.ml.data_preparation.fragment_tree.create_training_data import (
             create_reaction_training_data,
         )
 
         max_seen = 0
-        real_run_parallel_subprocesses = (
-            create_training_data_module.run_parallel_subprocesses
-        )
+        real_run = create_training_data_module.run_rolling_subprocesses
 
-        def spy(commands_list, *args, **kwargs):
-            nonlocal max_seen
-            max_seen = max(max_seen, len(commands_list))
-            return real_run_parallel_subprocesses(commands_list, *args, **kwargs)
+        def spy(next_command, *args, **kwargs):
+            def counted():
+                nonlocal max_seen
+                command = next_command()
+                if command is not None:
+                    directory = Path(command[command.index("--task") + 1]).parent
+                    max_seen = max(max_seen, len(list(directory.glob("task-*.pkl"))))
+                return command
+
+            return real_run(counted, *args, **kwargs)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -563,7 +566,7 @@ class TestPreparationWorkflow(unittest.TestCase):
                 "max_reaction_count"
             ] = 1
             with unittest.mock.patch.object(
-                create_training_data_module, "run_parallel_subprocesses", spy
+                create_training_data_module, "run_rolling_subprocesses", spy
             ):
                 create_reaction_training_data(
                     dataset=self.dataset(),
@@ -574,6 +577,26 @@ class TestPreparationWorkflow(unittest.TestCase):
                 )
         self.assertGreater(max_seen, 0)
         self.assertLessEqual(max_seen, 2)
+
+    def test_rolling_workers_do_not_wait_for_a_slow_subprocess(self):
+        # A free slot gets the next command at once: quick commands queued
+        # after a slow one finish while it is still running.
+        import sys, time
+        from fredis.utils.parallel_subprocess import run_rolling_subprocesses
+
+        commands = iter(
+            [[sys.executable, "-c", "import time; time.sleep(1.5)"]]
+            + [[sys.executable, "-c", f"print({index})"] for index in range(4)]
+        )
+        finished, started = [], time.monotonic()
+        run_rolling_subprocesses(
+            lambda: next(commands, None),
+            max_workers=2,
+            on_complete=lambda command: finished.append(
+                ("slow" if "sleep" in command[-1] else "quick", time.monotonic() - started)
+            ),
+        )
+        self.assertEqual([kind for kind, _ in finished], ["quick"] * 4 + ["slow"])
 
     def test_unexpected_error_in_one_source_is_skipped_not_fatal(self):
         import fredis.ml.data_preparation.fragment_tree.create_training_data as create_training_data_module
@@ -618,21 +641,21 @@ class TestPreparationWorkflow(unittest.TestCase):
             create_reaction_training_data,
         )
 
-        real_run_parallel_subprocesses = (
-            create_training_data_module.run_parallel_subprocesses
-        )
+        real_run = create_training_data_module.run_rolling_subprocesses
         crash = [sys.executable, "-c", "import sys; sys.exit(3)"]
 
-        def spy(commands_list, *args, **kwargs):
+        def spy(next_command, *args, **kwargs):
             def sources(command):
                 with open(command[command.index("--task") + 1], "rb") as stream:
                     return [task[1] for task in pickle.load(stream)["tasks"]]
 
-            patched = [
-                crash + command[3:] if "CCN" in sources(command) else command
-                for command in commands_list
-            ]
-            return real_run_parallel_subprocesses(patched, *args, **kwargs)
+            def patched():
+                command = next_command()
+                if command is not None and "CCN" in sources(command):
+                    return crash + command[3:]
+                return command
+
+            return real_run(patched, *args, **kwargs)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -642,7 +665,7 @@ class TestPreparationWorkflow(unittest.TestCase):
             ] = 1
             with (
                 unittest.mock.patch.object(
-                    create_training_data_module, "run_parallel_subprocesses", spy
+                    create_training_data_module, "run_rolling_subprocesses", spy
                 ),
                 contextlib.redirect_stderr(io.StringIO()),
             ):

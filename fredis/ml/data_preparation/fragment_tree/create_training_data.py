@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from ...common.paths import relative_paths
 import argparse, json, math, sys, os, pickle, tempfile, shutil, csv, traceback
-from collections import Counter
+from collections import Counter, deque
 from itertools import islice
 from pathlib import Path
 from tqdm import tqdm
-from fredis.utils.parallel_subprocess import run_parallel_subprocesses
+from fredis.utils.parallel_subprocess import run_rolling_subprocesses
 from fredis.domain.fragment.tree.FragmentTreeBuilder import FragmentTreeLimitExceeded
 from fredis.libs.mmkit.mmkit import Compound, Adduct
 
@@ -565,11 +565,12 @@ def create_reaction_training_data(
                 )
                 progress.update(1)
     else:
-        # Use the shared subprocess runner, but only ever materialize up to
-        # num_workers chunks' worth of task files at once (deleting each as
-        # soon as its result is consumed), instead of writing every chunk
-        # for the whole dataset upfront and keeping them all until the run
-        # finishes. Each task file duplicates real per-record data (SMILES,
+        # Keep num_workers subprocesses busy, writing each chunk's task file
+        # only when a worker slot frees up (and deleting it as soon as its
+        # result is consumed): at most num_workers chunks' task files exist
+        # at once, and no worker waits for slower chunks of a batch.  This
+        # replaces writing every chunk for the whole dataset upfront and
+        # keeping them all until the run finishes. Each task file duplicates real per-record data (SMILES,
         # every kept peak) from the in-memory dataset, so writing all of
         # them at once for a NIST-scale dataset can need disk space on the
         # order of the whole dataset's size, in --output-dir, before a
@@ -584,7 +585,6 @@ def create_reaction_training_data(
         ) as directory:
             effective_chunk_size = min(chunk_size, max(1, len(grouped) // num_workers))
             total_chunks = math.ceil(len(grouped) / effective_chunk_size)
-            wave_size = max(1, num_workers)
             env = {**os.environ, "PYTHONUNBUFFERED": "1"}
             root = str(Path(__file__).resolve().parents[4])
             env["PYTHONPATH"] = os.pathsep.join(
@@ -619,6 +619,21 @@ def create_reaction_training_data(
                         prepared=len(files), skipped=len(skipped), refresh=False
                     )
 
+                # Single-source re-runs of crashed chunks, queued ahead of new chunks.
+                retries: deque = deque()
+                single_tasks: dict[str, tuple] = {}
+
+                def command_for(task_file: Path) -> list[str]:
+                    return [
+                        sys.executable,
+                        "-m",
+                        worker_module,
+                        "--task",
+                        str(task_file),
+                        "--result",
+                        str(task_file.with_suffix(".json")),
+                    ]
+
                 def retry_individually(command):
                     # The worker process itself died (a Python exception is
                     # already recorded as skipped by _prepare_group_safely),
@@ -629,7 +644,6 @@ def create_reaction_training_data(
                     with task_file.open("rb") as stream:
                         payload = pickle.load(stream)
                     remove_task_files(command)
-                    singles = {}
                     for position, task in enumerate(payload["tasks"]):
                         single_file = task_file.with_name(
                             f"{task_file.stem}-{position}.pkl"
@@ -640,94 +654,76 @@ def create_reaction_training_data(
                                 stream,
                                 pickle.HIGHEST_PROTOCOL,
                             )
-                        singles[str(single_file)] = task
+                        single_tasks[str(single_file)] = task
+                        retries.append(command_for(single_file))
 
-                    def on_single_error(single_command, error):
-                        remove_task_files(single_command)
-                        tree, smiles, rows, *_ = singles[
-                            single_command[single_command.index("--task") + 1]
-                        ]
-                        collect_result(
-                            _skipped(
-                                (tree, smiles, rows),
-                                SKIP_WORKER_CRASH,
-                                f"Worker process exited with status {error.returncode}",
-                                None,
-                                error=(error.stderr or "")[-4000:],
-                            )
+                def on_single_error(single_command, error):
+                    remove_task_files(single_command)
+                    tree, smiles, rows, *_ = single_tasks.pop(
+                        single_command[single_command.index("--task") + 1]
+                    )
+                    collect_result(
+                        _skipped(
+                            (tree, smiles, rows),
+                            SKIP_WORKER_CRASH,
+                            f"Worker process exited with status {error.returncode}",
+                            None,
+                            error=(error.stderr or "")[-4000:],
                         )
-
-                    with tqdm(disable=True) as quiet:
-                        run_parallel_subprocesses(
-                            [
-                                [
-                                    sys.executable,
-                                    "-m",
-                                    worker_module,
-                                    "--task",
-                                    single,
-                                    "--result",
-                                    str(Path(single).with_suffix(".json")),
-                                ]
-                                for single in singles
-                            ],
-                            max_workers=min(num_workers, len(singles)),
-                            print_output=False,
-                            env=env,
-                            on_complete=consume_results,
-                            on_error=on_single_error,
-                            progress=quiet,
-                        )
+                    )
 
                 task_id = 0
-                while True:
-                    commands = []
-                    for _ in range(wave_size):
-                        chunk = list(islice(tasks, effective_chunk_size))
-                        if not chunk:
-                            break
-                        task_file = Path(directory) / f"task-{task_id}.pkl"
-                        task_id += 1
-                        result_file = task_file.with_suffix(".json")
-                        with task_file.open("wb") as stream:
-                            pickle.dump(
-                                dict(
-                                    tasks=[(*task[:3], task[3].to_bytes(), *task[4:]) for task in chunk],
-                                    chemistry_config=chemistry_config,
-                                    options=options,
-                                ),
-                                stream,
-                                pickle.HIGHEST_PROTOCOL,
-                            )
-                        commands.append(
-                            [
-                                sys.executable,
-                                "-m",
-                                worker_module,
-                                "--task",
-                                str(task_file),
-                                "--result",
-                                str(result_file),
-                            ]
+
+                def next_command():
+                    nonlocal task_id
+                    if retries:
+                        return retries.popleft()
+                    chunk = list(islice(tasks, effective_chunk_size))
+                    if not chunk:
+                        return None
+                    task_file = Path(directory) / f"task-{task_id}.pkl"
+                    task_id += 1
+                    with task_file.open("wb") as stream:
+                        pickle.dump(
+                            dict(
+                                tasks=[(*task[:3], task[3].to_bytes(), *task[4:]) for task in chunk],
+                                chemistry_config=chemistry_config,
+                                options=options,
+                            ),
+                            stream,
+                            pickle.HIGHEST_PROTOCOL,
                         )
-                    if not commands:
-                        break
-                    crashed = []
-                    run_parallel_subprocesses(
-                        commands,
-                        max_workers=min(num_workers, len(commands)),
-                        print_output=False,
-                        env=env,
-                        on_complete=on_complete,
-                        on_error=lambda command, error: crashed.append(command),
-                        progress=progress,
-                    )
-                    for command in crashed:
-                        retry_individually(command)
-                    if crashed:
-                        progress.set_postfix(
-                            prepared=len(files), skipped=len(skipped), refresh=False
-                        )
+                    return command_for(task_file)
+
+                def is_single(command) -> bool:
+                    return command[command.index("--task") + 1] in single_tasks
+
+                def finished(command):
+                    if is_single(command):
+                        single_tasks.pop(command[command.index("--task") + 1])
+                        consume_results(command)
+                        return
+                    on_complete(command)
+                    progress.update(1)
+
+                def failed(command, error):
+                    if is_single(command):
+                        on_single_error(command, error)
+                        return
+                    progress.update(1)
+                    retry_individually(command)
+
+                run_rolling_subprocesses(
+                    next_command,
+                    max_workers=num_workers,
+                    print_output=False,
+                    env=env,
+                    on_complete=finished,
+                    on_error=failed,
+                )
+                progress.set_postfix(
+                    prepared=len(files), skipped=len(skipped), refresh=False
+                )
     with (output / "manifest.tsv").open("w", newline="") as stream:
         writer = csv.DictWriter(
             stream,

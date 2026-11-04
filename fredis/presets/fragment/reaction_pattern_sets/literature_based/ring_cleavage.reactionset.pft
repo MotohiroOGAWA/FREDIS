@@ -1,0 +1,75 @@
+{
+  "reaction_pattern_set": {
+    "name": "literature_ring_cleavage",
+    "patterns": [
+      {
+        "name": "retro_diels_alder_cyclohexene",
+        "reactant_smarts": "[!#1:1]1=[!#1:2]-[!#1:3]-[!#1:4]-[!#1:5]-[!#1:6]-1",
+        "products": [
+          {
+            "name": "diene",
+            "smarts": "[*:6]=[*:1]-[*:2]=[*:3]"
+          },
+          {
+            "name": "dienophile",
+            "smarts": "[*:4]=[*:5]"
+          }
+        ]
+      },
+      {
+        "name": "retro_diels_alder_benzo_fused",
+        "reactant_smarts": "[a:1]1:[a:2]-[!#1;!a:3]-[!#1;!a:4]-[!#1;!a:5]-[!#1;!a:6]-1",
+        "products": [
+          {
+            "name": "o_quinodimethane_diene",
+            "smarts": "[*:6]~[*:1]:[*:2]~[*:3]"
+          },
+          {
+            "name": "dienophile",
+            "smarts": "[*:4]=[*:5]"
+          }
+        ]
+      },
+      {
+        "name": "lactone_co2_loss",
+        "reactant_smarts": "[#6:1]~&@[#6:2](=[OX1:3])~&@[#8:4]~&@[#6:5]",
+        "products": [
+          {
+            "name": "decarboxylated_ring",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "lactone_co_loss",
+        "reactant_smarts": "[#6:1]~&@[#6:2](=[OX1:3])~&@[#8:4]~&@[#6:5]",
+        "products": [
+          {
+            "name": "decarbonylated_ring",
+            "smarts": "[*:4]~[*:5]"
+          }
+        ]
+      },
+      {
+        "name": "cyclic_ketone_co_loss",
+        "reactant_smarts": "[#6:1]~&@[#6;!$(C-[#7,#8]);!$(c:[#7,#8]):2](=[OX1:3])~&@[#6:4]",
+        "products": [
+          {
+            "name": "decarbonylated_ring",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "phenol_co_loss",
+        "reactant_smarts": "[c:1]:[c:2](-[OX2H1:3]):[c:4]",
+        "products": [
+          {
+            "name": "decarbonylated_ring",
+            "smarts": "[*:1]"
+          }
+        ]
+      }
+    ]
+  }
+}

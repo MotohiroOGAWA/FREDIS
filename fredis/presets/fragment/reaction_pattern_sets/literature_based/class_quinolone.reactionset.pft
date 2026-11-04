@@ -1,0 +1,31 @@
+{
+  "reaction_pattern_set": {
+    "name": "literature_class_quinolone",
+    "patterns": [
+      {
+        "name": "quinolone_carboxylic_acid_losses",
+        "reactant_smarts": "[#6;R;$([#6]~[#6;R]=[OX1]);$([#6]~[#6;R]~[#7;R]):3]-&!@[CX3:4](=[OX1:5])-[OX2H1:6]",
+        "products": [
+          {
+            "name": "water_loss",
+            "smarts": "[*:3]-[*:4]=[*:5]"
+          },
+          {
+            "name": "co2_loss",
+            "smarts": "[*:3]"
+          }
+        ]
+      },
+      {
+        "name": "arylpiperazine_c2h5n_loss",
+        "reactant_smarts": "[a:7]-&!@[#7:1]1-[CH2:2]-[CH2:3]-[NX3:4]-[CH2:5]-[CH2:6]-1",
+        "products": [
+          {
+            "name": "ring_opened_c2h5n_loss",
+            "smarts": "[*:7]-[*:1](-[*:2])-[*:6]"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "reaction_pattern_set": {
+    "name": "literature_class_nucleoside",
+    "patterns": [
+      {
+        "name": "n_glycosidic_cleavage",
+        "reactant_smarts": "[#7;a,$([NX3]):1]-&!@[C;R1:2]-&@[O;R1:3]",
+        "products": [
+          {
+            "name": "protonated_base",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "sugar_oxocarbenium",
+            "smarts": "[*:2]-[*:3]"
+          }
+        ]
+      }
+    ]
+  }
+}

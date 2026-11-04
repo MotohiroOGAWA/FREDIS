@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from typing import Callable, Dict, List, Optional
 
 from tqdm import tqdm
@@ -135,3 +135,50 @@ def run_parallel_subprocesses(
                 progress.update(1)
             if on_complete is not None:
                 on_complete(futures[future])
+
+
+def run_rolling_subprocesses(
+    next_command: Callable[[], Optional[List[str]]],
+    max_workers: int = 4,
+    print_output: bool = False,
+    env: Optional[Dict[str, str]] = None,
+    on_complete: Optional[Callable[[List[str]], None]] = None,
+    on_error: Optional[
+        Callable[[List[str], subprocess.CalledProcessError], None]
+    ] = None,
+) -> None:
+    """Keep up to ``max_workers`` subprocesses running until ``next_command`` is exhausted.
+
+    ``next_command()`` is called only when a worker slot is free, so a caller
+    that writes each command's input file lazily never has more than
+    ``max_workers`` of them at once, and a slot is refilled as soon as any
+    subprocess finishes (no waiting for a whole batch).  Callbacks run in the
+    calling thread in completion order; ``next_command`` is asked again after
+    every callback, so a callback may queue more work (e.g. retries).  Without
+    ``on_error`` the first failure is raised after the running ones finish.
+    """
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        running = {}
+
+        def fill():
+            while len(running) < max_workers:
+                command = next_command()
+                if command is None:
+                    return
+                running[executor.submit(run_in_subprocess, command, print_output, env)] = command
+
+        fill()
+        while running:
+            done, _ = wait(list(running), return_when=FIRST_COMPLETED)
+            for future in done:
+                command = running.pop(future)
+                try:
+                    future.result()
+                except subprocess.CalledProcessError as error:
+                    if on_error is None:
+                        raise
+                    on_error(command, error)
+                else:
+                    if on_complete is not None:
+                        on_complete(command)
+            fill()

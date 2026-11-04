@@ -1,0 +1,271 @@
+{
+  "reaction_pattern_set": {
+    "name": "literature_functional_group_cleavage",
+    "patterns": [
+      {
+        "name": "alcohol_water_loss",
+        "reactant_smarts": "[CX4:1]-&!@[OX2H1:2]",
+        "products": [
+          {
+            "name": "dehydrated",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "carboxylic_acid_water_loss",
+        "reactant_smarts": "[#6:1]-[CX3:2](=[OX1:3])-&!@[OX2H1:4]",
+        "products": [
+          {
+            "name": "acylium",
+            "smarts": "[*:1]-[*:2]=[*:3]"
+          }
+        ]
+      },
+      {
+        "name": "carboxylic_acid_co2_loss",
+        "reactant_smarts": "[#6:1]-&!@[CX3:2](=[OX1:3])-[OX2H1,OX1-:4]",
+        "products": [
+          {
+            "name": "decarboxylated",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "primary_alkylamine_ammonia_loss",
+        "reactant_smarts": "[CX4:1]-&!@[NX3H2:2]",
+        "products": [
+          {
+            "name": "deaminated",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "alkylamine_loss",
+        "reactant_smarts": "[CX4:1]-&!@[NX3;H1,H0;!$(N-[#6,#16]=[#7,#8,#16]);!$(N-a):2]",
+        "products": [
+          {
+            "name": "carbocation_side",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "amine_side",
+            "smarts": "[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "methyl_ester_methanol_loss",
+        "reactant_smarts": "[#6:1]-[CX3:2](=[OX1:3])-&!@[OX2:4]-[CH3:5]",
+        "products": [
+          {
+            "name": "acylium",
+            "smarts": "[*:1]-[*:2]=[*:3]"
+          }
+        ]
+      },
+      {
+        "name": "ester_alkyl_oxygen_cleavage",
+        "reactant_smarts": "[#6:1]-[CX3:2](=[OX1:3])-&!@[OX2:4]-&!@[CX4:5]",
+        "products": [
+          {
+            "name": "acid_side",
+            "smarts": "[*:1]-[*:2](=[*:3])-[*:4]"
+          },
+          {
+            "name": "alkyl_side",
+            "smarts": "[*:5]"
+          }
+        ]
+      },
+      {
+        "name": "ester_acyl_oxygen_cleavage",
+        "reactant_smarts": "[#6:1]-[CX3:2](=[OX1:3])-&!@[OX2:4]-[#6:5]",
+        "products": [
+          {
+            "name": "acylium",
+            "smarts": "[*:1]-[*:2]=[*:3]"
+          },
+          {
+            "name": "alcohol_side",
+            "smarts": "[*:4]-[*:5]"
+          }
+        ]
+      },
+      {
+        "name": "amide_c_n_cleavage",
+        "reactant_smarts": "[#6:1]-[CX3:2](=[OX1:3])-&!@[NX3:4]",
+        "products": [
+          {
+            "name": "acyl_b_type",
+            "smarts": "[*:1]-[*:2]=[*:3]"
+          },
+          {
+            "name": "amine_y_type",
+            "smarts": "[*:4]"
+          }
+        ]
+      },
+      {
+        "name": "acyl_carbon_monoxide_loss",
+        "reactant_smarts": "[#6:1]-&!@[CX3:2](=[OX1:3])-&!@[#6,#7,#8:4]",
+        "products": [
+          {
+            "name": "alpha_side_a_type",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "other_side",
+            "smarts": "[*:4]"
+          }
+        ]
+      },
+      {
+        "name": "ether_c_o_cleavage",
+        "reactant_smarts": "[#6:1]-&!@[OX2:2]-&!@[CX4;!$(C-[OX2]-[CX3]=O):3]",
+        "products": [
+          {
+            "name": "oxygen_side",
+            "smarts": "[*:1]-[*:2]"
+          },
+          {
+            "name": "alkyl_cation_side",
+            "smarts": "[*:3]"
+          }
+        ]
+      },
+      {
+        "name": "aryl_methyl_ether_methyl_loss",
+        "reactant_smarts": "[c:1]-&!@[OX2:2]-&!@[CH3:3]",
+        "products": [
+          {
+            "name": "demethylated",
+            "smarts": "[*:1]-[*:2]"
+          }
+        ]
+      },
+      {
+        "name": "aryl_methyl_ether_methanol_loss",
+        "reactant_smarts": "[c:1]-&!@[OX2:2]-&!@[CH3:3]",
+        "products": [
+          {
+            "name": "demethoxylated",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "o_glycosidic_cleavage",
+        "reactant_smarts": "[#6:1]-&!@[OX2:2]-&!@[C;R1;$(C-&@[O;R1]):3]",
+        "products": [
+          {
+            "name": "aglycone_y",
+            "smarts": "[*:1]-[*:2]"
+          },
+          {
+            "name": "aglycone_z",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "glycosyl_b",
+            "smarts": "[*:3]"
+          },
+          {
+            "name": "glycosyl_c",
+            "smarts": "[*:2]-[*:3]"
+          }
+        ]
+      },
+      {
+        "name": "sulfate_ester_cleavage",
+        "reactant_smarts": "[#6,#7:1]-&!@[OX2:2]-&!@[SX4:3](=[OX1:4])(=[OX1:5])-[OX2H1,OX1-:6]",
+        "products": [
+          {
+            "name": "desulfated_so3_loss",
+            "smarts": "[*:1]-[*:2]"
+          },
+          {
+            "name": "hydrogensulfate",
+            "smarts": "[*:2]-[*:3](=[*:4])(=[*:5])-[*:6]"
+          }
+        ]
+      },
+      {
+        "name": "phosphate_ester_cleavage",
+        "reactant_smarts": "[#6:1]-&!@[OX2:2]-&!@[PX4:3]=[OX1:4]",
+        "products": [
+          {
+            "name": "h3po4_loss",
+            "smarts": "[*:1]"
+          },
+          {
+            "name": "hpo3_loss",
+            "smarts": "[*:1]-[*:2]"
+          },
+          {
+            "name": "phosphate_side",
+            "smarts": "[*:2]-[*:3]=[*:4]"
+          },
+          {
+            "name": "metaphosphate",
+            "smarts": "[*:3]=[*:4]"
+          }
+        ]
+      },
+      {
+        "name": "sulfonamide_s_n_cleavage",
+        "reactant_smarts": "[#6:1]-&!@[SX4:2](=[OX1:3])(=[OX1:4])-&!@[NX3:5]",
+        "products": [
+          {
+            "name": "sulfonyl",
+            "smarts": "[*:1]-[*:2](=[*:3])=[*:4]"
+          },
+          {
+            "name": "amine",
+            "smarts": "[*:5]"
+          },
+          {
+            "name": "aryl_c_s",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "sulfone_c_s_cleavage",
+        "reactant_smarts": "[#6:1]-&!@[SX4:2](=[OX1:3])(=[OX1:4])-&!@[#6:5]",
+        "products": [
+          {
+            "name": "sulfonyl",
+            "smarts": "[*:1]-[*:2](=[*:3])=[*:4]"
+          },
+          {
+            "name": "carbon_side",
+            "smarts": "[*:5]"
+          }
+        ]
+      },
+      {
+        "name": "nitro_no2_loss",
+        "reactant_smarts": "[#6:1]-&!@[N+:2](=[OX1:3])-[OX1-:4]",
+        "products": [
+          {
+            "name": "denitrated",
+            "smarts": "[*:1]"
+          }
+        ]
+      },
+      {
+        "name": "carbon_halogen_cleavage",
+        "reactant_smarts": "[#6:1]-&!@[Cl,Br,I:2]",
+        "products": [
+          {
+            "name": "dehalogenated",
+            "smarts": "[*:1]"
+          }
+        ]
+      }
+    ]
+  }
+}
