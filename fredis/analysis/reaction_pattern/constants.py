@@ -12,6 +12,14 @@ RUN_CONFIG_NAME = "config.reaction-pattern-analysis.pft"
 CHEMISTRY_CONFIG_NAME = "reaction-pattern-analysis-chemistry-config.json"
 TREE_CONFIG_NAME = "tree.reaction-pattern-analysis.json"
 
+# Summary tables of the intensity coverage mode the result was not written
+# with, precomputed when peak formulas are assigned (key: formula-only mode).
+# Not ``RESULT_SUFFIX`` files, so result discovery never picks them up.
+COVERAGE_VARIANT_NAMES = {
+    True: "coverage-formula-only.summary.pft",
+    False: "coverage-all-peaks.summary.pft",
+}
+
 COMPOUND_DIR = "compounds"
 PEAKS_SUFFIX = ".peaks.parquet"
 DETAIL_DIR = "details"

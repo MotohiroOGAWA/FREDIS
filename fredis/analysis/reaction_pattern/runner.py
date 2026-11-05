@@ -25,6 +25,7 @@ from .compounds import CompoundGroup, group_compounds, mark_precursor_peaks
 from .constants import (
     COMPLETED,
     COMPOUND_DIR,
+    COVERAGE_VARIANT_NAMES,
     DEFAULT_COLUMNS,
     FAILED,
     CHEMISTRY_CONFIG_NAME,
@@ -36,7 +37,7 @@ from .constants import (
     TREE_CONFIG_NAME,
 )
 from .formula import FormulaAssignmentOptions, assign_sample_formulas
-from .hdf5_storage import ResultWriter
+from .hdf5_storage import TABLE_SCHEMAS, ResultWriter
 from .previous import PreviousResult, chemistry_signature, compare_signatures
 from .sources import expand_dataset_inputs, load_samples, normalize_analysis_sources
 from .tree import PatternRegistry, TreeConfiguration, resolve_tree
@@ -320,6 +321,65 @@ def _alias_outcome(target: ConditionOutcome, target_id: int) -> ConditionOutcome
         patterns=target.patterns,
         rules=target.rules,
     )
+
+
+def _write_coverage_variant(
+    path: Path,
+    compare_inputs: list[tuple],
+    *,
+    formula_only: bool,
+    tree,
+    datasets: list[dict],
+    relative_path,
+    rules,
+    configuration: dict,
+    overall: dict,
+    created_at: str,
+) -> None:
+    """Write the summary tables of the other intensity coverage mode.
+
+    ``coverageVariantOf`` holds the main result's ``created_at``, so a reader
+    ignores a variant left behind by an earlier run of the same directory.
+    """
+    previous = {
+        id(sample): sample.intensity_coverage_formula_only
+        for arguments in compare_inputs
+        for sample in arguments[0].samples
+    }
+    try:
+        for arguments in compare_inputs:
+            for sample in arguments[0].samples:
+                sample.intensity_coverage_formula_only = formula_only
+        comparisons = [compare_compound(*arguments) for arguments in compare_inputs]
+        tables, variant_overall = summary.summarize(
+            comparisons,
+            tree=tree,
+            datasets=datasets,
+            relative_path=relative_path,
+            rules=rules,
+        )
+    finally:
+        for arguments in compare_inputs:
+            for sample in arguments[0].samples:
+                sample.intensity_coverage_formula_only = previous[id(sample)]
+    writer = ResultWriter(path)
+    try:
+        writer.write_json("configuration", configuration)
+        writer.write_overall_summary(
+            {
+                **overall,
+                **variant_overall,
+                "coverageVariantOf": created_at,
+                "intensityCoverageFormulaOnly": formula_only,
+            }
+        )
+        for name in TABLE_SCHEMAS:
+            writer.write_table(name, tables.get(name))
+        writer.write_indexes(len(comparisons), tables.tables)
+        writer.finalize()
+    except BaseException:
+        writer.abort()
+        raise
 
 
 def generate_reaction_pattern_analysis(
@@ -624,7 +684,9 @@ def generate_reaction_pattern_analysis(
 
     # Phase 7 ---------------------------------------------------------------
     _section(7, "Condition outcomes")
-    comparisons = []
+    # compare_compound arguments per compound: the summary of the other
+    # intensity coverage mode is rebuilt from them after the result is written.
+    compare_inputs = []
     for group in groups:
         plan = plans[group.compound_id]
         outcomes: dict[int, ConditionOutcome] = {}
@@ -684,8 +746,8 @@ def generate_reaction_pattern_analysis(
                         reason="The parent condition is unavailable for this compound.",
                     )
                 outcomes[condition_id] = _computed_outcome(group, result, parent)
-        comparisons.append(
-            compare_compound(
+        compare_inputs.append(
+            (
                 group,
                 resolved.nodes,
                 outcomes,
@@ -699,18 +761,20 @@ def generate_reaction_pattern_analysis(
                 ),
             )
         )
+    comparisons = [compare_compound(*arguments) for arguments in compare_inputs]
 
     # Phase 8 ---------------------------------------------------------------
     _section(8, "Node/edge comparison and summaries")
     relative = lambda value: (
         str(Path(value).resolve().relative_to(output)) if value else ""
     )
+    pattern_rules = summary.pattern_rules(fragmenter, resolved)
     tables, overall = summary.summarize(
         comparisons,
         tree=resolved,
         datasets=dataset_rows,
         relative_path=relative,
-        rules=summary.pattern_rules(fragmenter, resolved),
+        rules=pattern_rules,
     )
     summary.write_metadata(output, comparisons)
     store_steps = [
@@ -763,11 +827,10 @@ def generate_reaction_pattern_analysis(
     }
     result_path = output / RESULT_NAME
     writer = ResultWriter(result_path)
+    overall = dict(overall, elapsedSeconds=time.monotonic() - started)
     try:
         writer.write_json("configuration", configuration)
-        writer.write_overall_summary(
-            dict(overall, elapsedSeconds=time.monotonic() - started)
-        )
+        writer.write_overall_summary(overall)
         for name in (
             "datasets",
             "pattern_sets",
@@ -811,5 +874,28 @@ def generate_reaction_pattern_analysis(
         shutil.rmtree(retired, ignore_errors=True)
     else:
         writer.finalize()
+    for name in COVERAGE_VARIANT_NAMES.values():
+        (output / name).unlink(missing_ok=True)
+    if formula_options is not None:
+        # Both intensity coverage modes, so the viewer switches without recalculating.
+        del comparisons, tables
+        variant = not formula_options.intensity_coverage_formula_only
+        _note(
+            "Summarising the alternative intensity coverage ("
+            + ("formula-annotated peaks only" if variant else "all peaks")
+            + ")."
+        )
+        _write_coverage_variant(
+            output / COVERAGE_VARIANT_NAMES[variant],
+            compare_inputs,
+            formula_only=variant,
+            tree=resolved,
+            datasets=dataset_rows,
+            relative_path=relative,
+            rules=pattern_rules,
+            configuration=configuration,
+            overall=overall,
+            created_at=writer.metadata["created_at"],
+        )
     _note(f"Reaction Pattern Analysis complete: {result_path}")
     return result_path

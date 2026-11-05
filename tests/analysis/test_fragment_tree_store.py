@@ -192,3 +192,48 @@ def test_parallel_workers_share_one_store(tmp_path, dataset_file):
                                              tree_store=store, num_workers=2)
     with ReactionPatternAnalysisResult(rpa) as reader:
         assert reader.overall_summary()["treeStoreReusedTrees"] == 3
+
+
+def test_multi_dataset_training_data_is_a_reaction_pattern_analysis_source(tmp_path):
+    """Training data prepared from several datasets (each with its own columns)
+    is an RPA source: its spectra come from the original datasets' rows and its
+    stored trees are replayed."""
+    import contextlib
+    import io
+
+    from fredis.ml.data_preparation.fragment_tree.create_training_data import main
+
+    frames = []
+    for index, rows in enumerate((SPECTRA[:2], SPECTRA[2:])):
+        rows = list(rows)
+        metadata = pd.DataFrame({
+            "Structure": [row[0] for row in rows], "Precursor": [row[1] for row in rows],
+            "Energy": [20.0] * len(rows), "Mz": [row[2][0][0] for row in rows]})
+        peaks = [peak for _, _, values in rows for peak in values]
+        offsets = np.cumsum([0] + [len(values) for _, _, values in rows])
+        path = tmp_path / f"input-{index}.msds"
+        with_metadata(metadata, dataset_from_arrays(np.asarray(peaks, dtype=float),
+                                                    np.asarray(offsets, dtype=np.int64))).save(str(path))
+        frames.append(dict(id=f"dataset-{index}", path=str(path), split="train",
+                           mapping=dict(smilesColumn="Structure", adductTypeColumn="Precursor",
+                                        collisionEnergyColumn="Energy", precursorMzColumn="Mz")))
+    output, store = tmp_path / "prepared", tmp_path / "store"
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        main(["--datasets-json", json.dumps(frames), "--dataset-mode", "assigned",
+              "--params-json", json.dumps(_config("C", "O")), "--output-dir", str(output),
+              "--num-workers", "1", "--tree-store", str(store), "--save-trees", "1"])
+    assert FragmentTreeStore(store).count() == 3
+    result = generate_reaction_pattern_analysis(
+        sources=[{"path": str(output / "train_structures")}], output_dir=tmp_path / "rpa",
+        chemistry_config=_config("C"), tree=ROOT_CO, overwrite=True, tree_store=store)
+    with ReactionPatternAnalysisResult(result) as reader:
+        overall = reader.overall_summary()
+    assert overall["treeStoreReusedTrees"] == 3
+    fresh = _rpa(tmp_path / "fresh", ROOT_CO, _dataset_file(tmp_path))
+    assert _peaks(result, "r") == _peaks(fresh, "r")
+
+
+def _dataset_file(tmp_path) -> Path:
+    path = tmp_path / "all.msds"
+    _dataset().save(str(path))
+    return path

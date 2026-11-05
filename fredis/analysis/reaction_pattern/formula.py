@@ -8,7 +8,7 @@ always holds whole formula groups (compounds sharing a precursor formula).
 from __future__ import annotations
 
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 import math
 import multiprocessing
@@ -44,7 +44,8 @@ class FormulaAssignmentOptions:
     timeout_sec: float | None = None
     hydrogen_delta: int = 1
     enable_neutral_loss: bool = False
-    intensity_coverage_formula_only: bool = False
+    # Default intensity coverage of the result; the other mode is stored too.
+    intensity_coverage_formula_only: bool = True
 
     @classmethod
     def from_dict(cls, value: dict) -> "FormulaAssignmentOptions":
@@ -78,7 +79,7 @@ class FormulaAssignmentOptions:
             raise ValueError("hydrogenDelta must be a non-negative integer.")
         if not isinstance(neutral_loss, bool):
             raise ValueError("enableNeutralLoss must be true or false.")
-        formula_only = value.get("intensityCoverageFormulaOnly", False)
+        formula_only = value.get("intensityCoverageFormulaOnly", True)
         if not isinstance(formula_only, bool):
             raise ValueError("intensityCoverageFormulaOnly must be true or false.")
         return cls(
@@ -95,7 +96,8 @@ class FormulaAssignmentOptions:
             "timeoutSec": self.timeout_sec,
             "hydrogenDelta": self.hydrogen_delta,
             "enableNeutralLoss": self.enable_neutral_loss,
-            **({"intensityCoverageFormulaOnly": True} if self.intensity_coverage_formula_only else {}),
+            # Always explicit: results that predate this key used all peaks.
+            "intensityCoverageFormulaOnly": self.intensity_coverage_formula_only,
         }
 
 
@@ -252,7 +254,8 @@ def assign_sample_formulas(
                     pool.submit(_run_chunk, chunk, tolerance_text, options): chunk
                     for chunk in chunks
                 }
-                for future, chunk in futures.items():
+                # Completion order: one slow precursor formula must not freeze the bar.
+                for future in as_completed(futures):
                     collect(future.result())
-                    progress.update(len(chunk))
+                    progress.update(len(futures[future]))
     return results

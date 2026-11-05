@@ -145,6 +145,8 @@ def _prepared_config(source: Path, document: dict | None = None) -> dict:
     if document and document.get("application") == "fragment-tree-data-preparation":
         return {
             "input": document.get("input"),
+            "datasets": document.get("datasets") or [],
+            "_config_path": str(source),
             "chemistry_config": {
                 "fragmenter_params": document.get("fragmenterParams"),
                 "symbols": document.get("symbols"),
@@ -173,6 +175,25 @@ def _prepared_config(source: Path, document: dict | None = None) -> dict:
     value = _read_json(config_path)
     value["_config_path"] = str(config_path)
     return value
+
+
+_MAPPING_COLUMNS = {"smilesColumn": "smiles", "adductTypeColumn": "adduct",
+                    "collisionEnergyColumn": "collision_energy", "precursorMzColumn": "precursor_mz"}
+
+
+def _prepared_dataset_mappings(prepared: dict) -> dict[str, dict]:
+    """Column mapping of each dataset of a multi-dataset preparation, by resolved path."""
+    base = Path(prepared.get("_config_path") or ".").parent
+    result = {}
+    for entry in prepared.get("datasets") or ():
+        target = Path(entry["path"])
+        target = (target if target.is_absolute() else base / target).resolve()
+        result[str(target)] = {
+            column: entry["mapping"][key]
+            for key, column in _MAPPING_COLUMNS.items()
+            if (entry.get("mapping") or {}).get(key)
+        }
+    return result
 
 
 def _prepared_files(source: Path, document: dict | None = None) -> list[Path]:
@@ -265,25 +286,37 @@ def expand_dataset_inputs(source_rows: list[dict]) -> list[DatasetInput]:
                 else None
             )
             prepared = _prepared_config(path, document)
+            records, by_dataset = set(), {}
+            for file in _prepared_files(path, document):
+                metadata = load_prepared_structure(file)[1]
+                # Multi-dataset preparations record each spectrum's original
+                # dataset and row; single-input ones only the row of ``input``.
+                for row in metadata.get("source_records") or ():
+                    # Saved relative to the structure file.
+                    original = Path(row["path"])
+                    original = (original if original.is_absolute() else Path(file).parent / original).resolve()
+                    by_dataset.setdefault(str(original), set()).add(int(row["record_index"]))
+                if not metadata.get("source_records"):
+                    records.update(int(value) for value in metadata.get("record_indexes", ()))
+            if by_dataset:
+                mappings = _prepared_dataset_mappings(prepared)
+                for original in sorted(by_dataset):
+                    if not Path(original).exists():
+                        raise ValueError(
+                            f"The original dataset of prepared source {path} is unavailable: {original}")
+                    add(original, {**source["columns"], **mappings.get(original, {})}, source,
+                        sorted(by_dataset[original]))
+                continue
             original = prepared.get("input") or prepared.get("input_path")
             if not original or not Path(original).exists():
                 raise ValueError(
                     f"The original dataset of prepared source {path} is unavailable: {original}"
                 )
-            records = sorted(
-                {
-                    int(value)
-                    for file in _prepared_files(path, document)
-                    for value in load_prepared_structure(file)[1].get(
-                        "record_indexes", ()
-                    )
-                }
-            )
             add(
                 original,
                 {**source["columns"], **(prepared.get("columns") or {})},
                 source,
-                records,
+                sorted(records),
             )
         elif kind == "analysis":
             inspected = source.get("inspected") or inspect_analysis_source(path, kind)

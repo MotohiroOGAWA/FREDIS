@@ -1,0 +1,17 @@
+{
+  "reaction_pattern_set": {
+    "name": "sulfur_dioxide_extrusion",
+    "patterns": [
+      {
+        "name": "sulfone_SO2_extrusion",
+        "reactant_smarts": "[!#1:1]-&!@[#16:2](=[#8:3])(=[#8:4])-[!#1:5]",
+        "products": [
+          {
+            "name": "C-C_coupling_product",
+            "smarts": "[*:1]-[*:5]"
+          }
+        ]
+      }
+    ]
+  }
+}

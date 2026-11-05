@@ -34,7 +34,7 @@ import pytest
 from fredis.analysis.reaction_pattern import ReactionPatternAnalysisResult, TreeConfiguration, generate_reaction_pattern_analysis
 from fredis.analysis.reaction_pattern import applicability, chemistry
 from fredis.analysis.reaction_pattern.compounds import compound_id_for
-from fredis.analysis.reaction_pattern.constants import assigned_column, count_column
+from fredis.analysis.reaction_pattern.constants import COVERAGE_VARIANT_NAMES, assigned_column, count_column
 from fredis.analysis.reaction_pattern.summary import distribution
 from fredis.analysis.reaction_pattern.tree import PatternRegistry, resolve_tree
 
@@ -332,6 +332,32 @@ def test_score_frequency_has_one_absolute_series_per_node(analysis):
     assert filtered["filteredSamples"] == 4
 
 
+def test_matched_edge_restricts_frequency_and_coverage(analysis):
+    edge = analysis["nodes"]["ho"]
+    with ReactionPatternAnalysisResult(analysis["path"]) as reader:
+        applicable = {row["compound_row"] for row in reader.table_records("compound_node_summary")
+                      if row["node_row"] == edge["node_row"] and row["applicable"]}
+        samples = [row for row in reader.table_records("sample_summary") if row["compound_row"] in applicable]
+        frequency = reader.score_frequency("intensity_coverage", filters={"matchedNodeRow": edge["node_row"]})
+        coverage = reader.coverage_by_condition({"matchedNodeRow": edge["node_row"]})
+        pairs = {(row["sample_id"], row["node_row"]): row for row in reader.table_records("sample_node_summary")}
+        total_samples = len(reader.table_records("sample_summary"))
+    assert applicable and len(samples) < total_samples
+    # Only the edge's path, over the spectra of compounds it applies to.
+    assert [row["label"] for row in frequency["series"]] == ["H", "H + O"]
+    assert frequency["filteredSamples"] == len(samples) and frequency["matchedNodeRow"] == edge["node_row"]
+    assert [row["condition_label"] for row in coverage["rows"]] == ["H", "H + O"]
+    for row in coverage["rows"]:
+        for suffix in ("", "_without_precursor"):
+            hits = [pairs[(sample["sample_id"], row["node_row"])] for sample in samples]
+            expected = (sum(hit["assigned_intensity" + suffix] for hit in hits)
+                        / sum(sample["total_intensity" + suffix] for sample in samples))
+            assert row["weighted_intensity_coverage" + suffix] == pytest.approx(expected)
+        assert row["sample_count"] == len(samples)
+    parent, child = coverage["rows"]
+    assert child["weighted_peak_coverage"] >= parent["weighted_peak_coverage"]
+
+
 def test_result_directory_can_be_moved(analysis, tmp_path):
     import shutil
 
@@ -467,7 +493,8 @@ def test_formula_assignment_adds_peak_formulas_grouped_by_precursor_formula(form
     assert first[31.018] == "CH3O" and first[29.039] == "C2H5"
     with ReactionPatternAnalysisResult(formula_analysis) as reader:
         assert reader.configuration()["formulaAssignment"] == {
-            "maxFormulaCandidates": None, "timeoutSec": None, "hydrogenDelta": 1, "enableNeutralLoss": False}
+            "maxFormulaCandidates": None, "timeoutSec": None, "hydrogenDelta": 1, "enableNeutralLoss": False,
+            "intensityCoverageFormulaOnly": True}
         assert reader.overall_summary()["formulaStatusCounts"] == {"assigned": 5}
         assert "formula" in reader.compound_peaks(CCO)["rows"][0]
 
@@ -584,6 +611,8 @@ def test_coverage_can_be_recalculated_from_saved_peaks(inputs, tmp_path, monkeyp
     original = _run(tmp_path / 'original', inputs, formula_assignment=options)
     expected = _run(tmp_path / 'expected', inputs,
                     formula_assignment={**options, 'intensityCoverageFormulaOnly': not stored_mode})
+    # Without the stored variant (an older result), the reader recalculates.
+    (original.parent / COVERAGE_VARIANT_NAMES[not stored_mode]).unlink()
     digest = lambda: {str(p.relative_to(original.parent)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in original.parent.rglob('*') if p.is_file()}
     before = digest()
@@ -608,7 +637,50 @@ def test_coverage_can_be_recalculated_from_saved_peaks(inputs, tmp_path, monkeyp
         assert digest() == before
 
 
+@pytest.mark.parametrize('stored_mode', [False, True])
+def test_formula_assignment_stores_both_coverage_modes(inputs, tmp_path, monkeypatch, stored_mode):
+    original = _run(tmp_path / 'original', inputs,
+                    formula_assignment={'intensityCoverageFormulaOnly': stored_mode})
+    expected = _run(tmp_path / 'expected', inputs,
+                    formula_assignment={'intensityCoverageFormulaOnly': not stored_mode})
+    assert (original.parent / COVERAGE_VARIANT_NAMES[not stored_mode]).is_file()
+    assert not (original.parent / COVERAGE_VARIANT_NAMES[stored_mode]).exists()
+    from fredis.analysis.reaction_pattern import recalculate
+    def no_recalculation(*args, **kwargs):
+        raise AssertionError('Stored coverage modes must not be recalculated')
+    monkeypatch.setattr(recalculate, 'recalculate_coverage', no_recalculation)
+    with ReactionPatternAnalysisResult(original) as reader, ReactionPatternAnalysisResult(expected) as other:
+        assert reader.info()['intensityCoverageModesStored'] is True
+        initial = reader.node_summary()
+        reader.set_intensity_coverage_formula_only(not stored_mode)
+        assert reader.info()['intensityCoverageFormulaOnly'] is not stored_mode
+        for table in ('node_summary', 'node_distribution', 'compound_node_summary', 'compound_node_distribution',
+                      'sample_summary', 'sample_node_summary', 'compounds', 'pattern_summary',
+                      'compound_condition'):
+            assert reader.table_records(table) == other.table_records(table)
+        assert reader.score_frequency('intensity_coverage') == other.score_frequency('intensity_coverage')
+        assert reader.loaded_files == []
+        reader.set_intensity_coverage_formula_only(stored_mode)
+        assert reader.node_summary() == initial
+
+
+def test_stale_coverage_variant_is_ignored(inputs, tmp_path):
+    import shutil
+    first = _run(tmp_path / 'first', inputs, formula_assignment={})
+    second = _run(tmp_path / 'second', inputs, formula_assignment={})
+    # Formula assignment opens with formula-assigned peaks only; all peaks is the variant.
+    name = COVERAGE_VARIANT_NAMES[False]
+    shutil.copy2(first.parent / name, second.parent / name)
+    with ReactionPatternAnalysisResult(second) as reader:
+        assert reader.info()['intensityCoverageFormulaOnly'] is True
+        assert reader.coverage_variant_path(False) is None
+        assert reader.info()['intensityCoverageModesStored'] is False
+        reader.set_intensity_coverage_formula_only(False)
+        assert reader._coverage_path.parent != second.parent
+
+
 def test_formula_only_recalculation_requires_saved_formulas(analysis):
+    assert not any((analysis['path'].parent / name).exists() for name in COVERAGE_VARIANT_NAMES.values())
     with ReactionPatternAnalysisResult(analysis['path']) as reader:
         with pytest.raises(ValueError, match='no saved peak formulas'):
             reader.set_intensity_coverage_formula_only(True)

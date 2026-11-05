@@ -20,7 +20,14 @@ from pathlib import Path
 
 import numpy as np
 
-from .constants import COMPLETED, SCHEMA, SCHEMA_VERSION, assigned_column, count_column
+from .constants import (
+    COMPLETED,
+    COVERAGE_VARIANT_NAMES,
+    SCHEMA,
+    SCHEMA_VERSION,
+    assigned_column,
+    count_column,
+)
 from .hdf5_storage import Table, _plain
 
 SMALL_TABLES = (
@@ -100,6 +107,11 @@ def _split(value) -> list[str]:
     return [item for item in str(value or "").split(",") if item != ""]
 
 
+def _matched_node_row(filters: dict) -> int | None:
+    value = filters.get("matchedNodeRow")
+    return None if value in (None, "", "all") else int(value)
+
+
 class ReactionPatternAnalysisResult:
     def __init__(self, path: str | Path):
         import h5py
@@ -144,8 +156,33 @@ class ReactionPatternAnalysisResult:
         with h5py.File(self._coverage_path or self.path, "r") as handle:
             yield handle
 
+    def coverage_variant_path(self, formula_only: bool) -> Path | None:
+        """The precomputed summary of this intensity coverage mode, if current."""
+        import h5py
+
+        path = self.root / COVERAGE_VARIANT_NAMES[bool(formula_only)]
+        if not path.is_file():
+            return None
+        try:
+            with h5py.File(path, "r") as handle:
+                status = _plain(handle["metadata"].attrs.get("analysis_status"))
+                overall = json.loads(handle["metadata/overall_summary"].asstr()[()])
+        except (OSError, KeyError, ValueError):
+            return None
+        if (
+            status != "completed"
+            or overall.get("coverageVariantOf") != self.metadata.get("created_at")
+            or overall.get("intensityCoverageFormulaOnly") is not bool(formula_only)
+        ):
+            return None
+        return path
+
     def set_intensity_coverage_formula_only(self, enabled: bool, progress=None) -> None:
-        """Switch this reader's summaries using saved peak formulas; leave files intact."""
+        """Switch this reader's summaries between intensity coverage modes; leave files intact.
+
+        Results written with peak formulas carry both modes; older results are
+        recalculated from saved peak formulas into a temporary file.
+        """
         import tempfile
         from .recalculate import recalculate_coverage
 
@@ -161,6 +198,12 @@ class ReactionPatternAnalysisResult:
                 raise ValueError("This result has no saved peak formulas. Run formula assignment first.")
             if enabled == stored:
                 self.close()
+                return
+            variant = self.coverage_variant_path(enabled)
+            if variant is not None:
+                self.close()
+                self._coverage_path = variant
+                self._coverage_mode = enabled
                 return
             temporary = tempfile.TemporaryDirectory(prefix="fredis-coverage-")
             target = Path(temporary.name) / self.path.name
@@ -505,6 +548,8 @@ class ReactionPatternAnalysisResult:
             }
         return {
             "intensityCoverageFormulaOnly": (self._coverage_mode if self._coverage_mode is not None else bool((self.configuration().get("formulaAssignment") or {}).get("intensityCoverageFormulaOnly"))),
+            # Both modes were summarised by the analysis: switching needs no recalculation.
+            "intensityCoverageModesStored": self.coverage_variant_path(not bool((self.configuration().get("formulaAssignment") or {}).get("intensityCoverageFormulaOnly"))) is not None,
             "format": "hdf5",
             "path": str(self.path),
             "metadata": self.metadata,
@@ -675,8 +720,10 @@ class ReactionPatternAnalysisResult:
             sample_mask = compound_mask[sample_rows] & self._sample_mask(
                 handle, filters
             )
+        matched_row = _matched_node_row(filters)
+        nodes = self.nodes() if matched_row is None else self.node_path(matched_row)
         series_data = []
-        for node in self.nodes():
+        for node in nodes:
             data = values[node["node_row"]][sample_mask]
             series_data.append(
                 {
@@ -718,8 +765,60 @@ class ReactionPatternAnalysisResult:
             "bins": bins,
             "filteredSamples": int(np.count_nonzero(sample_mask)),
             "filters": filters,
+            "matchedNodeRow": matched_row,
             "edges": [float(value) for value in edges],
             "series": output,
+        }
+
+    def coverage_by_condition(self, filters: dict | None = None) -> dict:
+        """Weighted coverage of each node condition over the filtered spectra.
+
+        With ``matchedNodeRow`` (an edge), only spectra of compounds whose
+        precursor matches a pattern that edge adds are counted, and only the
+        conditions on its path are returned, so the parent and child compare
+        on the same spectra.  Compounds an edge does not apply to keep their
+        parent's assignment; samples whose condition did not complete are
+        excluded from that condition.
+        """
+        filters = dict(filters or {})
+        matched_row = _matched_node_row(filters)
+        nodes = self.nodes() if matched_row is None else self.node_path(matched_row)
+        rows = []
+        with self._file() as handle:
+            compound_mask = self._compound_mask(handle, filters)
+            samples = Table(handle["sample_summary"])
+            sample_rows = np.asarray(samples.column("compound_row"), dtype=np.int64)
+            sample_mask = compound_mask[sample_rows] & self._sample_mask(handle, filters)
+            values = {}
+            for suffix in ("", "_without_precursor"):
+                totals = {
+                    "peak": np.asarray(samples.column("peak_count" + suffix), dtype=float),
+                    "intensity": np.asarray(samples.column("total_intensity" + suffix), dtype=float),
+                }
+                for unit, field in (("peak", "assigned_peak_count"), ("intensity", "assigned_intensity")):
+                    values[unit, suffix] = (totals[unit], self._node_values(handle, field + suffix)[2])
+        for node in nodes:
+            row = {
+                "node_row": node["node_row"],
+                "node_id": node["node_id"],
+                "condition_label": node["condition_label"],
+                "path_label": node["path_label"],
+                "is_root": bool(node["is_root"]),
+            }
+            for (unit, suffix), (total, assigned) in values.items():
+                hit = assigned[node["node_row"]]
+                keep = sample_mask & np.isfinite(hit)
+                denominator = float(total[keep].sum())
+                row[f"weighted_{unit}_coverage{suffix}"] = (
+                    float(hit[keep].sum()) / denominator if denominator > 0 else None
+                )
+                if unit == "peak" and not suffix:
+                    row["sample_count"] = int(np.count_nonzero(keep))
+            rows.append(row)
+        return {
+            "matchedNodeRow": matched_row,
+            "filteredSamples": int(np.count_nonzero(sample_mask)),
+            "rows": rows,
         }
 
     def _compound_mask(
@@ -729,6 +828,16 @@ class ReactionPatternAnalysisResult:
         count = len(compounds)
         mask = np.ones(count, dtype=bool)
         without = "_without_precursor" if filters.get("withoutPrecursor") else ""
+        matched_row = _matched_node_row(filters)
+        if matched_row is not None and self.node(matched_row)["parent_node_row"] >= 0:
+            # Only compounds whose precursor matches a pattern this edge adds.
+            rows = np.sort(self._key_rows(handle, "compound_node_by_node", matched_row))
+            data = Table(handle["compound_node_summary"]).read(
+                ["compound_row", "applicable"], rows
+            )
+            keep = np.zeros(count, dtype=bool)
+            keep[data["compound_row"][np.asarray(data["applicable"]).astype(bool)]] = True
+            mask &= keep
         node_row = filters.get("nodeRow")
         node_row = None if node_row in (None, "", "all") else int(node_row)
         if node_row is not None:

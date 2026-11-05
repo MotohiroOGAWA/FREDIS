@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import os
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 import pickle
 import shutil
 import sys
@@ -120,6 +122,135 @@ def build_prediction_cache(
         else:
             shutil.rmtree(directory, ignore_errors=True)
     return results
+
+
+def _predict_packs(generator, sources, adducts, energies, precomputed,
+                   valid_indices, smiles_values, include_formula_annotation,
+                   intensity_threshold, packs, progress=None):
+    """Predict packs atomically, bisecting failed packs down to single records."""
+    spectra_by_position = {}
+    failures = []
+    def split_rows(rows: list[int]) -> tuple[list[int], list[int]]:
+        """Prefer keeping same-compound rows together while isolating errors."""
+        grouped: dict[str, list[int]] = {}
+        for position in rows:
+            grouped.setdefault(sources[position].smiles, []).append(position)
+        groups = list(grouped.values())
+        if len(groups) > 1:
+            cumulative = 0
+            target = len(rows) / 2
+            split_at = 1
+            best = float("inf")
+            for index, group in enumerate(groups[:-1], start=1):
+                cumulative += len(group)
+                distance = abs(cumulative - target)
+                if distance < best:
+                    best = distance
+                    split_at = index
+            return [item for group in groups[:split_at] for item in group], [
+                item for group in groups[split_at:] for item in group
+            ]
+        midpoint = len(rows) // 2
+        return rows[:midpoint], rows[midpoint:]
+
+
+    def predict_rows(rows: list[int]) -> None:
+        local_spectra = {
+            position: GeneratedMassSpectrum(position, []) for position in rows
+        }
+        error_name = error_message = None
+        try:
+            for output in generator.predict_batches(
+                [sources[position] for position in rows],
+                [adducts[position] for position in rows],
+                [energies[position] for position in rows],
+                precomputed=precomputed,
+            ):
+                prediction = output.spectra
+                from .competitive_spectrum_model import merge_candidate_peaks
+
+                prediction = merge_candidate_peaks(prediction)
+                for sample, formula, mz, intensity, confidence in zip(
+                    prediction.sample_index.detach().cpu().tolist(),
+                    prediction.formula_tensor.detach().cpu(),
+                    prediction.mz.detach().cpu().tolist(),
+                    prediction.intensity.detach().cpu().tolist(),
+                    prediction.confidence.detach().cpu().tolist(),
+                ):
+                    if intensity <= intensity_threshold:
+                        continue
+                    position = rows[output.sample_input_index[sample]]
+                    local_spectra[position].peaks.append(
+                        GeneratedSpectrumPeak(
+                            mz=mz,
+                            intensity=max(float(intensity), 0.0),
+                            sample_id=position,
+                            formula=(
+                                str(
+                                    generator.tensorizer.tensor_to_formula(
+                                        formula
+                                    )
+                                )
+                                if include_formula_annotation
+                                else None
+                            ),
+                        )
+                    )
+            for spectrum in local_spectra.values():
+                if spectrum.peaks:
+                    maximum = max(peak.intensity for peak in spectrum.peaks)
+                    for peak in spectrum.peaks:
+                        peak.intensity = (
+                            peak.intensity / maximum if maximum > 0 else 0.0
+                        )
+                    spectrum.peaks.sort(key=lambda peak: peak.mz)
+        except Exception as error:
+            error_name = type(error).__name__
+            error_message = str(error)
+            output = None
+            if isinstance(error, torch.cuda.OutOfMemoryError):
+                torch.cuda.empty_cache()
+        if error_name is None:
+            spectra_by_position.update(local_spectra)
+            if progress is not None:
+                progress.update(len(rows))
+            return
+        if len(rows) == 1:
+            position = rows[0]
+            input_index = valid_indices[position]
+            failures.append(
+                {
+                    "index": input_index,
+                    "smiles": smiles_values[input_index],
+                    "error": f"{error_name}: {error_message}",
+                }
+            )
+            if progress is not None:
+                progress.update(1)
+            return
+        left, right = split_rows(rows)
+        predict_rows(left)
+        predict_rows(right)
+
+
+    for pack in packs:
+        predict_rows(pack)
+    return spectra_by_position, failures
+
+
+_CPU_PREDICTION_CONTEXT = None
+
+
+def _init_cpu_prediction(context):
+    global _CPU_PREDICTION_CONTEXT
+    # Avoid multiplying PyTorch's intra-op thread pool by the process count.
+    torch.set_num_threads(1)
+    _CPU_PREDICTION_CONTEXT = context
+
+
+def _predict_cpu_pack(pack):
+    spectra, failures = _predict_packs(*_CPU_PREDICTION_CONTEXT, [pack])
+    return spectra, failures, len(pack)
 
 
 def predict_source_msdataset(
@@ -305,7 +436,11 @@ def predict_source_msdataset(
     source_groups: dict[str, list[int]] = {}
     for position, source in enumerate(sources):
         source_groups.setdefault(source.smiles, []).append(position)
+    cpu_parallel = num_workers > 1 and next(generator.parameters()).device.type == "cpu"
     limit = generator.max_samples
+    if cpu_parallel:
+        # Distribute even datasets that fit within a single model batch.
+        limit = min(limit, max(1, (len(sources) + num_workers - 1) // num_workers))
     packs: list[list[int]] = []
     current: list[int] = []
     for rows in source_groups.values():
@@ -319,116 +454,29 @@ def predict_source_msdataset(
     if current:
         packs.append(current)
 
-    spectra_by_position: dict[int, GeneratedMassSpectrum] = {}
-    intensity_threshold = peak_intensity_threshold
-
-    def split_rows(rows: list[int]) -> tuple[list[int], list[int]]:
-        """Prefer keeping same-compound rows together while isolating errors."""
-        grouped: dict[str, list[int]] = {}
-        for position in rows:
-            grouped.setdefault(sources[position].smiles, []).append(position)
-        groups = list(grouped.values())
-        if len(groups) > 1:
-            cumulative = 0
-            target = len(rows) / 2
-            split_at = 1
-            best = float("inf")
-            for index, group in enumerate(groups[:-1], start=1):
-                cumulative += len(group)
-                distance = abs(cumulative - target)
-                if distance < best:
-                    best = distance
-                    split_at = index
-            return [item for group in groups[:split_at] for item in group], [
-                item for group in groups[split_at:] for item in group
-            ]
-        midpoint = len(rows) // 2
-        return rows[:midpoint], rows[midpoint:]
-
+    context = (generator, sources, adducts, energies, precomputed,
+               valid_indices, smiles_values, include_formula_annotation,
+               peak_intensity_threshold)
+    spectra_by_position = {}
     if sources:
-        progress = tqdm(total=len(sources), desc=predict_desc)
-        try:
-
-            def predict_rows(rows: list[int]) -> None:
-                local_spectra = {
-                    position: GeneratedMassSpectrum(position, []) for position in rows
-                }
-                error_name = error_message = None
-                try:
-                    for output in generator.predict_batches(
-                        [sources[position] for position in rows],
-                        [adducts[position] for position in rows],
-                        [energies[position] for position in rows],
-                        precomputed=precomputed,
-                    ):
-                        prediction = output.spectra
-                        from .competitive_spectrum_model import merge_candidate_peaks
-
-                        prediction = merge_candidate_peaks(prediction)
-                        for sample, formula, mz, intensity, confidence in zip(
-                            prediction.sample_index.detach().cpu().tolist(),
-                            prediction.formula_tensor.detach().cpu(),
-                            prediction.mz.detach().cpu().tolist(),
-                            prediction.intensity.detach().cpu().tolist(),
-                            prediction.confidence.detach().cpu().tolist(),
-                        ):
-                            if intensity <= intensity_threshold:
-                                continue
-                            position = rows[output.sample_input_index[sample]]
-                            local_spectra[position].peaks.append(
-                                GeneratedSpectrumPeak(
-                                    mz=mz,
-                                    intensity=max(float(intensity), 0.0),
-                                    sample_id=position,
-                                    formula=(
-                                        str(
-                                            generator.tensorizer.tensor_to_formula(
-                                                formula
-                                            )
-                                        )
-                                        if include_formula_annotation
-                                        else None
-                                    ),
-                                )
-                            )
-                    for spectrum in local_spectra.values():
-                        if spectrum.peaks:
-                            maximum = max(peak.intensity for peak in spectrum.peaks)
-                            for peak in spectrum.peaks:
-                                peak.intensity = (
-                                    peak.intensity / maximum if maximum > 0 else 0.0
-                                )
-                            spectrum.peaks.sort(key=lambda peak: peak.mz)
-                except Exception as error:
-                    error_name = type(error).__name__
-                    error_message = str(error)
-                    output = None
-                    if isinstance(error, torch.cuda.OutOfMemoryError):
-                        torch.cuda.empty_cache()
-                if error_name is None:
-                    spectra_by_position.update(local_spectra)
-                    progress.update(len(rows))
-                    return
-                if len(rows) == 1:
-                    position = rows[0]
-                    input_index = valid_indices[position]
-                    failures.append(
-                        {
-                            "index": input_index,
-                            "smiles": smiles_values[input_index],
-                            "error": f"{error_name}: {error_message}",
-                        }
-                    )
-                    progress.update(1)
-                    return
-                left, right = split_rows(rows)
-                predict_rows(left)
-                predict_rows(right)
-
-            for pack in packs:
-                predict_rows(pack)
-        finally:
-            progress.close()
+        with tqdm(total=len(sources), desc=predict_desc) as progress:
+            if cpu_parallel and len(packs) > 1:
+                # Spawn avoids inheriting active PyTorch/OpenMP threads.
+                with ProcessPoolExecutor(
+                    max_workers=min(num_workers, len(packs)),
+                    mp_context=multiprocessing.get_context("spawn"),
+                    initializer=_init_cpu_prediction,
+                    initargs=(context,),
+                ) as executor:
+                    for spectra, errors, count in executor.map(_predict_cpu_pack, packs):
+                        spectra_by_position.update(spectra)
+                        failures.extend(errors)
+                            progress.update(count)
+            else:
+                spectra_by_position, errors = _predict_packs(
+                    *context, packs, progress=progress
+                )
+                failures.extend(errors)
 
     successful_positions = sorted(spectra_by_position)
     spectra = []
