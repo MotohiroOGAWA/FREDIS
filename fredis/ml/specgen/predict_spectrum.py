@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -124,7 +125,7 @@ def parse_args() -> argparse.Namespace:
         "--num-workers",
         type=int,
         default=1,
-        help="Parallel worker processes for RDKit fragmentation precompute; 1 runs serially.",
+        help="Worker processes for chemical preparation and CPU inference; GPU inference stays in one process. 1 runs serially.",
     )
     parser.add_argument(
         "--chunk-size",
@@ -164,7 +165,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep the temporary task/result files exchanged with --num-workers subprocesses (for inspection), instead of deleting them once every chunk completes.",
     )
+    parser.add_argument(
+        "--intensity-exponent", type=float, default=0.5,
+        help="Intensity exponent applied to both spectra for similarity calculation (default: %(default)s).",
+    )
     args = parser.parse_args()
+    if not math.isfinite(args.intensity_exponent) or args.intensity_exponent <= 0:
+        parser.error("--intensity-exponent must be finite and positive")
     if args.max_samples < 1:
         parser.error("--max-samples must be positive")
     if args.num_workers < 1:
@@ -563,6 +570,7 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "maxFragmentNodes": args.max_fragment_nodes,
         "peakIntensityThreshold": args.peak_intensity_threshold,
         "similarityMzTolerance": args.similarity_mz_tolerance,
+        "intensityExponent": args.intensity_exponent,
     }
 
 
@@ -599,7 +607,7 @@ def main() -> None:
     # Written immediately, not only on success: settings should be visible
     # and loadable (Workbench "Load From Run") even if this run later fails
     # or is interrupted, just like training/data-prep's own .pft.
-    pft_path = output_dir / "prediction.pft"
+    pft_path = output_dir / "config.batch-prediction.pft"
     pft_path.write_text(
         json.dumps(prediction_run_settings(args), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -712,6 +720,7 @@ def main() -> None:
         key1="SourceSpecID",
         key2=args.spec_id_column,
         include_matched_data=True,
+        intensity_exponent=args.intensity_exponent,
         **parse_mz_tolerance(args.similarity_mz_tolerance),
     )
     # SimilarityDataset.save() already writes via a same-directory tempfile

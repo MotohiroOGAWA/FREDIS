@@ -105,6 +105,7 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
         "predict_spectrum.py", "--input", str(input_path), "--output-dir", str(output_dir),
         "--model", str(model_path), "--device", "cpu", "--spec-id-column", "SpecID",
         "--similarity-mz-tolerance", "20ppm, 0.02da",
+        "--intensity-exponent", "0.7",
     ])
     predict_spectrum.main()
 
@@ -120,12 +121,13 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     similarity = load_similarity(str(mssim_path))
     assert similarity.has_matched_data
     parameters = similarity.metadata["parameters"]
+    assert parameters["intensity_exponent"] == 0.7
     assert (parameters["mz_tolerance_da"], parameters["mz_tolerance_ppm"]) == (0.02, 20.0)
 
     # Mirrors training/data-prep's own .pft convention, so the
     # Workbench's "Load From Run" can restore this run's settings.
     import json
-    pft = json.loads((output_dir / "prediction.pft").read_text())
+    pft = json.loads((output_dir / "config.batch-prediction.pft").read_text())
     assert pft["application"] == "spectrum-prediction"
     assert pft["input"] == str(input_path.resolve())
     assert pft["modelPath"] == str(model_path.resolve())
@@ -133,6 +135,7 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     assert pft["chunkSize"] == 1
     assert pft["keepTemp"] is False
     assert pft["similarityMzTolerance"] == "0.02Da,20ppm"
+    assert pft["intensityExponent"] == 0.7
 
 
 def test_main_keeps_prepare_temp_files_under_output_dir_only_with_keep_temp(tmp_path, monkeypatch) -> None:
@@ -198,7 +201,7 @@ def test_main_writes_pft_json_before_prediction_even_if_it_later_fails(tmp_path,
         predict_spectrum.main()
 
     import json
-    pft = json.loads((output_dir / "prediction.pft").read_text())
+    pft = json.loads((output_dir / "config.batch-prediction.pft").read_text())
     assert pft["application"] == "spectrum-prediction"
     assert not (output_dir / "predicted.msds").exists()
 
@@ -279,3 +282,14 @@ def test_load_gpu_tagged_checkpoint_on_cpu(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="--device cpu"):
         predict_spectrum.load_generator(model_path=str(checkpoint), params_path=None,
                                         device=torch.device("cuda"), strict=True)
+
+
+def test_similarity_intensity_exponent_default_and_validation(monkeypatch):
+    argv = ['predict_spectrum', '--input', 'input.msds', '--model', 'model.pt',
+            '--output-dir', 'out']
+    monkeypatch.setattr('sys.argv', argv)
+    assert predict_spectrum.parse_args().intensity_exponent == 0.5
+    for invalid in ['0', '-1', 'nan', 'inf']:
+        monkeypatch.setattr('sys.argv', [*argv, '--intensity-exponent', invalid])
+        with pytest.raises(SystemExit):
+            predict_spectrum.parse_args()

@@ -217,3 +217,24 @@ run. Input paths and protected application paths cannot be overwrite destination
 
 Continue with [prediction](prediction.md), [fine-tuning](fine-tuning.md), or
 [parameter tuning](tuning.md).
+
+## Selecting spectra for trainable patterns
+
+Dataset preparation matches each valid Source against reactant SMARTS of patterns
+whose encoders are not imported from pretrained reaction models. At least one
+such match is required. Frozen-pattern-only compounds are excluded before any
+fragment trees or training tensors are built. When no pretrained models are
+selected, all reaction patterns participate in selection.
+
+All metadata-valid conditions of qualifying compounds remain eligible for
+preparation. A match does not require a newly assigned peak. Preparation writes
+`pattern_filter_summary.json` per split and selection counts in
+`reaction_statistics.json`. Source record indices are preserved after filtering.
+Prepared files retain the complete reaction set, including imported patterns, so
+training can use their fixed features. Training streams the resulting files in
+the usual way and does not repeat pattern matching. Recreate older datasets to
+apply this selection rule.
+
+Pattern selection precedes molecule-disjoint splitting and validation/test caps.
+With a validation/train cap, its denominator is the number of qualifying training
+molecules, and validation is sampled only from qualifying held-out molecules.

@@ -70,7 +70,7 @@ def validate_list_config(entries, mode, validation_ratio=0, test_ratio=0,
 
 def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_ratio=0, seed=0,
                   invalid_detail_limit=None, progress=None,
-                  validation_max_train_ratio=None, test_max_train_ratio=None):
+                  validation_max_train_ratio=None, test_max_train_ratio=None, reaction_models=None):
     entries = validate_list_config(entries, mode, validation_ratio, test_ratio,
                                    validation_max_train_ratio, test_max_train_ratio)
     datasets, reports, sources, valid_indexes = [], {}, [], {}
@@ -89,6 +89,15 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
         report = inspect_records(data, fragmenter, entry["mapping"], symbols=symbols,
                                  invalid_detail_limit=invalid_detail_limit, progress=inspected if progress else None)
         reports[entry["id"]] = report["invalidRecords"]
+        selection = None
+        if reaction_models is not None:
+            from .pattern_filter import select_trainable_pattern_records
+            input_smiles = list(data[entry['mapping']['smilesColumn']])
+            selected, selection = select_trainable_pattern_records(
+                [input_smiles[index] for index in report['validIndexes']],
+                fragmenter.reaction_pattern_set, reaction_models,
+            )
+            report['validIndexes'] = [report['validIndexes'][index] for index in selected]
         valid_indexes[entry["id"]] = report["validIndexes"]
         if not report["eligibleRecords"]:
             raise ValueError(f"{entry['path']}: no valid records to prepare.")
@@ -101,9 +110,12 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
         data["_fredis_source_record"] = report["validIndexes"]
         datasets.append(data)
         sources.append(dict(id=entry["id"], path=entry["path"], split=entry["split"],
-                            records=len(data), excludedRecords=report["excludedRecords"]))
+                            records=len(data), excludedRecords=report["excludedRecords"],
+                            pattern_selection=selection))
     notify("combining", 72)
     combined = ms.concat(datasets) if len(datasets) > 1 else datasets[0]
+    if not len(combined):
+        raise ValueError("No records match a trainable reaction pattern before dataset splitting.")
     if mode == "automatic":
         splits, assignments = split_dataset(combined, "SMILES", validation_ratio, test_ratio, seed,
                                               progress=(lambda current, total: notify("splitting", 75 + current / max(1, total) * 24, current=current, total=total)) if progress else None)
@@ -112,6 +124,9 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
 
         assignments, all_keys = {}, []
         for source_index, (entry, data) in enumerate(zip(entries, datasets)):
+            if not len(data):
+                sources[source_index]["splits"] = {name: dict(molecules=0, records=0) for name in SPLITS}
+                continue
             try:
                 keys, proposed = split_assignments(
                     data["SMILES"], validation_ratio, test_ratio, seed,

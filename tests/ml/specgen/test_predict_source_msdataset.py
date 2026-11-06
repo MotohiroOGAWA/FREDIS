@@ -351,3 +351,30 @@ def test_prediction_intensity_threshold_defaults_to_zero_and_excludes_boundary()
     )
     assert failures.empty
     assert len(filtered.intensity) == 0
+
+
+@pytest.mark.parametrize('smiles', [
+    ['CCCO', 'CCO', 'CCCO', 'CCCCO'],
+    ['CCCO', 'CCCO', 'CCCO', 'CCCO'],
+])
+def test_cpu_parallel_prediction_matches_serial(smiles):
+    """Exercise real spawned workers, including ordering and repeated conditions."""
+    dataset = direct_input_dataset(
+        smiles_values=smiles,
+        collision_energy='20 eV', adduct_type='[M+H]+',
+    )
+    generator = _generator()
+    kwargs = dict(
+        smiles_column='SMILES', adduct_type_column='AdductType',
+        collision_energy_column='CollisionEnergy', precursor_mz_column='PrecursorMZ',
+        instrument_column=None,
+    )
+    serial, serial_errors = predict_source_msdataset(dataset, generator, **kwargs)
+    parallel, parallel_errors = predict_source_msdataset(
+        dataset, generator, num_workers=2, **kwargs,
+    )
+    assert serial_errors.empty and parallel_errors.empty
+    assert list(parallel.to_pandas()['SMILES']) == list(serial.to_pandas()['SMILES'])
+    import numpy as np
+    np.testing.assert_allclose(parallel.mz, serial.mz, rtol=1e-6)
+    np.testing.assert_allclose(parallel.intensity, serial.intensity, rtol=1e-5, atol=1e-7)

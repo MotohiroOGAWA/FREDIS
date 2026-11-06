@@ -156,7 +156,9 @@ class TestPreparationWorkflow(unittest.TestCase):
                         chunk_size=3,
                         **limit,
                     )
-                    self.assertEqual(len(files), 2)
+                    self.assertEqual(len(files), 1)
+                    selection = json.loads((output / "pattern_filter_summary.json").read_text())
+                    self.assertEqual(selection["excluded_records"], 1)
                     manifest = pd.read_csv(output / "manifest.tsv", sep="\t")
                     retained = manifest[manifest.smiles == "CCO"].iloc[0]
                     self.assertEqual(retained.status, "completed")

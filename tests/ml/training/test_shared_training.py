@@ -234,7 +234,7 @@ def test_resume_does_not_reopen_imports_or_override_patterns(prepared, monkeypat
     assert detailed.pattern_hidden_dim is None
 
 
-def test_frozen_patterns_are_preserved_and_incompatible_shared_width_rejected(
+def test_frozen_patterns_are_preserved_with_different_shared_width(
     prepared, monkeypatch
 ):
     _, original = expanded_config(prepared, "--hidden-dim", "12", "--num-heads", "3")
@@ -251,10 +251,11 @@ def test_frozen_patterns_are_preserved_and_incompatible_shared_width_rejected(
     assert all(
         not value.startswith(pid + "=") for value in (detailed.pattern_hidden_dim or [])
     )
-    with pytest.raises(ValueError, match="fragment-tree-detailed"):
-        shared_training.expand_arguments(
-            shared_args(prepared, "--hidden-dim", "24", "--num-heads", "3")
-        )
+    changed = training.build_arg_parser().parse_args(shared_training.expand_arguments(
+        shared_args(prepared, "--hidden-dim", "24", "--num-heads", "3")
+    ))
+    assert all(not value.startswith(pid + "=") for value in (changed.pattern_hidden_dim or []))
+    assert all(value.endswith("=24") for value in (changed.pattern_hidden_dim or []))
 
 
 def test_detailed_fc_generation_remains_independent(prepared):
@@ -361,3 +362,41 @@ def test_zero_fc_layers_survive_shared_argument_serialization(prepared):
     _, params = expanded_config(prepared, "--fc-layers", "0")
     for key in ("ce_fc_dims", "fragment_fc_dims", "state_fc_dims"):
         assert params["spectrum_model_params"][key] == []
+
+
+def test_imported_patterns_survive_different_shared_and_transformer_settings(prepared):
+    from fredis.ml.training.fragment_tree_training.pattern_models import (
+        export_pattern, initialize_imports, prepare_pattern_models,
+    )
+    from fredis.ml.training.fragment_tree_training.model import ReactionFragmentTreeTrainingModel
+    source_config = config()
+    source = create_spectrum_generator(source_config)
+    wrapper = ReactionFragmentTreeTrainingModel(source.feature_model, spectrum_model=source.spectrum_model)
+    checkpoint = prepared / 'base.pt'
+    torch.save(dict(architecture=source.architecture, model_config=source_config,
+                    model_state_dict=wrapper.state_dict()), checkpoint)
+    original_patterns = Fragmenter.from_dict(source_config['fragmenter_params']).reaction_pattern_set.patterns
+    pid = original_patterns[0].pattern_id
+    asset = prepared / 'base.reaction-model.pt'
+    export_pattern(checkpoint, pid, asset)
+    chemistry_config = prepare_pattern_models(chemistry(), [dict(
+        pattern=original_patterns[0].to_dict(), source=str(asset), source_pattern_id=pid)])
+    (prepared / 'fragment-tree.training-data-config.pft').write_text(json.dumps({'chemistry_config': chemistry_config}))
+    _, params = expanded_config(prepared, '--hidden-dim', '24', '--num-heads', '4',
+                                '--num-layers', '1', '--ffn-mult', '2',
+                                '--reaction-encoder-layers', '1', '--reaction-decoder-layers', '2')
+    assert params['mol_encoder_params'] == source_config['mol_encoder_params']
+    assert params['reaction_model_params']['hidden_dim'] == source_config['reaction_model_params']['hidden_dim']
+    assert params['reaction_model_params']['pattern_model_params'][str(pid)]['hidden_dim'] != 24
+    for key, value in params['reaction_model_params']['pattern_model_params'].items():
+        if key != str(pid):
+            assert value['hidden_dim'] == 24
+    generator = create_spectrum_generator(params)
+    model = ReactionFragmentTreeTrainingModel(generator.feature_model, spectrum_model=generator.spectrum_model)
+    initialize_imports(model, params)
+    assert len(generator.feature_model.memory_encoder.encoder.layers) == 1
+    assert len(generator.feature_model.state_decoder.decoder.layers) == 2
+    generator.train()
+    assert not generator.feature_model.reaction_instance_encoder.reactant_encoders[str(pid)].training
+    for name, value in torch.load(asset, weights_only=False)['model_state_dict'].items():
+        assert torch.equal(model.state_dict()[name], value), name

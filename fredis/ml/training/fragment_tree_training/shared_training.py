@@ -167,33 +167,8 @@ def expand_arguments(args):
         frozen = set(
             map(str, config.get("fine_tuning", {}).get("frozen_pattern_ids", []))
         )
-        if frozen:
-            molecular = config["mol_encoder_params"]
-            defaults = {
-                key: default for key, _, default in MOL_ENCODER_OPTIONS.values()
-            }
-            expected = dict(
-                node_dim=args.hidden_dim,
-                graph_dim=args.hidden_dim,
-                num_heads=args.num_heads,
-                num_layers=args.num_layers,
-                ffn_mult=args.ffn_mult,
-                max_degree=args.max_degree,
-                max_spatial_dist=args.max_spatial_dist,
-                max_edge_dist=args.max_edge_dist,
-            )
-            if (
-                any(
-                    molecular.get(key, defaults[key]) != value
-                    for key, value in expected.items()
-                )
-                or config["reaction_model_params"].get("hidden_dim", 128)
-                != args.hidden_dim
-            ):
-                raise ValueError(
-                    "Shared architecture differs from the imported molecule/reaction architecture. "
-                    "Use matching shared settings or fragment-tree-detailed for independent dimensions."
-                )
+        # Imported molecular and reaction feature architectures are inherited
+        # independently. Shared settings configure only trainable modules.
         patterns = Fragmenter.from_dict(
             config["fragmenter_params"]
         ).reaction_pattern_set.patterns

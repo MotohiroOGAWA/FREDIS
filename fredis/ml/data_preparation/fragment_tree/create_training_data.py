@@ -387,9 +387,10 @@ def create_reaction_training_data(
         raise ValueError(
             "source_record_indexes must contain one index per input spectrum."
         )
+    generator = create_preparation_context(chemistry_config)
     inspection = inspect_records(
         dataset,
-        create_preparation_context(chemistry_config).fragmenter,
+        generator.fragmenter,
         dict(
             smilesColumn=smiles_column,
             adductTypeColumn=adduct_type_column,
@@ -398,7 +399,20 @@ def create_reaction_training_data(
         ),
         symbols=chemistry_config["symbols"],
     )
-    original_rows = inspection["validIndexes"]
+    from .pattern_filter import select_trainable_pattern_records
+
+    valid_rows = inspection["validIndexes"]
+    input_smiles = list(dataset[smiles_column])
+    selected, pattern_selection = select_trainable_pattern_records(
+        [input_smiles[index] for index in valid_rows],
+        generator.fragmenter.reaction_pattern_set,
+        chemistry_config.get("reaction_models", ()),
+    )
+    original_rows = [valid_rows[index] for index in selected]
+    print(f"{split}: trainable-pattern selection retained {len(original_rows)}/"
+          f"{len(valid_rows)} records; excluded {pattern_selection['excluded_records']}", flush=True)
+    if valid_rows and not original_rows:
+        raise ValueError("No valid records match a trainable reaction pattern; no training tensors were created.")
     source_rows = (
         [source_record_indexes[index] for index in original_rows]
         if source_record_indexes is not None
@@ -407,7 +421,6 @@ def create_reaction_training_data(
     dataset = dataset[original_rows]
     if not len(dataset):
         raise ValueError("The dataset contains no valid records to prepare.")
-    generator = create_preparation_context(chemistry_config)
     tree_store = str(Path(tree_store).expanduser().resolve()) if tree_store else ""
     builder = ReactionStructureBuilder(
         generator,
@@ -442,6 +455,7 @@ def create_reaction_training_data(
         )
     else:
         _reset_output(output, overwrite)
+    (output / "pattern_filter_summary.json").write_text(json.dumps(pattern_selection, indent=2))
     (output / "invalid_records.json").write_text(
         json.dumps(inspection["invalidRecords"], indent=2)
     )
@@ -834,7 +848,8 @@ def create_reaction_training_data(
                 ),
                 num_sources=len(files),
                 num_samples=prepared_records,
-                num_metadata_valid_records=len(dataset),
+                num_metadata_valid_records=len(valid_rows),
+                pattern_selection=pattern_selection,
                 num_skipped_sources=len(skipped),
                 num_skipped_records=sum(
                     len(source["record_indexes"]) for source in skipped
@@ -987,6 +1002,7 @@ def main(argv: list[str] | None = None) -> None:
         config = prepare_pattern_models(config, records)
     validate_limits(args.max_unique_fragment_smiles, args.max_reaction_combinations)
     plan = None
+    selection_before_split = {}
     if args.datasets_json:
         from .dataset_plan import DEFAULT_MAPPING, plan_datasets
 
@@ -994,7 +1010,9 @@ def main(argv: list[str] | None = None) -> None:
                              create_preparation_context(config).fragmenter, config["symbols"],
                              args.validation_ratio or 0, args.test_ratio, args.validation_seed,
                              validation_max_train_ratio=args.validation_max_train_ratio,
-                             test_max_train_ratio=args.test_max_train_ratio)
+                             test_max_train_ratio=args.test_max_train_ratio,
+                             reaction_models=config.get("reaction_models", ()))
+        selection_before_split = {source["id"]: source["pattern_selection"] for source in plan["sources"]}
         dataset = plan["combined"]
         reports = plan["reports"]
         validation_mapping = DEFAULT_MAPPING
@@ -1037,7 +1055,13 @@ def main(argv: list[str] | None = None) -> None:
                 symbols=config["symbols"],
             )
             reports[name] = report["invalidRecords"]
-            filtered = data[report["validIndexes"]]
+            from .pattern_filter import select_trainable_pattern_records
+            input_smiles = list(data[(mapping if name == 'train' else validation_mapping)['smilesColumn']])
+            selected, selection_before_split[name] = select_trainable_pattern_records(
+                [input_smiles[index] for index in report['validIndexes']],
+                checker.reaction_pattern_set, config.get('reaction_models', ()),
+            )
+            filtered = data[[report['validIndexes'][index] for index in selected]]
             if not len(filtered):
                 raise ValueError(name + " dataset contains no valid records to prepare.")
             if name == "train":
@@ -1083,6 +1107,7 @@ def main(argv: list[str] | None = None) -> None:
         validation_seed=args.validation_seed,
         validation_max_train_ratio=args.validation_max_train_ratio,
         test_max_train_ratio=args.test_max_train_ratio,
+        pattern_selection_before_split=selection_before_split,
         output_dir=args.output_dir,
         # Blank means "same as the training column"; only a real override is persisted,
         # so reloading a saved configuration keeps showing it as inherited, not explicit.
@@ -1311,6 +1336,11 @@ def main(argv: list[str] | None = None) -> None:
         (directory / "fragment-tree.training-data.pft").write_text(
             json.dumps(relative_paths(split_config, directory), indent=2)
         )
+    (output / "pattern_filter_summary.json").write_text(json.dumps({
+        "before_split": selection_before_split,
+        **{name: json.loads((output / (name + "_structures") / "pattern_filter_summary.json").read_text())
+        for name, _ in splits}
+    }, indent=2))
     (output / "invalid_records.json").write_text(json.dumps(reports, indent=2))
     (output / "fragment-tree.training-data-config.pft").write_text(
         json.dumps(relative_paths(preparation_config, output), indent=2)

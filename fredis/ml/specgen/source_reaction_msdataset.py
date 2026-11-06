@@ -3,6 +3,7 @@
 from __future__ import annotations
 import os
 import multiprocessing
+import copy
 from concurrent.futures import ProcessPoolExecutor
 import pickle
 import shutil
@@ -130,6 +131,7 @@ def _predict_packs(generator, sources, adducts, energies, precomputed,
     """Predict packs atomically, bisecting failed packs down to single records."""
     spectra_by_position = {}
     failures = []
+
     def split_rows(rows: list[int]) -> tuple[list[int], list[int]]:
         """Prefer keeping same-compound rows together while isolating errors."""
         grouped: dict[str, list[int]] = {}
@@ -152,7 +154,6 @@ def _predict_packs(generator, sources, adducts, energies, precomputed,
             ]
         midpoint = len(rows) // 2
         return rows[:midpoint], rows[midpoint:]
-
 
     def predict_rows(rows: list[int]) -> None:
         local_spectra = {
@@ -232,7 +233,6 @@ def _predict_packs(generator, sources, adducts, energies, precomputed,
         predict_rows(left)
         predict_rows(right)
 
-
     for pack in packs:
         predict_rows(pack)
     return spectra_by_position, failures
@@ -241,10 +241,13 @@ def _predict_packs(generator, sources, adducts, energies, precomputed,
 _CPU_PREDICTION_CONTEXT = None
 
 
-def _init_cpu_prediction(context):
+def _init_cpu_prediction(context, fragmenter_config):
     global _CPU_PREDICTION_CONTEXT
     # Avoid multiplying PyTorch's intra-op thread pool by the process count.
     torch.set_num_threads(1)
+    from fredis.domain.fragment.fragmenter import Fragmenter
+
+    context[0].fragmenter = Fragmenter.from_dict(fragmenter_config)
     _CPU_PREDICTION_CONTEXT = context
 
 
@@ -443,7 +446,14 @@ def predict_source_msdataset(
         limit = min(limit, max(1, (len(sources) + num_workers - 1) // num_workers))
     packs: list[list[int]] = []
     current: list[int] = []
-    for rows in source_groups.values():
+    row_groups = list(source_groups.values())
+    if cpu_parallel:
+        row_groups = [
+            rows[offset:offset + limit]
+            for rows in row_groups
+            for offset in range(0, len(rows), limit)
+        ]
+    for rows in row_groups:
         if current and len(current) + len(rows) > limit:
             packs.append(current)
             current = []
@@ -461,17 +471,22 @@ def predict_source_msdataset(
     if sources:
         with tqdm(total=len(sources), desc=predict_desc) as progress:
             if cpu_parallel and len(packs) > 1:
+                # RDKit's compiled reaction templates cannot be pickled. Rebuild
+                # the fragmenter from configuration in each spawned process.
+                worker_generator = copy.copy(generator)
+                worker_generator.fragmenter = None
+                worker_context = (worker_generator, *context[1:])
                 # Spawn avoids inheriting active PyTorch/OpenMP threads.
                 with ProcessPoolExecutor(
                     max_workers=min(num_workers, len(packs)),
                     mp_context=multiprocessing.get_context("spawn"),
                     initializer=_init_cpu_prediction,
-                    initargs=(context,),
+                    initargs=(worker_context, generator.fragmenter.to_dict()),
                 ) as executor:
                     for spectra, errors, count in executor.map(_predict_cpu_pack, packs):
                         spectra_by_position.update(spectra)
                         failures.extend(errors)
-                            progress.update(count)
+                        progress.update(count)
             else:
                 spectra_by_position, errors = _predict_packs(
                     *context, packs, progress=progress

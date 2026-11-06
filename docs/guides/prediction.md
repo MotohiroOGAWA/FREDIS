@@ -55,8 +55,12 @@ peak lists. Input validation and failed records are reported in the run outputs.
 The checkpoint stays loaded while independent molecule groups are processed in
 bounded chunks. Repeated SMILES can share chemical preparation and static reaction
 encodings. CE conditions remain separate predicted spectra. `--max-samples`
-bounds simultaneous conditions; `--num-workers` and `--chunk-size` control
-CPU subprocess preparation, rather than neural attention layers.
+bounds simultaneous conditions per process. `--num-workers` controls both chemical
+preparation and model inference on CPU. CPU inference uses spawned workers with
+one PyTorch thread each; GPU inference stays in the main process. The default
+worker count is 1 (serial). `--chunk-size` controls chemical preparation chunks.
+Each CPU worker holds its own model and preparation data, so memory use increases
+with the worker count.
 
 A failed multi-molecule chunk is retried per molecule so valid records can still
 be produced. Inspect the failure report to distinguish a complete prediction
@@ -122,3 +126,14 @@ The [Python API](../api/prediction.md) exposes generator loading, chunked output
 input-order mapping, and dataset prediction. Workbench's **Prediction** pages
 provide single and batch forms; spectrum and reaction viewers expose the
 resulting peaks and structures.
+
+Batch runs save `config.batch-prediction.pft` in the output directory. Click this
+file in the Workbench Explorer to open Batch Prediction settings. Changes can be
+saved with Ctrl/Cmd+S or Save Configuration. Older `prediction.pft` files can
+still be imported with Load From Run, or renamed to use `.batch-prediction.pft`.
+
+Batch Prediction exposes **Similarity intensity exponent** (CLI:
+`--intensity-exponent`, default `0.5`). Both predicted and measured intensities
+are raised to this power for cosine similarity in `predicted.mssim`; the
+intensities in `predicted.msds` are unchanged. The value must be finite and
+positive and is saved as `intensityExponent` in the batch configuration.
