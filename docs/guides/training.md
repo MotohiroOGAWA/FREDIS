@@ -270,3 +270,20 @@ pattern needs a batch, registries are searched lazily, without chemistry or an
 upfront full scan. Validation is unchanged. The gap counter and last-seen steps
 continue across epochs and are saved in checkpoints. Epoch metrics record
 `train/rare_pattern_replay_batches` and `train/replay_pattern_<id>`.
+
+Prepared `.preft.pt` files now use lossless ZIP DEFLATE compression (level 1).
+They remain directly readable by `torch.load` and preserve tensor dtype, stride
+and shared storage. Training continues to load one file at a time. Saving uses
+same-directory temporary files and an atomic replacement; incomplete writes do
+not replace an existing dataset file. No changes to tensor schemas are needed.
+
+Existing datasets can be compacted in place, with per-file progress:
+
+```bash
+python -m fredis.ml.input.training_storage /path/to/training_dataset
+```
+
+This processes only `.preft.pt` files and skips archives already compressed.
+It needs temporary free space for one file, rather than a second complete copy
+of the dataset. Compression trades some CPU time on save/load for smaller disk
+and transfer sizes; the reduction depends on the tensor contents.

@@ -1139,10 +1139,12 @@ class SourceReactionStructure(SpectrumPredictionData):
         )
 
     def save(self, path):
+        from .training_storage import save_training_payload
+
         if self.branch_teacher is None:
             raise ValueError("Branch teacher is missing; regenerate prepared datasets")
         self.validate()
-        torch.save(dict(schema=SCHEMA, structure=self.to("cpu")), path)
+        save_training_payload(dict(schema=SCHEMA, structure=self.to("cpu")), path)
 
     @classmethod
     def load(cls, path, device="cpu"):
@@ -1251,12 +1253,13 @@ def make_structure_file_stem(smiles, *, index):
 
 
 def save_fragment_tree_structure(*, structure, output_file, metadata=None):
+    from .training_storage import save_training_payload
     from ..common.paths import relative_paths
 
     structure.validate()
     path = Path(output_file)
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
+    save_training_payload(
         dict(
             schema=SCHEMA,
             structure=structure.to("cpu"),
