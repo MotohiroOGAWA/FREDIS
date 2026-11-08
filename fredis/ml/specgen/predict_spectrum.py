@@ -177,6 +177,7 @@ def parse_args() -> argparse.Namespace:
                         help="Native similarity calculation threads (default: 1).")
     parser.add_argument("--similarity-no-matched-data", action="store_true",
                         help="Write a lightweight .mssim without embedded matched spectra.")
+    parser.add_argument("--calculate-theoretical-fragments", action="store_true", help="Also generate full theoretical fragments and store observed-intensity coverage in predicted.mssim.")
     args = parser.parse_args()
     methods = [name.strip() for name in args.similarity_methods.split(",")]
     supported = ("cosine", "reverse_cosine", "modified_cosine", "bonanza")
@@ -586,6 +587,7 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "peakIntensityThreshold": args.peak_intensity_threshold,
         "similarityMzTolerance": args.similarity_mz_tolerance,
         "intensityExponent": args.intensity_exponent,
+        "calculateTheoreticalFragments": bool(getattr(args,"calculate_theoretical_fragments",False)),
         "similarityMethods": args.similarity_methods,
         "similarityPrecursorColumn": args.similarity_precursor_column,
         "similarityThreads": args.similarity_threads,
@@ -747,7 +749,21 @@ def main() -> None:
     # SimilarityDataset.save() already writes via a same-directory tempfile
     # and renames into place, unlike ms.Dataset.save(); reusing _atomic_save's
     # ".name.tmp" wrapper here would break its own ".mssim"-suffix check.
-    similarity.save(str(similarity_path))
+    similarity.metadata={**similarity.metadata,"fredis_prediction":{"observed_side":2}}
+    theoretical_failure_count=0
+    if args.calculate_theoretical_fragments:
+        from fredis.analysis.theoretical_coverage import enrich_file
+        print("Theoretical fragments: 0% | generating and assigning observed peaks…", flush=True)
+        theoretical=enrich_file(similarity_path,similarity,dataset,generator.fragmenter.to_dict(),
+            alpha=args.intensity_exponent,workers=args.num_workers,smiles_column=args.smiles_column,
+            adduct_column=args.adduct_type_column,mass_tolerance=args.similarity_mz_tolerance,
+            progress=lambda done,total: print(f"Theoretical fragments: {100*done/max(total,1):.1f}% | {done}/{total} compounds",flush=True))
+        theoretical.to_csv(output_dir/"theoretical-coverage.tsv",sep="\t",index=False,na_rep="")
+        theoretical_failure_count=int(theoretical["theoretical_fragment_error"].astype(bool).sum())
+        print(f"Theoretical assignment failures: {theoretical_failure_count}")
+    else:
+        similarity.save(str(similarity_path))
+        (output_dir/"theoretical-coverage.tsv").unlink(missing_ok=True)
 
     run_dir = output_dir / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -758,6 +774,8 @@ def main() -> None:
         "model": str(Path(args.model).resolve()),
         "input": str(Path(args.input).resolve()) if args.input else None,
         "output": str(output_path),
+        "theoretical_coverage_output": str(output_dir/"theoretical-coverage.tsv") if args.calculate_theoretical_fragments else None,
+        "theoretical_failure_count": theoretical_failure_count,
         "similarity_output": str(similarity_path),
         "output_directory": str(output_dir),
         "db": args.db,
@@ -778,8 +796,8 @@ def main() -> None:
     print(f"saved: {output_path}")
     print(f"saved similarity dataset: {similarity_path}")
     print(f"run information: {run_dir}")
-    if len(failures):
-        print(f"partial success: {len(failures)} record(s) failed", file=sys.stderr)
+    if len(failures) or theoretical_failure_count:
+        print(f"partial success: {len(failures)} prediction(s) and {theoretical_failure_count} theoretical assignment(s) failed", file=sys.stderr)
         raise SystemExit(3)
 
 

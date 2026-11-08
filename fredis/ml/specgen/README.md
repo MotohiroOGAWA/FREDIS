@@ -99,3 +99,31 @@ smaller groups; successful records continue to `predicted.msds`.
 
 Use `--strict` when you want checkpoint loading to fail on any missing or
 unexpected parameter. Without it, counts are printed for incompatible keys.
+
+### Optional full theoretical fragment coverage
+
+Batch prediction accepts --calculate-theoretical-fragments (default OFF).
+After predicting and comparing spectra it generates full chemistry with the
+checkpoint's Fragmenter and the chosen similarity m/z tolerance, then assigns
+the matched observed spectra's peaks. It uses --num-workers subprocesses and
+shares each SMILES tree across its spectra. The tree depth comes from the
+Fragmenter; the combination limit is 10000 and the unique-fragment limit is
+unlimited. A limit or chemistry failure is recorded explicitly, never replaced
+with a truncated tree or a zero score.
+
+predicted.mssim adds theoretical_fragment_peak_intensity_coverage and
+theoretical_fragment_error, preserving spectra, scores and source indices.
+Metadata records the effective Fragmenter parameters, alpha and search limits.
+theoretical-coverage.tsv carries the same result table; run/run.json records
+the failure count. Such failures mark partial success (exit 3), while predictions
+and successful assignments remain available. Overwriting with the flag OFF
+removes the stale theoretical TSV.
+
+Both predicted and theoretical peak coverage refer to the observed spectrum:
+Σ assigned observed I^(2α) / Σ all observed I^(2α), using --intensity-exponent
+(default 0.5). The former uses similarity's peak pairing; the latter uses
+Fragmenter's formula/adduct/hydrogen-shift explanations, independently of
+learned branch probabilities and predicted intensity thresholds. The enhanced
+msentity viewer plots predicted coverage vs similarity and theoretical coverage
+vs predicted coverage, with alpha labels and existing scatter/density and
+image export controls.

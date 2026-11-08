@@ -87,7 +87,8 @@ def test_prediction_metadata_preserves_source_values_and_adds_provenance(tmp_pat
 
 
 @pytest.mark.parametrize("embedded", [True, False])
-def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, monkeypatch, embedded) -> None:
+@pytest.mark.parametrize("theoretical", [False, True])
+def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, monkeypatch, embedded, theoretical) -> None:
     # No --output-name/--output: predicted.msds and predicted.mssim are fixed
     # names under --output-dir, and the .mssim is the full/embedded variant
     # (it carries its own matched peak data), per the msentity spec.
@@ -111,6 +112,7 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
         "--similarity-threads", "2",
         "--similarity-precursor-column", "PrecursorMZ",
         *([] if embedded else ["--similarity-no-matched-data"]),
+        *(["--calculate-theoretical-fragments"] if theoretical else []),
     ])
     predict_spectrum.main()
 
@@ -151,6 +153,13 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     assert pft["similarityThreads"] == 2
     assert pft["similarityPrecursorColumn"] == "PrecursorMZ"
     assert pft["similarityIncludeMatchedData"] is embedded
+    assert pft["calculateTheoreticalFragments"] is theoretical
+    assert (output_dir/"theoretical-coverage.tsv").exists() is theoretical
+    assert ("theoretical_fragment_peak_intensity_coverage" in table) is theoretical
+    if theoretical:
+        assert similarity.metadata["fredis_theoretical_coverage"]["intensity_exponent"]==0.7
+        assert similarity.metadata["fredis_theoretical_coverage"]["fragmenter_params"]["mass_tolerance"]=="0.02Da,20ppm"
+        assert table["theoretical_fragment_peak_intensity_coverage"].between(0,1).all()
 
 
 def test_main_keeps_prepare_temp_files_under_output_dir_only_with_keep_temp(tmp_path, monkeypatch) -> None:
