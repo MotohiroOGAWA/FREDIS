@@ -73,7 +73,7 @@ def save_validation_msdataset(
         columns=frame.columns.tolist(),
         description="FREDIS validation quantile representatives: paired generated and observed spectra",
         attributes={
-            "selection": "Union of with/without precursor × assignment/cosine × q10/q25/q50/q75/q90",
+            "selection": "Union of with/without precursor × cosine/intensity coverage/assignment × q10/q25/q50/q75/q90",
             "validation_summary": json.dumps(summary or {}),
             "validation_representatives": json.dumps(
                 {

@@ -355,6 +355,7 @@ def create_reaction_training_data(
     overwrite: bool = True,
     save_all_edges: bool = False,
     split: str = "dataset",
+    pattern_selection: str = "trainable",
     max_unique_fragment_smiles: int = -1,
     max_reaction_combinations: int = -1,
     num_workers: int = 1,
@@ -403,14 +404,14 @@ def create_reaction_training_data(
 
     valid_rows = inspection["validIndexes"]
     input_smiles = list(dataset[smiles_column])
-    selected, pattern_selection = select_trainable_pattern_records(
+    selected, selection_report = select_trainable_pattern_records(
         [input_smiles[index] for index in valid_rows],
         generator.fragmenter.reaction_pattern_set,
-        chemistry_config.get("reaction_models", ()),
+        chemistry_config.get("reaction_models", ()), mode=pattern_selection,
     )
     original_rows = [valid_rows[index] for index in selected]
     print(f"{split}: trainable-pattern selection retained {len(original_rows)}/"
-          f"{len(valid_rows)} records; excluded {pattern_selection['excluded_records']}", flush=True)
+          f"{len(valid_rows)} records; excluded {selection_report['excluded_records']}", flush=True)
     if valid_rows and not original_rows:
         raise ValueError("No valid records match a trainable reaction pattern; no training tensors were created.")
     source_rows = (
@@ -455,7 +456,7 @@ def create_reaction_training_data(
         )
     else:
         _reset_output(output, overwrite)
-    (output / "pattern_filter_summary.json").write_text(json.dumps(pattern_selection, indent=2))
+    (output / "pattern_filter_summary.json").write_text(json.dumps(selection_report, indent=2))
     (output / "invalid_records.json").write_text(
         json.dumps(inspection["invalidRecords"], indent=2)
     )
@@ -849,7 +850,7 @@ def create_reaction_training_data(
                 num_sources=len(files),
                 num_samples=prepared_records,
                 num_metadata_valid_records=len(valid_rows),
-                pattern_selection=pattern_selection,
+                pattern_selection=selection_report,
                 num_skipped_sources=len(skipped),
                 num_skipped_records=sum(
                     len(source["record_indexes"]) for source in skipped
@@ -962,6 +963,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Allow replacing existing structure files (0 or 1).",
     )
     parser.add_argument("--overwrite-confirmed", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--pattern-selection", choices=("trainable", "all"), default="trainable",
+                        help="Keep compounds matching any trainable pattern (default) or any pattern including frozen imports.")
     return parser
 
 
@@ -1011,7 +1014,7 @@ def main(argv: list[str] | None = None) -> None:
                              args.validation_ratio or 0, args.test_ratio, args.validation_seed,
                              validation_max_train_ratio=args.validation_max_train_ratio,
                              test_max_train_ratio=args.test_max_train_ratio,
-                             reaction_models=config.get("reaction_models", ()))
+                             reaction_models=config.get("reaction_models", ()), pattern_selection=args.pattern_selection)
         selection_before_split = {source["id"]: source["pattern_selection"] for source in plan["sources"]}
         dataset = plan["combined"]
         reports = plan["reports"]
@@ -1059,7 +1062,7 @@ def main(argv: list[str] | None = None) -> None:
             input_smiles = list(data[(mapping if name == 'train' else validation_mapping)['smilesColumn']])
             selected, selection_before_split[name] = select_trainable_pattern_records(
                 [input_smiles[index] for index in report['validIndexes']],
-                checker.reaction_pattern_set, config.get('reaction_models', ()),
+                checker.reaction_pattern_set, config.get('reaction_models', ()), mode=args.pattern_selection,
             )
             filtered = data[[report['validIndexes'][index] for index in selected]]
             if not len(filtered):
@@ -1088,6 +1091,7 @@ def main(argv: list[str] | None = None) -> None:
         adduct_type_column=args.adduct_type_column,
         collision_energy_column=args.collision_energy_column,
         precursor_mz_column=args.precursor_mz_column,
+        pattern_selection=args.pattern_selection,
         minimum_relative_intensity=args.minimum_relative_intensity,
         overwrite=bool(args.overwrite),
         save_all_edges=args.save_all_edges,
@@ -1258,6 +1262,7 @@ def main(argv: list[str] | None = None) -> None:
         "validation_collision_energy_column": "validationCollisionEnergyColumn",
         "validation_precursor_mz_column": "validationPrecursorMzColumn",
         "minimum_relative_intensity": "minimumRelativeIntensity",
+        "pattern_selection": "patternSelection",
         "max_unique_fragment_smiles": "maxUniqueFragmentSmiles",
         "max_reaction_combinations": "maxReactionCombinations",
         "save_all_edges": "saveAllEdges",

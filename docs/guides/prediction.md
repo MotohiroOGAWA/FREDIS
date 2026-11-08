@@ -81,13 +81,48 @@ The fragment budget constrains structural search. It is independent of the
 number of ion/hydrogen-shift candidates. See the
 [architecture guide](../concepts/architecture.md) for their probability flow.
 
+## Similarity calculation
+
+Batch prediction uses msentity-similarity 2.x and writes schema-v3 `.mssim`
+files. Existing schema-v1/v2 files remain readable in the Viewer and Evaluation.
+The default remains cosine with intensity exponent **0.5**, tolerance
+`0.01Da,10ppm`, one similarity thread, and embedded matched spectra.
+
+```bash
+python -m fredis.ml.specgen.predict_spectrum \
+  --model models/first/best.pt --input spectra.msds \
+  --output-dir predictions/comparison --device cpu \
+  --similarity-methods cosine,reverse_cosine,modified_cosine,bonanza \
+  --intensity-exponent 0.5 --similarity-mz-tolerance 0.01Da,10ppm \
+  --similarity-threads 4
+```
+
+Each selected method has its own score column (`cosine`, `reverse_cosine`,
+`modified_cosine`, `bonanza`). The result includes `intensity_coverage1/2`,
+and modified coverage columns when a precursor-shifted method is selected.
+Side 1 is predicted; side 2 is observed. Coverage uses intensities raised to
+**2 × the exponent** and is distinct from a similarity score.
+
+Modified cosine and BONANZA also match peaks shifted by the precursor m/z
+difference. They use the mapped `--precursor-mz-column` by default; override
+with `--similarity-precursor-column` when both inputs have another common
+precursor column. These methods yield null when a spectrum lacks a valid
+precursor m/z. Prediction preserves the measured precursor metadata, so
+identical precursors do not introduce a shift.
+
+Use `--similarity-no-matched-data` for lightweight results. Keep both source
+files for viewing the spectra of a lightweight result. Similarity threads are
+independent of the subprocess workers used for preparation/CPU prediction.
+All settings are saved in `config.batch-prediction.pft` and `run/run.json`.
+Workbench exposes them in Batch Prediction → Output.
+
 ## Output files and provenance
 
 ```text
 predictions/dataset/
   predicted.msds
   predicted.mssim
-  prediction.pft
+  config.batch-prediction.pft
   run/
     run.json
     failures.tsv
@@ -95,7 +130,7 @@ predictions/dataset/
 
 `predicted.msds` contains generated peaks and retained input metadata.
 `predicted.mssim` contains associated comparison information where available.
-`prediction.pft` and the run directory record execution settings and outcomes.
+`config.batch-prediction.pft` and the run directory record execution settings and outcomes.
 
 | Metadata | Meaning |
 |---|---|

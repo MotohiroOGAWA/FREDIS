@@ -536,6 +536,13 @@ class SpectrumPredictionData(TensorTable):
             cmaps.append(tensor(local, device))
             reaction_offsets.append(ro)
             ro += a.reactions.reaction_type.shape[0]
+        # Compounds are interned by SMILES, but a fragment keeps its parent's
+        # Source atom maps. When a fragment of one item shares its SMILES with
+        # another item's Source, keep the Source object: saved reaction rows
+        # are addressed by the Source atom-map numbering.
+        for a, cm in zip(items, cmaps):
+            for i in a.source_compounds.compound_index.tolist():
+                compounds[int(cm[i])] = a.compounds.compounds[i]
         rsets, smaps = ReactionSet.collate(
             [a.reaction_sets for a in items], reaction_offsets
         )

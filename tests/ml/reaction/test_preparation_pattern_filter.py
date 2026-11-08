@@ -94,3 +94,17 @@ def test_validation_cap_is_computed_after_trainable_pattern_selection(tmp_path):
     assert all('O' in smiles for split in ('train', 'validation') for smiles in plan['splits'][split]['SMILES'])
     assert plan['sources'][0]['pattern_selection']['excluded_records'] == 2
     assert plan['valid_indexes']['dataset-train'] == [0, 1]
+
+
+def test_all_pattern_selection_retains_frozen_only_matches():
+    patterns = definitions()
+    rows, report = select_trainable_pattern_records(
+        ['CCC', 'CCO', 'N'], patterns, ownership(patterns), mode='all')
+    assert rows == [0, 1]
+    assert report['mode'] == 'all'
+    assert report['excluded_records'] == 1
+    rows, _ = select_trainable_pattern_records(['CCC'], patterns,
+        [{'pattern': p.to_dict(), 'source': 'pretrained.pt'} for p in patterns], mode='all')
+    assert rows == [0]
+    with pytest.raises(ValueError, match='Pattern selection'):
+        select_trainable_pattern_records([], patterns, mode='invalid')

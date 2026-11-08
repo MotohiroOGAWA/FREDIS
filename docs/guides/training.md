@@ -210,6 +210,15 @@ trainable downstream modules.
 | `trainable_parameters.json` | Verify which networks are trainable or frozen |
 | `spectrum_validation/` | Inspect representative measured/generated spectra |
 
+Validation scores each generated spectrum against its measured spectrum with
+msentity-similarity (intensity exponent 1, the fragmenter's mass tolerance).
+`cosine_similarity` and `intensity_coverage` share one peak pairing.
+`intensity_coverage` is the measured spectrum's squared intensity (Σ I²) carried
+by matched peaks, so cosine similarity never exceeds sqrt(intensity coverage).
+The Training Report plots representative spectra with intensity coverage on the
+x axis and draws this bound. `assignment_score` keeps the linear Σ I definition
+used by preparation and its training filter.
+
 The [file-format reference](../reference/file-formats.md) explains which files
 are models, configurations, reports, and prepared tensors. For a fresh run,
 existing output requires overwrite authorization. Resume preserves the existing
@@ -238,3 +247,26 @@ apply this selection rule.
 Pattern selection precedes molecule-disjoint splitting and validation/test caps.
 With a validation/train cap, its denominator is the number of qualifying training
 molecules, and validation is sampled only from qualifying held-out molecules.
+
+Dataset creation offers `--pattern-selection trainable` (default) or `all`.
+The Workbench calls this **Compound selection** under Fragmentation. `trainable`
+requires a match to a new/non-frozen pattern; `all` also admits compounds matching
+only imported patterns, for integrated-model training. Both modes discard
+compounds matching none of the selected patterns, before splitting and caps.
+
+## Preventing long gaps between reaction patterns
+
+`--rare-pattern-max-gap` (Workbench: **Rare pattern maximum batch gap**, default
+`100`) controls online insertion of training batches. After 100 training batches
+without a pattern, a batch containing it is inserted before the next ordinary
+batch. Ordinary data is still processed in full; this does not wait for the end
+of an epoch. Zero disables insertion. If several patterns are overdue, the
+longest-absent available pattern is served first, with at most one forced batch
+before each ordinary batch. A pattern never present in the training data cannot
+be inserted and is marked unavailable.
+
+Occurrences are detected from prepared CPU reaction registries. When a missing
+pattern needs a batch, registries are searched lazily, without chemistry or an
+upfront full scan. Validation is unchanged. The gap counter and last-seen steps
+continue across epochs and are saved in checkpoints. Epoch metrics record
+`train/rare_pattern_replay_batches` and `train/replay_pattern_<id>`.

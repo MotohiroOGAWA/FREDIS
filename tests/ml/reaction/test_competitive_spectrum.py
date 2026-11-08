@@ -958,9 +958,17 @@ def test_validation_persists_ion_assignment_facets(tmp_path):
     payload = json.loads((tmp_path / "spectrum_validation/epoch_1.json").read_text())
     assert payload["spectra"]
     assert "fragment_ion_adduct_accuracy" in payload["spectra"][0]
+    for record in payload["spectra"]:
+        for suffix in ("", "_without_precursor"):
+            coverage = record["intensity_coverage" + suffix]
+            cosine = record["cosine_similarity" + suffix]
+            if coverage is not None:
+                assert 0.0 <= cosine <= coverage**0.5 + 1e-6
+    assert "intensity_coverage" in payload["representatives"]
     catalog = json.loads((tmp_path / "metrics/index.json").read_text())
     metrics = {entry["name"].split("/", 2)[2] for entry in catalog["series"]}
     assert "ion_assignment_coverage_mean" in metrics
+    assert {"intensity_coverage_mean", "intensity_coverage_without_precursor_mean"} <= metrics
     assert any(
         name.startswith("ion_assignment_coverage@main_adduct:") for name in metrics
     )

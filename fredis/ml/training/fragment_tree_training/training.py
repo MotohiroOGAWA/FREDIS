@@ -375,6 +375,9 @@ def _validate_training_settings(settings: dict) -> SpectrumLossSettings:
         or settings.get("max_batch_ion_states", 0) < 0
     ):
         raise ValueError("max_batch_ion_states must be a non-negative integer (0 = unlimited)")
+    gap = settings.get("rare_pattern_max_gap", 100)
+    if type(gap) is not int or gap < 0:
+        raise ValueError("rare_pattern_max_gap must be a non-negative integer")
     spectrum_loss = SpectrumLossSettings(
         **{key: settings[key] for key in SPECTRUM_LOSS_KEYS}
     )
@@ -494,6 +497,7 @@ def train_reactions(
     gradient_clip: float = 1.0,
     branch_weight: float = 1.0,
     negative_weight: float = 0.5,
+    rare_pattern_max_gap: int = 100,
     intensity_loss_weight: float = 1.0,
     cosine_loss_weight: float = 1.0,
     intensity_exponent: float = 0.5,
@@ -546,6 +550,7 @@ def train_reactions(
             "gradient_clip",
             "branch_weight",
             "negative_weight",
+            "rare_pattern_max_gap",
             *SPECTRUM_LOSS_KEYS,
             "max_samples",
             "max_batch_ion_states",
@@ -630,6 +635,8 @@ def train_reactions(
             "lr",
         ):
             settings[key] = prior[key]
+        rare_pattern_max_gap = prior.get("rare_pattern_max_gap", 100)
+        settings["rare_pattern_max_gap"] = rare_pattern_max_gap
         branch_weight = settings["branch_weight"]
         negative_weight = settings["negative_weight"]
         for key in SPECTRUM_LOSS_KEYS:
@@ -892,12 +899,20 @@ def train_reactions(
             max_batch_ion_states=max_batch_ion_states,
         )
 
+    pattern_gap_state = checkpoint.get("pattern_gap_state", {}) if checkpoint else {}
+
+    def stored_group_patterns(group):
+        return {int(pattern) for index in group
+                for pattern in datasets[0][index].reactions.reaction_type[:, 0].tolist()}
+
     def grouped_batches(pieces, groups):
         for group in groups:
             loop_started = time.perf_counter()
             data = SourceReactionStructure.from_structures(
                 [pieces[index] for index in group]
             )
+            if hasattr(groups, "observe"):
+                groups.observe(data)
             yield data, loop_started
 
     def metric_values(result):
@@ -1160,6 +1175,7 @@ def train_reactions(
             torch_rng_state=torch.get_rng_state(),
             cuda_rng_state=torch.cuda.get_rng_state_all() if use_cuda else None,
             python_rng_state=random.getstate(),
+            pattern_gap_state=pattern_gap_state,
         )
 
     def save_last(saved):
@@ -1200,8 +1216,13 @@ def train_reactions(
                 torch.cuda.reset_peak_memory_stats(device)
             row = {"epoch": epoch + 1}
             gradient_values = []
+            from .pattern_replay import RarePatternReplayGroups
             epoch_groups = [
-                batch_groups(datasets[0], True),
+                RarePatternReplayGroups(
+                    batch_groups(datasets[0], True), rare_pattern_max_gap,
+                    pattern_ids=[p.pattern_id for p in generator.fragmenter.reaction_pattern_set],
+                    pattern_ids_for_group=stored_group_patterns, state=pattern_gap_state,
+                ),
                 batch_groups(datasets[1], False),
             ]
             # Train and validation each get their own 0->100% bar (validation's
@@ -1238,6 +1259,8 @@ def train_reactions(
                 batch_metrics = {}
                 with torch.set_grad_enabled(name == "train"):
                     for data, loop_started in grouped_batches(pieces, groups):
+                        if name == "train":
+                            iteration_progress[name].total = len(groups)
                         stages = (
                             ("prepare", "forward", "backward", "optimizer", "metrics")
                             if name == "train"
@@ -1442,6 +1465,9 @@ def train_reactions(
             row["global_step"] = global_step
             row["learning_rate"] = optimizer.param_groups[0]["lr"]
             row["gradient_norm"] = sum(gradient_values) / max(len(gradient_values), 1)
+            row["train/rare_pattern_replay_batches"] = epoch_groups[0].replayed_batches
+            for pattern, count in epoch_groups[0].replayed_patterns.items():
+                row[f"train/replay_pattern_{pattern}"] = count
             row["epoch_seconds"] = time.perf_counter() - epoch_start
             if use_cuda:
                 row["cuda_peak_memory_mb"] = (
@@ -1786,12 +1812,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ("gradient-clip", 1.0),
         ("branch-weight", 1.0),
         ("negative-weight", 0.5),
+
         ("min-lr", 1e-6),
         ("minimum-assignment-score", 0.0),
         ("minimum-assignment-score-without-precursor", 0.0),
     ):
         parser.add_argument("--" + name, type=float, default=default)
     for name, default in (
+        ("rare-pattern-max-gap", 100),
         ("max-samples", 128),
         ("max-batch-ion-states", 0),
         ("seed", 42),
@@ -1921,6 +1949,7 @@ def main(argv: list[str] | None = None) -> None:
         gradient_clip=args.gradient_clip,
         branch_weight=args.branch_weight,
         negative_weight=args.negative_weight,
+        rare_pattern_max_gap=args.rare_pattern_max_gap,
         **{key: getattr(args, key) for key in SPECTRUM_LOSS_KEYS},
         max_samples=args.max_samples,
         max_batch_ion_states=args.max_batch_ion_states,

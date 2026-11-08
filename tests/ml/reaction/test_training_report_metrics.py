@@ -8,7 +8,8 @@ from fredis.ml.training.fragment_tree_training.training import (
     _mean_training_interval, _read_metric_events, _write_metric_artifacts,
 )
 from fredis.ml.training.fragment_tree_training.spectrum_validation import (
-    TOP_N_VALUES, assignment_score, distribution, matched_cosine, top_n_assignment_metrics, _report_metrics)
+    TOP_N_VALUES, assignment_score, distribution, matched_cosine, similarity_scores, top_n_assignment_metrics,
+    _report_metrics)
 
 
 def test_assignment_and_cosine_without_intensity_prediction():
@@ -17,6 +18,20 @@ def test_assignment_and_cosine_without_intensity_prediction():
     assert assignment_score([100.], observed, tolerance) == pytest.approx(.9)
     assert matched_cosine([100.], [1.], observed, tolerance) == pytest.approx(9 / (82 ** .5))
 
+
+
+def test_intensity_coverage_is_squared_and_bounds_msentity_cosine():
+    tolerance = DaTolerance(0.01)
+    observed = [{'mz': 100., 'intensity': 9.}, {'mz': 200., 'intensity': 1.}, {'mz': 300., 'intensity': 3.}]
+    (cosine, coverage), (empty_cosine, empty_coverage), (_, no_intensity) = similarity_scores(
+        [([100., 300.], [1., 5.], observed), ([], [], observed), ([100.], [1.], [])], tolerance)
+    # Squared intensity, as msentity-similarity: (81 + 9) / (81 + 1 + 9).
+    assert coverage == pytest.approx(90 / 91, rel=1e-6)
+    assert cosine == pytest.approx((9 + 15) / ((26 ** .5) * (91 ** .5)), rel=1e-6)
+    assert cosine <= coverage ** .5
+    assert (empty_cosine, empty_coverage) == (0.0, 0.0)
+    assert no_intensity is None
+    assert similarity_scores([], tolerance) == []
 
 def test_top_n_metrics_reward_recall_but_penalize_padding_with_junk_candidates():
     # A model that generates a huge pool of near-zero-intensity junk nodes (the

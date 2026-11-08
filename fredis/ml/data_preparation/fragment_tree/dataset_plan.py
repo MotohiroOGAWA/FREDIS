@@ -70,7 +70,7 @@ def validate_list_config(entries, mode, validation_ratio=0, test_ratio=0,
 
 def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_ratio=0, seed=0,
                   invalid_detail_limit=None, progress=None,
-                  validation_max_train_ratio=None, test_max_train_ratio=None, reaction_models=None):
+                  validation_max_train_ratio=None, test_max_train_ratio=None, reaction_models=None, pattern_selection="trainable"):
     entries = validate_list_config(entries, mode, validation_ratio, test_ratio,
                                    validation_max_train_ratio, test_max_train_ratio)
     datasets, reports, sources, valid_indexes = [], {}, [], {}
@@ -95,7 +95,7 @@ def plan_datasets(entries, mode, fragmenter, symbols, validation_ratio=0, test_r
             input_smiles = list(data[entry['mapping']['smilesColumn']])
             selected, selection = select_trainable_pattern_records(
                 [input_smiles[index] for index in report['validIndexes']],
-                fragmenter.reaction_pattern_set, reaction_models,
+                fragmenter.reaction_pattern_set, reaction_models, mode=pattern_selection,
             )
             report['validIndexes'] = [report['validIndexes'][index] for index in selected]
         valid_indexes[entry["id"]] = report["validIndexes"]

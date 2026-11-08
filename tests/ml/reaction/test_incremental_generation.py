@@ -183,3 +183,43 @@ def test_saved_multisource_registry_offsets_and_reordered_conditions():
         torch.testing.assert_close(
             expected[index][1], single.spectra.intensity, rtol=1e-4, atol=1e-6
         )
+
+
+def test_saved_registry_keeps_source_atom_maps_when_fragment_shares_smiles():
+    """A fragment of one item may equal another item's Source by SMILES only.
+
+    Fragments keep their parent's atom maps, so interning must not replace the
+    Source Compound (whose numbering addresses the saved reactions).
+    """
+    from fredis.ml.input.source_reaction_structure import SourceReactionStructure
+
+    model, _, _, first = make_prepared("CCCCO", depth=2)
+    _, source, _, second = make_prepared("CCCO", depth=2)
+    assert "CCCO" in first.compounds.smiles
+    combined = SourceReactionStructure.from_structures([first, second])
+    expected = model.fragmenter.fragment_ion_tree_builder.create_reaction_instances(
+        source
+    )
+    _, _, restored, _, _, _, _ = _saved_registry(model, combined, 1)
+    assert restored == expected
+    assert list(model.predict_prepared_batches(combined))
+
+
+def test_saved_registry_restores_explicit_hydrogen_outside_the_graph():
+    """[2H] atoms are Source atoms but not graph atoms (no H in the vocabulary).
+
+    Saved retained rows index graph atoms only; restoration must keep the
+    deuterium of retained carbons, or every reaction appears to change their
+    C-D bonds and all saved reaction sets become false conflicts.
+    """
+    model, source, _, data = make_prepared("[2H]C([2H])([2H])CCCO", depth=2)
+    assert any(atom.GetAtomicNum() == 1 for atom in source.mapped_mol.GetAtoms())
+    original = model.fragmenter.fragment_ion_tree_builder.create_reaction_instances(
+        source
+    )
+    _, _, restored, relations, _, _, histories = _saved_registry(model, data, 0)
+    assert restored == original
+    from fredis.domain.fragment.reaction.ReactionRelations import ReactionRelations
+
+    assert relations == ReactionRelations.from_reactions(original)
+    assert list(model.predict_prepared_batches(data))

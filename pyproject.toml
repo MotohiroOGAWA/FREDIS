@@ -19,8 +19,8 @@ dependencies = [
     "matplotlib>=3.7",
     "h5py",
     "pyarrow",
-    "msentity>=1.2.0",
-    "msentity-similarity>=1.2.1",
+    "msentity>=1.2.2",
+    "msentity-similarity>=2.0.0,<3",
 ]
 
 [project.scripts]

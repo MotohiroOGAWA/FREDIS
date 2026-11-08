@@ -74,6 +74,13 @@ def _saved_registry(generator, data, source_index):
     }
     mol = source.mapped_mol
     universe = frozenset(a.GetAtomMapNum() for a in mol.GetAtoms())
+    graph_maps = set(atom_maps)
+    implicit_atoms = tuple(
+        (atom.GetAtomMapNum(), neighbor.GetAtomMapNum())
+        for atom in mol.GetAtoms()
+        if atom.GetAtomMapNum() not in graph_maps
+        for neighbor in atom.GetNeighbors()
+    )
     orders = {
         bond_key(
             b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum()
@@ -97,6 +104,12 @@ def _saved_registry(generator, data, source_index):
         retained = frozenset(
             atom_maps[i - offset]
             for i in registry.reaction_retained_atom_index[a:b].tolist()
+        )
+        # Saved rows index graph atoms only; hydrogens outside the graph
+        # (e.g. explicit [2H]) follow their single heavy-atom neighbor, exactly
+        # as the connected retained component of the original reaction.
+        retained |= frozenset(
+            hydrogen for hydrogen, heavy in implicit_atoms if heavy in retained
         )
         cuts = frozenset(
             bond_key(roles[u], roles[v]) for u, v in template.cut_bond_roles

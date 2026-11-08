@@ -51,6 +51,59 @@ def matched_cosine(mz, intensity, observed, tolerance):
     return min(1.0, max(0.0, dot / norm)) if norm else 0.0
 
 
+def similarity_scores(pairs, tolerance):
+    """Cosine and observed intensity coverage of each (mz, intensity, observed) pair.
+
+    Both come from one msentity-similarity calculation (intensity exponent 1)
+    so they share its peak pairing. The coverage is the observed spectrum's
+    Σ I² carried by its matched peaks, so cosine ≤ sqrt(coverage) always holds.
+    It is None for an observed spectrum without positive intensity.
+    """
+    if not pairs:
+        return []
+    import msentity_similarity as mss
+    from fredis.domain.mass.tolerance import format_mass_tolerance
+    from fredis.msdata import dataset_from_arrays
+
+    def dataset(spectra):
+        peaks = [
+            [(float(m), float(i)) for m, i in zip(mz, intensity)]
+            for mz, intensity in spectra
+        ]
+        offsets = np.cumsum([0, *map(len, peaks)])
+        result = dataset_from_arrays([p for row in peaks for p in row], offsets)
+        result["ValidationPair"] = [str(index) for index in range(len(peaks))]
+        return result
+
+    generated = dataset((mz, intensity) for mz, intensity, _ in pairs)
+    observed = dataset(
+        ([p["mz"] for p in peaks], [p["intensity"] for p in peaks])
+        for _, _, peaks in pairs
+    )
+    table = mss.similarity_by_key(
+        generated,
+        observed,
+        "ValidationPair",
+        "ValidationPair",
+        methods="cosine",
+        intensity_exponent=1.0,
+        threads=1,
+        **mss.parse_mz_tolerance(format_mass_tolerance(tolerance)),
+    ).to_pandas()
+    rows = {int(key): row for key, row in zip(table["ValidationPair"], table.itertuples())}
+    result = []
+    for index, (_, _, peaks) in enumerate(pairs):
+        row = rows[index]
+        has_intensity = any(float(p["intensity"]) > 0 for p in peaks)
+        result.append(
+            (
+                min(1.0, max(0.0, float(row.cosine))),
+                float(row.intensity_coverage2) if has_intensity else None,
+            )
+        )
+    return result
+
+
 def assignment_score(mz, observed, tolerance):
     """Intensity-weighted observed-m/z coverage, independent of predicted intensity."""
     total = sum(float(peak["intensity"]) for peak in observed)
@@ -314,6 +367,8 @@ def _representatives(records):
     for metric in (
         "cosine_similarity",
         "cosine_similarity_without_precursor",
+        "intensity_coverage",
+        "intensity_coverage_without_precursor",
         "assignment_score",
         "assignment_score_without_precursor",
     ):
@@ -393,6 +448,8 @@ def _report_metrics(records):
     depth_names = (
         "cosine_similarity",
         "cosine_similarity_without_precursor",
+        "intensity_coverage",
+        "intensity_coverage_without_precursor",
         "assignment_score",
         "assignment_score_without_precursor",
         "fragment_ion_adduct_accuracy",
@@ -590,6 +647,50 @@ def validate_spectra(
                             if peak["depth"] is not None
                         }
                     )
+                    # One msentity-similarity call scores every variant of this sample.
+                    variants = {
+                        "": (generated, observed),
+                        "_without_precursor": (generated_np, observed_np),
+                    }
+                    for depth in all_depths:
+                        predicted = [
+                            peak for peak in generated if peak["depth"] == depth
+                        ]
+                        target = [peak for peak in observed if peak["depth"] == depth]
+                        variants[depth, ""] = (predicted, target)
+                        variants[depth, "_without_precursor"] = (
+                            [peak for peak in predicted if not peak["precursor"]],
+                            [peak for peak in target if not peak["precursor"]],
+                        )
+                    scored = [
+                        key
+                        for key, (_, target) in variants.items()
+                        if target or key == ""
+                    ]
+                    scores = dict(
+                        zip(
+                            scored,
+                            similarity_scores(
+                                [
+                                    (
+                                        [p["mz"] for p in variants[key][0]],
+                                        [p["intensity"] for p in variants[key][0]],
+                                        variants[key][1],
+                                    )
+                                    for key in scored
+                                ],
+                                tolerance,
+                            ),
+                        )
+                    )
+
+                    def score_fields(key, suffix):
+                        cosine, coverage = scores.get(key, (None, None))
+                        return {
+                            "cosine_similarity" + suffix: cosine,
+                            "intensity_coverage" + suffix: coverage,
+                        }
+
                     for depth in all_depths:
                         predicted = [
                             peak for peak in generated if peak["depth"] == depth
@@ -602,21 +703,9 @@ def validate_spectra(
                         ]
                         target_np = [peak for peak in target if not peak["precursor"]]
                         depth_metrics[str(depth)] = {
-                            "cosine_similarity": matched_cosine(
-                                [p["mz"] for p in predicted],
-                                [p["intensity"] for p in predicted],
-                                target,
-                                tolerance,
-                            ),
-                            "cosine_similarity_without_precursor": (
-                                matched_cosine(
-                                    [p["mz"] for p in predicted_np],
-                                    [p["intensity"] for p in predicted_np],
-                                    target_np,
-                                    tolerance,
-                                )
-                                if target_np
-                                else None
+                            **score_fields((depth, ""), ""),
+                            **score_fields(
+                                (depth, "_without_precursor"), "_without_precursor"
                             ),
                             "assignment_score": assignment_score(
                                 [p["mz"] for p in predicted], target, tolerance
@@ -704,19 +793,8 @@ def validate_spectra(
                             ),
                             collision_energy=float(annotation["collisionEnergy"]),
                             precursor_mz=precursor_mz,
-                            cosine_similarity=matched_cosine(
-                                mz, intensity, observed, tolerance
-                            ),
-                            cosine_similarity_without_precursor=(
-                                matched_cosine(
-                                    [p["mz"] for p in generated_np],
-                                    [p["intensity"] for p in generated_np],
-                                    observed_np,
-                                    tolerance,
-                                )
-                                if observed_np
-                                else None
-                            ),
+                            **score_fields("", ""),
+                            **score_fields("_without_precursor", "_without_precursor"),
                             assignment_score=assignment_score(mz, observed, tolerance),
                             assignment_score_without_precursor=(
                                 assignment_score(
@@ -830,6 +908,10 @@ def validate_spectra(
         spectrum_cosine_std=summary["cosine_std"],
         spectrum_cosine_similarity_without_precursor=mean(
             r["cosine_similarity_without_precursor"] for r in records
+        ),
+        intensity_coverage=mean(r["intensity_coverage"] for r in records),
+        intensity_coverage_without_precursor=mean(
+            r["intensity_coverage_without_precursor"] for r in records
         ),
         assignment_score=mean(r["assignment_score"] for r in records),
         assignment_score_without_precursor=mean(

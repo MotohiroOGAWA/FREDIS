@@ -169,7 +169,22 @@ def parse_args() -> argparse.Namespace:
         "--intensity-exponent", type=float, default=0.5,
         help="Intensity exponent applied to both spectra for similarity calculation (default: %(default)s).",
     )
+    parser.add_argument("--similarity-methods", default="cosine",
+                        help="Comma-separated score methods: cosine,reverse_cosine,modified_cosine,bonanza.")
+    parser.add_argument("--similarity-precursor-column", default="",
+                        help="Precursor m/z column for modified cosine/BONANZA; empty uses --precursor-mz-column.")
+    parser.add_argument("--similarity-threads", type=int, default=1,
+                        help="Native similarity calculation threads (default: 1).")
+    parser.add_argument("--similarity-no-matched-data", action="store_true",
+                        help="Write a lightweight .mssim without embedded matched spectra.")
     args = parser.parse_args()
+    methods = [name.strip() for name in args.similarity_methods.split(",")]
+    supported = ("cosine", "reverse_cosine", "modified_cosine", "bonanza")
+    if not methods or any(name not in supported for name in methods):
+        parser.error("--similarity-methods must contain one or more of " + ",".join(supported))
+    args.similarity_methods = [name for name in supported if name in methods]
+    if args.similarity_threads < 1:
+        parser.error("--similarity-threads must be positive")
     if not math.isfinite(args.intensity_exponent) or args.intensity_exponent <= 0:
         parser.error("--intensity-exponent must be finite and positive")
     if args.max_samples < 1:
@@ -571,6 +586,10 @@ def prediction_run_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "peakIntensityThreshold": args.peak_intensity_threshold,
         "similarityMzTolerance": args.similarity_mz_tolerance,
         "intensityExponent": args.intensity_exponent,
+        "similarityMethods": args.similarity_methods,
+        "similarityPrecursorColumn": args.similarity_precursor_column,
+        "similarityThreads": args.similarity_threads,
+        "similarityIncludeMatchedData": not args.similarity_no_matched_data,
     }
 
 
@@ -709,9 +728,8 @@ def main() -> None:
 
     _atomic_save(predicted, output_path)
 
-    # Full/embedded (not lightweight) similarity dataset: this .mssim carries
-    # its own copy of the matched peak data, so it stands on its own without
-    # needing the .msds files it was built from kept alongside it.
+    # By default embed matched spectra so the result stands on its own.
+    # Lightweight output can be selected explicitly to reduce file size.
     similarity = calculate_similarity(
         predicted,
         dataset,
@@ -719,7 +737,10 @@ def main() -> None:
         source2=str(Path(args.input).resolve()) if args.input else "direct arguments",
         key1="SourceSpecID",
         key2=args.spec_id_column,
-        include_matched_data=True,
+        include_matched_data=not args.similarity_no_matched_data,
+        methods=args.similarity_methods,
+        precursor_column=args.similarity_precursor_column or args.precursor_mz_column,
+        threads=args.similarity_threads,
         intensity_exponent=args.intensity_exponent,
         **parse_mz_tolerance(args.similarity_mz_tolerance),
     )

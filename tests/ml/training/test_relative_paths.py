@@ -98,5 +98,8 @@ def test_moved_dataset_training_output_prediction_and_resume(tmp_path, interval,
                     epochs=1, device='cpu', warmup_steps=0, checkpoint_interval_epochs=interval)
     checkpoint = torch.load(relocated / 'run' / 'last.pt', weights_only=False)
     assert checkpoint['epoch'] == epochs + 1
+    assert checkpoint['training_settings']['rare_pattern_max_gap'] == 100
+    assert checkpoint['history'][-1]['train/rare_pattern_replay_batches'] == 0
+    assert checkpoint['history'][-1]['validation/total_samples'] == data.num_samples
     assert checkpoint['training_settings']['train_dir'] == '../dataset/train_structures'
     assert checkpoint['training_settings']['resume'] == checkpoint_name
