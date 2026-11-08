@@ -89,16 +89,17 @@ def enrich_file(path, similarity, observed, fragmenter_params, *, alpha, workers
     params=json.loads(json.dumps(fragmenter_params))
     if mass_tolerance:params['mass_tolerance']=mass_tolerance
     frame=similarity.to_pandas()
-    with observed.select(frame['index2'].astype(int).tolist()) as selected:
+    observed_side = similarity.metadata.get('fredis_prediction', {}).get('observed_side', 2)
+    with observed.select(frame[f'index{observed_side}'].astype(int).tolist()) as selected:
         coverages,errors=calculate(selected,params,alpha=alpha,workers=workers,
                                   smiles_column=smiles_column,adduct_column=adduct_column,progress=progress)
     frame['theoretical_fragment_peak_intensity_coverage']=coverages
     frame['theoretical_fragment_error']=errors
     metadata=similarity.metadata
-    metadata['fredis_theoretical_coverage']={'intensity_exponent':alpha,'observed_side':2,
+    metadata['fredis_theoretical_coverage']={'intensity_exponent':alpha,'observed_side':observed_side,
         'coverage_definition':'sum(assigned observed I^(2*alpha)) / sum(all observed I^(2*alpha))',
         'fragmenter_params':params,'search_limits':{'max_unique_fragment_smiles':-1,'max_reaction_combinations':10000},'failure_count':sum(bool(e) for e in errors)}
-    metadata['fredis_prediction']={'observed_side':2}
+    metadata['fredis_prediction']={'observed_side':observed_side}
     similarity.metadata=metadata
     fd,name=tempfile.mkstemp(prefix='.theoretical-',suffix='.mssim',dir=target.parent)
     os.close(fd)

@@ -169,12 +169,12 @@ def parse_args() -> argparse.Namespace:
         "--intensity-exponent", type=float, default=0.5,
         help="Intensity exponent applied to both spectra for similarity calculation (default: %(default)s).",
     )
-    parser.add_argument("--similarity-methods", default="cosine",
+    parser.add_argument("--similarity-methods", default="cosine,reverse_cosine,modified_cosine,bonanza",
                         help="Comma-separated score methods: cosine,reverse_cosine,modified_cosine,bonanza.")
     parser.add_argument("--similarity-precursor-column", default="",
                         help="Precursor m/z column for modified cosine/BONANZA; empty uses --precursor-mz-column.")
-    parser.add_argument("--similarity-threads", type=int, default=1,
-                        help="Native similarity calculation threads (default: 1).")
+    parser.add_argument("--similarity-threads", type=int, default=0,
+                        help="Native similarity calculation threads (0 = automatic; default: 0).")
     parser.add_argument("--similarity-no-matched-data", action="store_true",
                         help="Write a lightweight .mssim without embedded matched spectra.")
     parser.add_argument("--calculate-theoretical-fragments", action="store_true", help="Also generate full theoretical fragments and store observed-intensity coverage in predicted.mssim.")
@@ -184,8 +184,8 @@ def parse_args() -> argparse.Namespace:
     if not methods or any(name not in supported for name in methods):
         parser.error("--similarity-methods must contain one or more of " + ",".join(supported))
     args.similarity_methods = [name for name in supported if name in methods]
-    if args.similarity_threads < 1:
-        parser.error("--similarity-threads must be positive")
+    if args.similarity_threads < 0:
+        parser.error("--similarity-threads must be nonnegative (0 = automatic)")
     if not math.isfinite(args.intensity_exponent) or args.intensity_exponent <= 0:
         parser.error("--intensity-exponent must be finite and positive")
     if args.max_samples < 1:
@@ -607,18 +607,21 @@ def _atomic_save(dataset: ms.Dataset, output_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
+    from .prediction_exports import sha256, valid_spectra, finalize
+    input_hash = sha256(args.input) if args.input else None
     device = torch.device(args.device)
 
     output_dir = Path(args.output_dir).resolve()
     output_path = output_dir / "predicted.msds"
     similarity_path = output_dir / "predicted.mssim"
     if not args.overwrite:
-        existing = [path for path in (output_path, similarity_path) if path.exists()]
+        existing = [path for path in (output_path, similarity_path, output_dir / "input.msds", output_dir / "records.tsv", output_dir / "summary.json", output_dir / "manifest.json", output_dir / "result.prediction.pft") if path.exists()]
         if existing:
             raise FileExistsError(f"Output already exists; use --overwrite: {existing}")
     if args.input is not None and Path(args.input).resolve() in (
         output_path,
         similarity_path,
+        output_dir / "input.msds",
     ):
         raise ValueError(
             "The input and final output MSDataset must be different paths."
@@ -729,16 +732,42 @@ def main() -> None:
             pass
 
     _atomic_save(predicted, output_path)
+    observed_path = output_dir / "input.msds"
+    _atomic_save(dataset, observed_path)
+    observed, excluded1, map1 = valid_spectra(dataset, args.spec_id_column)
+    comparison_predicted, excluded2, map2 = valid_spectra(predicted, "SpecID")
+    # SourceSpecID is a link; predicted SpecID remains the unique generated ID.
+    comparison_predicted[map2["id_column"]] = predicted.to_pandas().iloc[comparison_predicted.to_pandas()[map2["row_column"]].astype(int)]["SourceSpecID"].astype(str).str.strip().tolist()
+    excluded = [{**row, "Side": side} for side, rows in ((1, excluded1), (2, excluded2)) for row in rows]
+    comparison_mapping = {"1": map1, "2": map2}
+    for side, current, other, info, other_info in (
+        (1, observed, comparison_predicted, map1, map2),
+        (2, comparison_predicted, observed, map2, map1),
+    ):
+        other_ids = set(other.to_pandas()[other_info['id_column']])
+        for _, row in current.to_pandas().iterrows():
+            if row[info['id_column']] not in other_ids:
+                excluded.append({'Side': side, 'SpecID': row[info['id_column']],
+                                 'SourceRow': int(row[info['row_column']]),
+                                 'Status': 'excluded', 'Reason': 'no_matching_spectrum'})
+
+
+    comparison_dir = output_dir / 'run'
+    comparison_dir.mkdir(exist_ok=True)
+    observed_source = comparison_dir / 'comparison-input.msds'
+    predicted_source = comparison_dir / 'comparison-predicted.msds'
+    _atomic_save(observed, observed_source)
+    _atomic_save(comparison_predicted, predicted_source)
 
     # By default embed matched spectra so the result stands on its own.
     # Lightweight output can be selected explicitly to reduce file size.
     similarity = calculate_similarity(
-        predicted,
-        dataset,
-        source1=str(output_path),
-        source2=str(Path(args.input).resolve()) if args.input else "direct arguments",
-        key1="SourceSpecID",
-        key2=args.spec_id_column,
+        observed,
+        comparison_predicted,
+        source1=str(observed_source),
+        source2=str(predicted_source),
+        key1=map1["id_column"],
+        key2=map2["id_column"],
         include_matched_data=not args.similarity_no_matched_data,
         methods=args.similarity_methods,
         precursor_column=args.similarity_precursor_column or args.precursor_mz_column,
@@ -749,12 +778,14 @@ def main() -> None:
     # SimilarityDataset.save() already writes via a same-directory tempfile
     # and renames into place, unlike ms.Dataset.save(); reusing _atomic_save's
     # ".name.tmp" wrapper here would break its own ".mssim"-suffix check.
-    similarity.metadata={**similarity.metadata,"fredis_prediction":{"observed_side":2}}
+    similarity.metadata={**similarity.metadata,"fredis_prediction":{"observed_side":1},
+        "workbench":{"settings":prediction_run_settings(args), "source_columns":comparison_mapping}}
     theoretical_failure_count=0
-    if args.calculate_theoretical_fragments:
+    theoretical = None
+    if args.calculate_theoretical_fragments and len(similarity):
         from fredis.analysis.theoretical_coverage import enrich_file
         print("Theoretical fragments: 0% | generating and assigning observed peaks…", flush=True)
-        theoretical=enrich_file(similarity_path,similarity,dataset,generator.fragmenter.to_dict(),
+        theoretical=enrich_file(similarity_path,similarity,observed,generator.fragmenter.to_dict(),
             alpha=args.intensity_exponent,workers=args.num_workers,smiles_column=args.smiles_column,
             adduct_column=args.adduct_type_column,mass_tolerance=args.similarity_mz_tolerance,
             progress=lambda done,total: print(f"Theoretical fragments: {100*done/max(total,1):.1f}% | {done}/{total} compounds",flush=True))
@@ -789,6 +820,9 @@ def main() -> None:
         json.dumps(run_info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    finalize(output_dir, similarity, observed,
+             comparison_predicted, excluded, comparison_mapping, prediction_run_settings(args), input_hash, expected_table=theoretical)
+
     print(
         f"predicted spectra: n_spectra={len(predicted)}, "
         f"n_peaks={predicted.n_peaks_total}"
@@ -796,6 +830,10 @@ def main() -> None:
     print(f"saved: {output_path}")
     print(f"saved similarity dataset: {similarity_path}")
     print(f"run information: {run_dir}")
+    if not len(similarity):
+        similarity_path.unlink(missing_ok=True)
+        print("No comparable spectrum pairs; reports saved, no .mssim produced.", file=sys.stderr)
+        raise SystemExit(2)
     if len(failures) or theoretical_failure_count:
         print(f"partial success: {len(failures)} prediction(s) and {theoretical_failure_count} theoretical assignment(s) failed", file=sys.stderr)
         raise SystemExit(3)

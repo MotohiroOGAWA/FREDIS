@@ -127,3 +127,39 @@ learned branch probabilities and predicted intensity thresholds. The enhanced
 msentity viewer plots predicted coverage vs similarity and theoretical coverage
 vs predicted coverage, with alpha labels and existing scatter/density and
 image export controls.
+
+### Comparable batch exports
+
+Batch prediction writes `input.msds` (input snapshot with original peaks and IDs),
+`predicted.msds` (generated peaks and provenance), and `predicted.mssim` (official
+schema 3). Comparisons use **observed side 1 / predicted side 2**, matching the
+external model workbench. This changes reverse-cosine scores relative to earlier
+FREDIS exports which used the reverse orientation. Old exports keep their side
+metadata and remain viewable.
+
+The default full MSSIM embeds matched spectra and metadata. Choose lightweight
+output with `--similarity-no-matched-data`; keep the entire output directory,
+including `run/comparison-input.msds` and `run/comparison-predicted.msds`, so the
+viewer can resolve its source rows. These comparison snapshots contain normalized
+link IDs and collision-safe original-row columns. Original SpecID values remain
+unchanged. `workbench.source_columns` in MSSIM metadata records the column names.
+
+`records.tsv` contains comparisons, scores, coverage, original row numbers, and
+excluded spectra/reasons. Empty spectra, nonfinite peaks, invalid m/z, negative
+intensities, and spectra without positive intensity are excluded without repairing
+peaks. Whitespace is trimmed for ID matching; leading zeros are retained.
+Unmatched IDs are reported. `summary.json` contains per-method statistics and
+exclusions. `manifest.json` records input/model/output SHA256 values, versions,
+settings and code hashes. Saved MSSIM is reloaded and checked against scores,
+conditions and every embedded spectrum before success is reported. Input hashes
+are checked again at completion. Zero comparable pairs produce reports without
+MSSIM and exit code 2; prediction artifacts remain available.
+
+Required compatibility versions are msentity >=1.2.2 and msentity-similarity
+>=2.0.0,<3 (the pinned native repositories currently provide 1.2.2 / 2.0.0).
+
+All four similarity methods are calculated by default. `--similarity-threads 0`
+(the default) lets the native library choose CPU threading; positive values
+remain available for explicit control. `result.prediction.pft` is a reopenable
+Workbench result page with coverage-versus-score and theoretical-versus-predicted
+coverage charts. The latter requires `--calculate-theoretical-fragments`.

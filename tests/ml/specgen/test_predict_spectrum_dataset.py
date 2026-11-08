@@ -100,6 +100,10 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     dataset = direct_input_dataset(smiles_values=["CCCO", "CCCO"], collision_energy="20 eV", adduct_type="[M+H]+")
     dataset["SpecID"] = ["orig-1", "orig-2"]
     input_path = tmp_path / "input.msds"
+    # Batch comparison requires actual observed peaks, rather than a metadata-only input.
+    import numpy as np
+    dataset = with_metadata(metadata=dataset.to_pandas(), dataset=ms.from_peaks(
+        [np.array([[43.0542, 10.], [61.0648, 5.]])] * len(dataset)))
     dataset.save(str(input_path))
 
     output_dir = tmp_path / "prediction-output"
@@ -126,6 +130,24 @@ def test_main_writes_msds_and_mssim_without_an_output_name_argument(tmp_path, mo
     assert predicted.to_pandas()["SourceSpecID"].tolist() == ["orig-1", "orig-2"]
 
     similarity = load_similarity(str(mssim_path))
+    assert similarity.metadata['fredis_prediction']['observed_side'] == 1
+    for name in ('input.msds', 'records.tsv', 'summary.json', 'manifest.json', 'result.prediction.pft'):
+        assert (output_dir / name).exists()
+    import json
+    manifest = json.loads((output_dir / 'manifest.json').read_text())
+    assert manifest['libraries']['msentity-similarity'] == '2.0.0'
+    report = json.loads((output_dir / 'result.prediction.pft').read_text())
+    assert report['schema'] == 'fredis.prediction-result'
+    assert report['comparison_count'] == 2
+    assert report['methods'] == ['cosine', 'reverse_cosine', 'modified_cosine', 'bonanza']
+    assert len(report['plot_rows']) == 2
+    assert ('theoretical_fragment_peak_intensity_coverage' in report['plot_rows'][0]) is theoretical
+    assert manifest['input_sha256']
+    assert 'predicted.mssim' in manifest['output_sha256']
+    if embedded:
+        a, b = similarity.match_records(0)
+        assert a['SpecID'] == 'orig-1'
+        assert b['SpecID'] == 'FREDIS_orig-1'
     assert similarity.has_matched_data is embedded
     parameters = similarity.metadata["parameters"]
     assert parameters["intensity_exponent"] == 0.7
@@ -175,6 +197,10 @@ def test_main_keeps_prepare_temp_files_under_output_dir_only_with_keep_temp(tmp_
     dataset = direct_input_dataset(smiles_values=["CCCO", "CCN"], collision_energy="20 eV", adduct_type="[M+H]+")
     dataset["SpecID"] = ["orig-1", "orig-2"]
     input_path = tmp_path / "input.msds"
+    # Batch comparison requires actual observed peaks, rather than a metadata-only input.
+    import numpy as np
+    dataset = with_metadata(metadata=dataset.to_pandas(), dataset=ms.from_peaks(
+        [np.array([[43.0542, 10.], [61.0648, 5.]])] * len(dataset)))
     dataset.save(str(input_path))
 
     default_output_dir = tmp_path / "default-output"
@@ -209,6 +235,10 @@ def test_main_writes_pft_json_before_prediction_even_if_it_later_fails(tmp_path,
     dataset = direct_input_dataset(smiles_values=["CCCO"], collision_energy="20 eV", adduct_type="[M+H]+")
     dataset["SpecID"] = ["orig-1"]
     input_path = tmp_path / "input.msds"
+    # Batch comparison requires actual observed peaks, rather than a metadata-only input.
+    import numpy as np
+    dataset = with_metadata(metadata=dataset.to_pandas(), dataset=ms.from_peaks(
+        [np.array([[43.0542, 10.], [61.0648, 5.]])] * len(dataset)))
     dataset.save(str(input_path))
 
     output_dir = tmp_path / "prediction-output"
@@ -242,6 +272,10 @@ def test_main_saves_successes_and_failure_report_for_unsupported_atoms(tmp_path,
     dataset["SMILES"] = ["CCCO", "O=C(O)O[Na]"]
     dataset["SpecID"] = ["valid", "unsupported-sodium"]
     input_path = tmp_path / "input.msds"
+    # Batch comparison requires actual observed peaks, rather than a metadata-only input.
+    import numpy as np
+    dataset = with_metadata(metadata=dataset.to_pandas(), dataset=ms.from_peaks(
+        [np.array([[43.0542, 10.], [61.0648, 5.]])] * len(dataset)))
     dataset.save(str(input_path))
 
     output_dir = tmp_path / "prediction-output"
@@ -330,3 +364,44 @@ def test_similarity_options_reject_invalid_values(tmp_path, monkeypatch, flags):
     with pytest.raises(SystemExit) as error:
         predict_spectrum.parse_args()
     assert error.value.code == 2
+
+
+def test_comparison_rejects_bad_peaks_without_changing_source():
+    from fredis.ml.specgen.prediction_exports import valid_spectra
+    import numpy as np
+    source = ms.from_peaks([np.array([[100., 4.], [200., 2.]]), np.empty((0, 2)), np.array([[100., -1.]])])
+    source['SpecID'] = [' 0001 ', '0002', '0003']
+    source['ComparisonSourceRow'] = ['original'] * 3
+    filtered, rejected, columns = valid_spectra(source, 'SpecID')
+    assert len(filtered) == 1
+    assert columns['row_column'] == 'ComparisonSourceRow_'
+    assert filtered.to_pandas()[columns['id_column']].tolist() == ['0001']
+    assert filtered.to_pandas()['SpecID'].tolist() == [' 0001 ']
+    assert [row['SourceRow'] for row in rejected] == [1, 2]
+    assert 'negative_intensity' in rejected[1]['Reason']
+    assert source[2].intensity.tolist() == [-1.]
+    source['SpecID'] = ['same', ' same ', 'other']
+    with pytest.raises(ValueError, match='Duplicate'):
+        valid_spectra(source, 'SpecID')
+
+
+def test_no_comparable_pairs_keep_reports_without_mssim(tmp_path):
+    from fredis.ml.specgen.prediction_exports import valid_spectra, finalize
+    from msentity_similarity import similarity_by_key
+    import numpy as np
+    import json
+    source = ms.from_peaks([np.empty((0, 2))])
+    source['SpecID'] = ['0001']
+    observed, rejected, info = valid_spectra(source, 'SpecID')
+    result = similarity_by_key(observed, observed, key1=info['id_column'], key2=info['id_column'], include_matched_data=True)
+    result.save(str(tmp_path / 'predicted.mssim'))
+    model = tmp_path / 'model.pt'
+    model.write_bytes(b'test-model')
+    finalize(tmp_path, result, observed, observed,
+             [{**row, 'Side': 1} for row in rejected], {'1': info, '2': info},
+             {'modelPath': str(model)}, None)
+    assert not (tmp_path / 'predicted.mssim').exists()
+    summary = json.loads((tmp_path / 'summary.json').read_text())
+    assert summary['comparison_count'] == 0
+    assert summary['excluded_count'] == 1
+    assert json.loads((tmp_path / 'manifest.json').read_text())['status'] == 'no_comparable_pairs'
